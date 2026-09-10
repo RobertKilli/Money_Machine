@@ -1,0 +1,3 @@
+import { requireAdminUser } from "@/lib/auth/current-user";
+import { deactivatePushSubscription } from "@/infrastructure/postgres/notification-repository";
+export async function POST(request: Request) { let user; try { user = await requireAdminUser(); } catch { return Response.json({ error: "FORBIDDEN" }, { status: 403 }); } try { const body = await request.json() as { endpoint?: unknown }; if (typeof body.endpoint !== "string") return Response.json({ error: "INVALID_SUBSCRIPTION" }, { status: 400 }); await deactivatePushSubscription(user.id, body.endpoint); return Response.json({ ok: true }); } catch { return Response.json({ error: "UNSUBSCRIBE_UNAVAILABLE" }, { status: 503 }); } }
