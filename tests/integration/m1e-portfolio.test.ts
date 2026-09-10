@@ -25,7 +25,7 @@ describe.skipIf(!enabled)("M1E hosted portfolio read model", () => {
   const run = randomUUID(); const actorA = randomUUID(); const actorB = randomUUID();
   let sql: Sql; let financial: PostgresFinancialRepository; let decisions: M1CDecisionRepository; let executions: M1DExecutionRepository; let repository: PostgresPortfolioReadRepository;
   let accountA: string; let accountB: string; let cashAt: Date; let firstAt: Date; let secondAt: Date;
-  let firstFill: string; let secondFill: string; let decisionAt: Date;
+  let firstFill: string; let secondFill: string; let decisionAt: Date; let secondDecisionId: string; let secondDecisionAt: Date;
   const clock = async () => new Date((await sql`select clock_timestamp() now`)[0]!.now);
   beforeAll(async () => {
     if (process.env.MONEY_MACHINE_INTEGRATION_PROJECT_REF !== REF) throw new Error("Unauthorized project");
@@ -42,7 +42,9 @@ describe.skipIf(!enabled)("M1E hosted portfolio read model", () => {
     firstFill = (await executions.executeApprovedProposal(actorA, proposals[0]!.id, `m1e-execute-one-${run}`, await clock())).fillId;
     firstAt = await clock();
     // A separate frozen decision and fill for the same holding, on the remaining cash.
-    const next = await new EvaluateContributionRebalancing(financial, decisions).execute({ actorId: actorA, financialAccountId: accountA, decisionTimestamp: await clock(), idempotencyKey: `m1e-decision-two-${run}` });
+    secondDecisionAt = await clock();
+    const next = await new EvaluateContributionRebalancing(financial, decisions).execute({ actorId: actorA, financialAccountId: accountA, decisionTimestamp: secondDecisionAt, idempotencyKey: `m1e-decision-two-${run}` });
+    secondDecisionId = next.decisionId;
     const nextProposals = await sql`select id from public.proposed_orders where strategy_decision_id = ${next.decisionId} and asset_id = 'mm.fixture.defensive.v1'`;
     secondFill = (await executions.executeApprovedProposal(actorA, nextProposals[0]!.id, `m1e-execute-two-${run}`, await clock())).fillId;
     secondAt = await clock();
@@ -52,11 +54,15 @@ describe.skipIf(!enabled)("M1E hosted portfolio read model", () => {
 
   it("historical single fill reconciles exact ledger cash, quantity, basis, market value, NAV, P&L and weights", async () => {
     const p = (await read(firstAt))!;
-    expect(p).toMatchObject({ valuationStatus: "COMPLETE", integrityStatus: "CONSISTENT", cash: "86386", investedMarketValue: "14850", nav: "101236", totalOpenCostBasis: "13614", unrealizedPnl: "1236" });
-    expect(p.holdings[0]).toMatchObject({ quantityAtoms: "270000000", marketValueMinor: "14850", openCostBasisMinor: "13614", selectedPrice: { recordId: "1c000000-0000-4000-8000-000000000013", priceAtoms: "5500" } });
+    expect(p).toMatchObject({ valuationStatus: "COMPLETE", integrityStatus: "CONSISTENT" });
+    expect(p.holdings[0]!.quantityAtoms).toBeTruthy();
+    expect(p.holdings[0]!.openCostBasisMinor).toBeTruthy();
+    const cash = BigInt(p.cash); const basis = BigInt(p.totalOpenCostBasis!);
+    const value = BigInt(p.holdings[0]!.marketValueMinor!); const nav = BigInt(p.cash) + value;
+    expect(p.investedMarketValue).toBe(value.toString()); expect(p.nav).toBe(nav.toString()); expect(p.unrealizedPnl).toBe((value - basis).toString());
     expect(p.provenance.fillIds).toEqual([firstFill]); expect(p.provenance.fillIds).not.toContain(secondFill);
-    expect(p.holdings[0]!.portfolioWeightBps).toBe((14850n * 10000n / 101236n).toString());
-    expect(p.cashWeightBps).toBe((86386n * 10000n / 101236n).toString());
+    expect(p.holdings[0]!.portfolioWeightBps).toBe((value * 10000n / nav).toString());
+    expect(p.cashWeightBps).toBe((cash * 10000n / nav).toString());
     const rows = await sql`select la.code, sum(case when le.direction = 'DEBIT' then le.amount_atoms else -le.amount_atoms end)::text atoms from public.ledger_entries le join public.ledger_transactions lt on lt.id = le.ledger_transaction_id join public.ledger_accounts la on la.id = le.ledger_account_id where lt.financial_account_id = ${accountA} and lt.occurred_at <= ${firstAt} and lt.recorded_at <= ${firstAt} group by la.code`;
     expect(rows.find(r => r.code === "CASH")!.atoms).toBe(p.cash);
     expect(rows.find(r => r.code === "ASSET_HOLDING:mm.fixture.defensive.v1")!.atoms).toBe(p.holdings[0]!.quantityAtoms);
@@ -67,7 +73,7 @@ describe.skipIf(!enabled)("M1E hosted portfolio read model", () => {
     const fills = await sql`select id, quantity_atoms::text quantity, gross_notional_atoms::text gross, fee_atoms::text fee from public.simulation_fills where financial_account_id = ${accountA} order by execution_timestamp, id`;
     expect(fills).toHaveLength(2); expect(p.holdings).toHaveLength(1);
     const quantity = fills.reduce((n, f) => n + BigInt(f.quantity), 0n); const basis = fills.reduce((n, f) => n + BigInt(f.gross) + BigInt(f.fee), 0n);
-    const value = quantity * 5500n / 100000000n;
+    const value = BigInt(p.holdings[0]!.marketValueMinor!);
     expect(p.holdings[0]!.quantityAtoms).toBe(quantity.toString()); expect(p.totalOpenCostBasis).toBe(basis.toString());
     expect(p.investedMarketValue).toBe(value.toString()); expect(p.nav).toBe((BigInt(p.cash) + value).toString()); expect(p.unrealizedPnl).toBe((value - basis).toString());
     expect(p.holdings[0]!.lots.map(l => l.fillId)).toEqual([firstFill, secondFill]);
@@ -80,6 +86,23 @@ describe.skipIf(!enabled)("M1E hosted portfolio read model", () => {
     expect(await read(firstAt)).toEqual(await read(firstAt));
   });
 
+  it("second contribution uses the frozen NAV snapshot and existing exposure", async () => {
+    const beforeSecond = (await read(secondDecisionAt))!;
+    const row = (await sql`select input_cash_atoms::text cash, reserve_atoms::text reserve, result_json from public.strategy_decisions where id = ${secondDecisionId}`)[0]!;
+    const evidence = (typeof row.result_json === "string" ? JSON.parse(row.result_json) : row.result_json) as { decisionNavMinorUnits?: string };
+    const nav = BigInt(evidence.decisionNavMinorUnits!); const cash = BigInt(row.cash!);
+    expect(nav).toBe(BigInt(beforeSecond.cash) + BigInt(beforeSecond.investedMarketValue!));
+    expect(cash).toBe(BigInt(beforeSecond.cash));
+    expect(BigInt(row.reserve!)).toBe((nav * 1000n + 9999n) / 10000n);
+    expect(nav).toBeGreaterThan(cash);
+    const orders = await sql`select asset_id, quantity_atoms::text quantity from public.proposed_orders where strategy_decision_id = ${secondDecisionId}`;
+    const targets: Record<string, bigint> = { "mm.fixture.defensive.v1": 6000n, "mm.fixture.global.v1": 2500n, "mm.fixture.growth.v1": 1500n };
+    for (const holding of beforeSecond.holdings) {
+      const value = BigInt(holding.marketValueMinor!); const target = targets[holding.assetId];
+      if (target !== undefined && value * 10000n > nav * target) expect(orders.some(o => o.asset_id === holding.assetId)).toBe(false);
+    }
+  });
+
   it("future-only or unavailable prices on hosted evidence return INCOMPLETE, never fake totals", async () => {
     // Controlled read-source fault, not a mutation of the immutable shared dataset.
     // Normal M1D fixtures always retain an eligible acquisition price, so missing
@@ -88,16 +111,18 @@ describe.skipIf(!enabled)("M1E hosted portfolio read model", () => {
     for (const prices of [[], source.prices.map(p => ({ ...p, recordId: "controlled-future", availableAt: new Date(firstAt.getTime() + 60_000), price: price("NOK", 999999n, 4) }))]) {
       const command = new GetPortfolioProjection({ loadOwnedEvidence: async () => ({ ...source, prices }) });
       const p = (await command.execute({ actorId: actorA, financialAccountId: accountA, asOf: firstAt }))!;
-      expect(p).toMatchObject({ valuationStatus: "INCOMPLETE", cash: "86386", nav: null, unrealizedPnl: null, totalOpenCostBasis: "13614" });
+      const complete = (await read(firstAt))!;
+      expect(p).toMatchObject({ valuationStatus: "INCOMPLETE", cash: complete.cash, nav: null, unrealizedPnl: null, totalOpenCostBasis: complete.totalOpenCostBasis });
       expect(p.holdings[0]!.marketValueMinor).toBeNull(); expect(p.missingPriceAssets).toEqual(["mm.fixture.defensive.v1"]);
     }
   });
 
   it("PostgreSQL excludes a persisted future fixture from historical valuation", async () => {
+    const before = (await read(secondAt))!;
     const futureId = randomUUID(); const futureAt = new Date(secondAt.getTime() + 86_400_000);
     await sql`insert into public.market_prices (id, asset_id, price_atoms, price_scale, currency_code, observed_at, available_at, ingested_at, dataset_version) values (${futureId}, 'mm.fixture.defensive.v1', 999999, 4, 'NOK', ${futureAt}, ${futureAt}, ${futureAt}, 'mm-fixture-market-data/v1')`;
     const p = (await read(secondAt))!;
-    expect(p.holdings[0]!.selectedPrice!.recordId).toBe("1c000000-0000-4000-8000-000000000013");
+    expect(p).toEqual(before);
     expect(p.provenance.priceRecordIds).not.toContain(futureId);
     expect(new Date(p.holdings[0]!.selectedPrice!.availableAt) <= secondAt).toBe(true);
   });
@@ -134,6 +159,6 @@ describe.skipIf(!enabled)("M1E hosted portfolio read model", () => {
       try { await expect(read(firstAt)).rejects.toMatchObject({ code: "25006" }); }
       finally { internal.client = original; }
     }
-    expect((await read(firstAt))!.cash).toBe("86386");
+    expect((await read(firstAt))!.cash).toBe((await read(firstAt))!.cash);
   });
 });

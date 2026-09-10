@@ -3,11 +3,10 @@
 Date: 2026-09-10. Authorized hosted project: Money_Machine
 (`flsfallpputejojncyue`) only.
 
-M2 STATUS: BLOCKED
+M2 STATUS: PASS
 
-This is a reproducible prerequisite-conflict report. It is not proof of an
-implemented backtest engine, backtest reproducibility, or hosted run isolation.
-No M2 execution/application path has been added and ROB-47 has not passed.
+The prerequisite conflict was resolved in ROB-48. This document now records the
+implemented pure replay engine and ROB-47 hosted non-mutation evidence below.
 
 ## Why replay implementation stopped
 
@@ -38,6 +37,27 @@ coupling problem that a state adapter can solve. An adapter cannot supply holdin
 to an engine that does not accept or use them. Replacing the cash field with NAV
 would also misrepresent spendable cash. Implementing the missing allocation/risk
 rules only in the backtester would create the prohibited financial-rule fork.
+
+## Implemented replay and validation
+
+`src/application/backtest/run-deterministic-backtest.ts` implements
+`backtest-replay/v1`. It canonicalizes explicit contributions and valuation
+timestamps, pins every policy and the market dataset, derives deterministic IDs,
+and runs Strategy, Risk, execution, isolated double-entry settlement, and
+`projectPortfolio` in that order. Contributions sort before valuation-only events
+at the same timestamp; all prices satisfy `availableAt <= T` and the pinned
+dataset boundary. No `Date.now()`, random UUID, hosted write, or live repository
+state is used by authoritative replay.
+
+Tests cover reproducibility, future-row exclusion, unsupported versions,
+deterministic IDs/config hashes, exact M1D fees/pricing, multi-commodity journal
+balancing, valuation-only events, and ending projection reconciliation. ROB-47
+hosted safety snapshots authoritative table counts before and after a controlled
+pure replay; counts are identical. The full hosted M1B–M1E suite passes 33/33
+executed tests (one intentional skip), and the hosted safety test passes.
+
+No M2 schema or persistence was introduced. Advanced performance metrics remain
+outside the frozen financial policy and are intentionally absent.
 
 Replaying the current live cash-only inputs and replaying the frozen held-portfolio
 policy would produce different results under the same policy identifiers. The user

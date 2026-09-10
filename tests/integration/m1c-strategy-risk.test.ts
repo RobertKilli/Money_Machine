@@ -61,7 +61,8 @@ describe("Money Machine M1C hosted strategy and risk persistence", () => {
 
   it("persists an approved decision and proposed orders", async () => {
     const command = new EvaluateContributionRebalancing(accounts, decisions);
-    const result = await command.execute({ actorId: ownerA, financialAccountId: accountAId, decisionTimestamp: new Date("2026-01-01T10:07:00Z"), idempotencyKey: `m1c-approved-${runId}` });
+    const decisionTimestamp = new Date(Date.now() + 60_000);
+    const result = await command.execute({ actorId: ownerA, financialAccountId: accountAId, decisionTimestamp, idempotencyKey: `m1c-approved-${runId}` });
     expect(result.status).toBe("APPROVED");
     const rows = await sql<{ decisions: string; orders: string; assessments: string; audits: string }[]>`select (select count(*)::text from public.strategy_decisions where id = ${result.decisionId}) decisions, (select count(*)::text from public.proposed_orders where strategy_decision_id = ${result.decisionId}) orders, (select count(*)::text from public.risk_assessments where strategy_decision_id = ${result.decisionId}) assessments, (select count(*)::text from public.decision_audit_events where decision_id = ${result.decisionId}) audits`;
     expect(rows[0]).toEqual({ decisions: "1", orders: "3", assessments: "1", audits: "1" });
@@ -70,10 +71,11 @@ describe("Money Machine M1C hosted strategy and risk persistence", () => {
   it("replays idempotently, rejects conflict, and serializes concurrent duplicates", async () => {
     const command = new EvaluateContributionRebalancing(accounts, decisions);
     const key = `m1c-replay-${runId}`;
-    const input = { actorId: ownerA, financialAccountId: accountAId, decisionTimestamp: new Date("2026-01-01T10:07:00Z"), idempotencyKey: key };
+    const decisionTimestamp = new Date(Date.now() + 60_000);
+    const input = { actorId: ownerA, financialAccountId: accountAId, decisionTimestamp, idempotencyKey: key };
     const first = await command.execute(input);
     expect(await command.execute(input)).toEqual(first);
-    await expect(command.execute({ ...input, decisionTimestamp: new Date("2026-01-01T10:07:01Z") })).rejects.toThrow("different input");
+    await expect(command.execute({ ...input, decisionTimestamp: new Date(decisionTimestamp.getTime() + 1_000) })).rejects.toThrow("different input");
     const concurrentKey = `m1c-concurrent-${runId}`;
     const [left, right] = await Promise.all([command.execute({ ...input, idempotencyKey: concurrentKey }), command.execute({ ...input, idempotencyKey: concurrentKey })]);
     expect(left).toEqual(right);

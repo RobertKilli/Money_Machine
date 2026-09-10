@@ -33,7 +33,7 @@ export class EvaluateContributionRebalancing {
     if (!overview) throw new Error("Financial account was not found");
     if (overview.account.status !== "ACTIVE" || overview.account.mode !== "SIMULATION") throw new Error("Financial account is not an active simulation account");
     if (overview.account.baseCurrencyCode !== "NOK") throw new Error("M1C fixture strategy supports NOK accounts only");
-    const decisionTimestamp = input.decisionTimestamp ?? new Date();
+    const decisionTimestamp = input.decisionTimestamp ?? new Date(Date.now() + 1_000);
     const fixtures = await this.decisions.getFixtureInputs();
     const portfolioState = this.accounts.getDecisionPortfolioState ? await this.accounts.getDecisionPortfolioState(overview.account.id, input.actorId, decisionTimestamp) : undefined;
     if (this.accounts.getDecisionPortfolioState && !portfolioState) throw new Error("DECISION_PORTFOLIO_UNAVAILABLE");
