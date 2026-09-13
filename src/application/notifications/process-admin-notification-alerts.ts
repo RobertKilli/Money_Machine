@@ -2,7 +2,7 @@ import "server-only";
 import { assertWebPushConfigured, toSafePushPayload, type AlertCandidate } from "@/domain/notifications/alerts";
 import { processAdminNotificationAlerts, type ProcessorResult } from "@/domain/notifications/processor";
 import { getNotificationPreferences, getActivePushSubscriptions, getNotificationOperationalHistory, persistNotificationOutcome, claimNotificationDelivery, completeNotificationClaim, sendWebPushCandidate } from "@/infrastructure/postgres/notification-repository";
-import { deriveAdminNotificationCandidates } from "@/application/notifications/derive-notification-candidates";
+import { deriveNotificationCandidatesAt } from "@/application/notifications/derive-notification-candidates";
 
 export type AlertCandidateSource = (adminUserId: string, asOf: Date) => Promise<readonly AlertCandidate[]>;
 
@@ -10,8 +10,9 @@ export async function processAdminNotificationAlertsAt(input: { adminUserId: str
   if (!input.adminUserId) throw new Error("INVALID_ADMIN_USER");
   const preferences = await getNotificationPreferences(input.adminUserId);
   if (!preferences) throw new Error("NOTIFICATION_PREFERENCES_NOT_FOUND");
+  const candidateSource = input.deriveCandidates ?? deriveNotificationCandidatesAt;
   const [candidates, subscriptions, history] = await Promise.all([
-    (input.deriveCandidates ?? ((adminUserId, asOf) => deriveAdminNotificationCandidates({ adminUserId, asOf })))(input.adminUserId, input.asOf),
+    candidateSource(input.adminUserId, input.asOf),
     getActivePushSubscriptions(input.adminUserId),
     getNotificationOperationalHistory(input.adminUserId)
   ]);
