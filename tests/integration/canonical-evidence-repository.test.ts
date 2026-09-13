@@ -1,0 +1,24 @@
+import { randomUUID } from "node:crypto";
+import { createConnection } from "node:net";
+import postgres, { type Sql } from "postgres";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { canonicalM4RecordFromSnapshot, canonicalM5RecordFromEvaluation } from "@/domain/intelligence/canonical-evidence";
+import { INTELLIGENCE_ENGINE_VERSION, INTELLIGENCE_FEATURE_SET_VERSION, TREND_ACCELERATION_VERSION, TREND_ANALYSIS_VERSION, type IntelligenceSnapshot } from "@/domain/intelligence/engine";
+import { ASSET_ELIGIBILITY_VERSION, SYNTHETIC_PROFILE_VERSION } from "@/domain/discovery/asset-eligibility";
+import { withCanonicalEvidenceTransaction } from "@/infrastructure/postgres/canonical-intelligence-repository";
+
+const PROJECT_REF = "flsfallpputejojncyue";
+const enabled = process.env.MONEY_MACHINE_INTEGRATION_TEST === "1";
+const asOf = new Date("2026-01-01T10:00:00.000Z");
+let sql: Sql;
+function socket({ host, port }: { host: string[]; port: number[] }) { const hostname = host[0]; const portNumber = port[0]; if (!hostname || !portNumber) throw new Error("Database host and port are required"); return createConnection({ host: hostname, port: portNumber, family: 4, autoSelectFamily: false }); }
+function databaseUrl() { if (process.env.MONEY_MACHINE_INTEGRATION_PROJECT_REF !== PROJECT_REF) throw new Error("Unauthorized project"); const value = process.env.DATABASE_URL; if (!value || !value.includes(PROJECT_REF)) throw new Error("Unauthorized database"); return value; }
+const snapshot = (analysisId: string): IntelligenceSnapshot => ({ analysisId, configHash: "config", asOf: asOf.toISOString(), engineVersion: INTELLIGENCE_ENGINE_VERSION, datasets: ["provider:v1"], inputEvidence: ["market-1"], eventContexts: [], noveltyEvidence: [], corroborationEvidence: [], trends: [{ status: "COMPLETE", direction: "UP", signedChangeBps: "500", accelerationStatus: "COMPLETE", accelerationBps: "100", accelerationDirection: "ACCELERATING", observationIds: ["market-1"], previousWindowObservationIds: [], currentWindowObservationIds: ["market-1"], version: TREND_ANALYSIS_VERSION, accelerationVersion: TREND_ACCELERATION_VERSION }], regime: { status: "COMPLETE", label: "RISK_ON", contributingObservationIds: ["market-1"], reasonCode: "TREND_DIRECTION", version: "regime-classification/v1" }, analogues: [], integrityStatus: "COMPLETE" });
+function records() { const m4 = canonicalM4RecordFromSnapshot({ snapshot: snapshot(`analysis-${runId}`), candidateId: `candidate-${runId}`, canonicalIdentifier: `asset-${runId}`, assetClass: "CRYPTO", availableAt: new Date("2026-01-01T10:01:00.000Z"), featureSetVersion: INTELLIGENCE_FEATURE_SET_VERSION, trendPolicyVersion: TREND_ANALYSIS_VERSION, accelerationVersion: TREND_ACCELERATION_VERSION, datasetPins: ["provider:v1"], corroborationProviderIds: ["p1", "p2"], corroborationEvidenceIds: ["news-1", "news-2"] }); const m5 = canonicalM5RecordFromEvaluation({ evaluation: { evaluationId: `evaluation-${runId}`, candidateId: m4.candidateId, asOf: asOf.toISOString(), policyVersion: ASSET_ELIGIBILITY_VERSION, profileVersion: SYNTHETIC_PROFILE_VERSION, status: "ELIGIBLE", checks: [{ reasonCode: "MEETS_THRESHOLD" }] }, canonicalIdentifier: m4.canonicalIdentifier, assetClass: m4.assetClass, availableAt: new Date("2026-01-01T10:01:00.000Z"), evidenceIds: ["market-1"], datasetPins: ["provider:v1"], suspiciousFlags: [], suspiciousEvidenceStatus: "CLEAN" }); return { m4, m5 }; }
+const runId = randomUUID();
+
+describe.skipIf(!enabled)("hosted canonical M4/M5 evidence repository", () => {
+  beforeAll(async () => { sql = postgres(databaseUrl(), { max: 2, prepare: true, ssl: "require", socket } as Parameters<typeof postgres>[1]); });
+  afterAll(async () => { await sql?.end({ timeout: 5 }); });
+  it("round-trips append-only evidence and rolls back the complete proof", async () => { const { m4, m5 } = records(); await expect(withCanonicalEvidenceTransaction(async repository => { await repository.saveM4Analysis(m4); await repository.saveM5Eligibility(m5); await repository.saveM4Analysis(m4); await repository.saveM5Eligibility(m5); expect(await repository.readHighInterestEvidence(new Date("2026-01-01T10:30:00.000Z"))).toHaveLength(1); await expect(repository.readHighInterestEvidence(new Date("2026-01-01T10:00:00.000Z"))).resolves.toEqual([]); await expect(repository.saveM4Analysis({ ...m4, fingerprint: "conflict" })).rejects.toThrow("CANONICAL_EVIDENCE_CONFLICT"); throw new Error("ROLLBACK_CANONICAL_EVIDENCE_PROOF"); })).rejects.toThrow("ROLLBACK_CANONICAL_EVIDENCE_PROOF"); });
+});
