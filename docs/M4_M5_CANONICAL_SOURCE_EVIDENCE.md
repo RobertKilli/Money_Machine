@@ -40,7 +40,23 @@ Verified hosted properties:
 
 `HOSTED_CANONICAL_SCHEMA_PROOF: PASS`
 
-Production application closure remains pending commit, push, and deployment of the canonical reader implementation. This hosted schema proof does not claim that application wiring is deployed.
+## Production deployment and zero-data proof
+
+The canonical implementation was committed in `330962aad54f6ebf4b46774f18c85cd7a800afcc` (`feat(intelligence): add canonical hosted M4/M5 evidence source`). The production wiring fix was committed in `6b467455e27264ee71eb8ac86bace61def1f4906` (`fix(notifications): wire canonical M4/M5 reader into production`).
+
+Vercel deployment `dpl_GtHZMCL9a2PR4xgVxBtukwmaftwC` is `READY` at `https://moneymachine-eta.vercel.app`, deployed from commit `6b467455e27264ee71eb8ac86bace61def1f4906`.
+
+The verified production call path is:
+
+`scheduler route -> processAdminNotificationAlertsAt(...) -> deriveNotificationCandidatesAt(...) -> deriveAdminNotificationCandidates(...) with readCanonicalHighInterestEvidence -> canonical M4/M5 source -> frozen deriveHighInterestCandidates/evaluator`
+
+Explicit candidate-source test overrides remain supported. The first verified unattended scheduler execution after the wiring fix was `2026-09-13T17:35:15.198Z`, HTTP 200, with `evaluated=0`, `sent=0`, `deferred=0`, `suppressed=0`, and `failed=0`. Both hosted canonical tables contained zero rows during verification; zero canonical rows therefore produced a healthy zero-candidate result, and no synthetic rows remain.
+
+`HOSTED_CANONICAL_SCHEMA_PROOF: PASS`
+`PRODUCTION_CANONICAL_READER_WIRING: PASS`
+`HOSTED_CANONICAL_M4_M5_SOURCE: PASS`
+
+HIGH_INTEREST remains informational only. This source adds no order, risk, ledger, settlement, or execution authority. No M9 milestone was created. The source is deployed and available, but currently contains no live analytical M4/M5 rows.
 
 ## Financial authority
 

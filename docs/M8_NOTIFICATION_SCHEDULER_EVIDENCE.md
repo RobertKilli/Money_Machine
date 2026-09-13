@@ -54,6 +54,12 @@ At least two unattended successful executions are therefore proven.
 - ROB-62 scheduler activation: `PASS`
 - `EXTERNAL_SCHEDULER_HOOK_REQUIRED`: `CLOSED`
 - `HOSTED_UNATTENDED_PROOF_PENDING`: `CLOSED`
-- remaining separate accepted limitation: `HOSTED_CANONICAL_M4_M5_SOURCE_NOT_AVAILABLE`
+- `HOSTED_CANONICAL_M4_M5_SOURCE_NOT_AVAILABLE`: `CLOSED`
 
-The remaining M4/M5 hosted-source limitation is not resolved by ROB-62 and must not be treated as closed by the scheduler evidence above.
+## Post-M8 canonical source closure
+
+The hosted canonical migration `20260913153948` is applied. The canonical M4/M5 implementation commit is `330962aad54f6ebf4b46774f18c85cd7a800afcc`; the production wiring-fix commit is `6b467455e27264ee71eb8ac86bace61def1f4906`; and production deployment `dpl_GtHZMCL9a2PR4xgVxBtukwmaftwC` is `READY` at `https://moneymachine-eta.vercel.app`.
+
+The first verified unattended scheduler execution after the wiring fix, at `2026-09-13T17:35:15.198Z`, returned HTTP 200 with `evaluated=0`, `sent=0`, `deferred=0`, `suppressed=0`, and `failed=0`. Both canonical tables had zero rows, so this is valid healthy zero-data proof; no synthetic rows remain. This post-M8 note does not rewrite the historical ROB-62 timestamps or evidence above.
+
+`HOSTED_CANONICAL_M4_M5_SOURCE_NOT_AVAILABLE`: `CLOSED`
