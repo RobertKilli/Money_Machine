@@ -2,6 +2,8 @@ import { requireAdminUser } from "@/lib/auth/current-user";
 import { getNotificationPreferences, saveNotificationPreferences } from "@/infrastructure/postgres/notification-repository";
 import { validateNotificationPreferences, type AlertCategory, type NotificationPreferences } from "@/domain/notifications/alerts";
 const categories: AlertCategory[] = ["SIMULATION_PNL_GAIN", "SIMULATION_PNL_LOSS", "HIGH_INTEREST_CANDIDATE", "ELIGIBILITY_CHANGED", "ADMISSION_CHANGED", "ALLOCATION_PLAN_RESULT", "RISK_BLOCKED", "SIMULATION_FILL", "SYSTEM_CRITICAL"];
+const safeErrorField = (error: unknown, ...keys: string[]): string | undefined => { if (!error || typeof error !== "object") return undefined; const record = error as Record<string, unknown>; const value = keys.map(key => record[key]).find(candidate => typeof candidate === "string"); return typeof value === "string" ? value : undefined; };
+const safePersistenceErrorMetadata = (error: unknown) => ({ stage: "persistence", errorName: safeErrorField(error, "name"), code: safeErrorField(error, "code"), severity: safeErrorField(error, "severity"), constraint: safeErrorField(error, "constraint_name", "constraint"), column: safeErrorField(error, "column_name", "column"), dataType: safeErrorField(error, "datatype_name", "dataType"), schema: safeErrorField(error, "schema_name", "schema"), table: safeErrorField(error, "table_name", "table") });
 export async function GET() { let user; try { user = await requireAdminUser(); } catch { return Response.json({ error: "FORBIDDEN" }, { status: 403 }); } try { const preferences = await getNotificationPreferences(user.id); return Response.json(preferences ? { ...preferences, pnlMilestoneThresholdMinor: preferences.pnlMilestoneThresholdMinor.toString() } : null); } catch { return Response.json({ error: "PREFERENCES_UNAVAILABLE" }, { status: 503 }); } }
 export async function PUT(request: Request) {
   let user;
@@ -19,7 +21,7 @@ export async function PUT(request: Request) {
     await saveNotificationPreferences(user.id, preferences);
     return Response.json({ ok: true });
   } catch (error) {
-    console.error("notification_preferences_save_failed", { stage: "persistence", errorClass: error instanceof Error ? error.name : "unknown" });
+    console.error("notification_preferences_save_failed", safePersistenceErrorMetadata(error));
     return Response.json({ error: "PREFERENCES_UNAVAILABLE" }, { status: 503 });
   }
 }
