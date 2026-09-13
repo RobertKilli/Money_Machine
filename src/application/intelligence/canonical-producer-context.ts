@@ -1,4 +1,5 @@
 import type { IntelligenceAnalysisConfig } from "@/domain/intelligence/engine";
+import { deriveCanonicalContextId } from "@/domain/intelligence/canonical-evidence";
 
 export interface CanonicalProducerDatasetPin {
   readonly providerId: string;
@@ -97,6 +98,18 @@ export function validateCanonicalProducerSourceContext(
     relevantEvidence: Object.freeze([...evidenceById.values()].sort(
       (a, b) => a.evidenceId.localeCompare(b.evidenceId),
     )),
+  });
+}
+
+/** Shared evaluation-cycle identity; material M4/M5 evidence remains record-specific. */
+export function canonicalContextIdForProducerContext(input: CanonicalProducerSourceContext): string {
+  const context = validateCanonicalProducerSourceContext(input);
+  return deriveCanonicalContextId({
+    candidateId: context.candidateId,
+    canonicalIdentifier: context.canonicalIdentifier,
+    assetClass: context.assetClass,
+    assetId: context.assetId,
+    asOf: context.asOf,
   });
 }
 
