@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { NOTIFICATION_CATEGORIES } from "@/domain/notifications/preferences-ui";
 import type { NotificationPreferences } from "@/domain/notifications/alerts";
 import { getNotificationPreferences, saveNotificationPreferences } from "@/infrastructure/postgres/notification-repository";
 
@@ -18,9 +19,16 @@ describe.skipIf(!enabled)("hosted notification preference persistence", () => {
   beforeAll(async () => { sql = postgres(databaseUrl(), { max: 2, prepare: true, ssl: "require", socket } as Parameters<typeof postgres>[1]); await sql`insert into auth.users (id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at) values (${userId}, 'authenticated', 'authenticated', ${`notification-preferences-${runId}@example.invalid`}, '', now(), '{}'::jsonb, '{}'::jsonb, now(), now())`; });
   afterAll(async () => { if (!sql) return; await sql`delete from public.admin_notification_preferences where user_id=${userId}`; await sql`delete from auth.users where id=${userId}`; await sql.end({ timeout: 5 }); });
   it("round-trips exact values and updates through ON CONFLICT", async () => {
-    const first: NotificationPreferences = { enabledCategories: ["SIMULATION_PNL_GAIN", "RISK_BLOCKED", "SYSTEM_CRITICAL"], pnlMilestoneThresholdMinor: 100000n, currency: "NOK", quietHoursEnabled: true, quietHoursStart: "22:00", quietHoursEnd: "07:00", timezone: "Europe/Oslo", maxNonCriticalPerHour: 10 };
+    const first: NotificationPreferences = { enabledCategories: ["SIMULATION_PNL_GAIN", "HIGH_INTEREST_CANDIDATE", "SYSTEM_CRITICAL"], pnlMilestoneThresholdMinor: 100000n, currency: "NOK", quietHoursEnabled: true, quietHoursStart: "22:00", quietHoursEnd: "07:00", timezone: "Europe/Oslo", maxNonCriticalPerHour: 10 };
     await saveNotificationPreferences(userId, first);
     expect(await getNotificationPreferences(userId)).toEqual(first);
+    const empty = { ...first, enabledCategories: [] } satisfies NotificationPreferences;
+    await saveNotificationPreferences(userId, empty);
+    expect((await sql`select enabled_categories::text value from public.admin_notification_preferences where user_id=${userId}`)[0]?.value).toBe("{}");
+    expect(await getNotificationPreferences(userId)).toEqual(empty);
+    const all = { ...first, enabledCategories: [...NOTIFICATION_CATEGORIES] } satisfies NotificationPreferences;
+    await saveNotificationPreferences(userId, all);
+    expect(await getNotificationPreferences(userId)).toEqual(all);
     const updated: NotificationPreferences = { ...first, enabledCategories: ["SIMULATION_PNL_LOSS", "SIMULATION_FILL"], pnlMilestoneThresholdMinor: 250050n, quietHoursEnabled: false, quietHoursStart: "01:02", quietHoursEnd: "03:04", timezone: "UTC", maxNonCriticalPerHour: 7 };
     await saveNotificationPreferences(userId, updated);
     expect(await getNotificationPreferences(userId)).toEqual(updated);
