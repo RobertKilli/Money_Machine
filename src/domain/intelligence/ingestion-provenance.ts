@@ -28,6 +28,8 @@ export type IngestionRequest = Readonly<{
   providerId: string;
   datasetId: string;
   datasetVersion: string;
+  providerSourceNamespace: string;
+  envelopeSchemaVersion: string;
   requestScope: JsonObject;
   adapterContractVersion: string;
   parserContractVersion: string;
@@ -157,6 +159,8 @@ function timestamp(value: unknown, code: string): string {
   return normalized;
 }
 
+export function normalizeIngestionTimestamp(value: unknown, code = "M5_INGESTION_TIMESTAMP_INVALID"): string { return timestamp(value, code); }
+
 function integer(value: unknown, code: string, minimum = 0): number {
   if (!Number.isInteger(value) || (value as number) < minimum) throw new Error(code);
   return value as number;
@@ -241,7 +245,7 @@ export function ingestionRequestIdFor(idempotencyKey: string): string {
   return `m5-ingestion-request:${digest({ version: INGESTION_REQUEST_CONTRACT_VERSION, idempotencyKey: nonBlank(idempotencyKey, "M5_INGESTION_IDEMPOTENCY_KEY_INVALID") })}`;
 }
 
-type IngestionRequestMaterial = Pick<IngestionRequest, "contractVersion" | "idempotencyKey" | "providerId" | "datasetId" | "datasetVersion" | "requestScope" | "adapterContractVersion" | "parserContractVersion">;
+type IngestionRequestMaterial = Pick<IngestionRequest, "contractVersion" | "idempotencyKey" | "providerId" | "datasetId" | "datasetVersion" | "providerSourceNamespace" | "envelopeSchemaVersion" | "requestScope" | "adapterContractVersion" | "parserContractVersion">;
 export function ingestionRequestFingerprint(input: IngestionRequestMaterial): string {
   return fingerprint({ version: INGESTION_REQUEST_CONTRACT_VERSION, ...input });
 }
@@ -252,11 +256,13 @@ export function createIngestionRequest(input: Omit<IngestionRequest, "ingestionR
   const providerId = nonBlank(input.providerId, "M5_INGESTION_PROVIDER_INVALID");
   const datasetId = nonBlank(input.datasetId, "M5_INGESTION_DATASET_INVALID");
   const datasetVersion = nonBlank(input.datasetVersion, "M5_INGESTION_DATASET_VERSION_INVALID");
+  const providerSourceNamespace = nonBlank(input.providerSourceNamespace, "M5_INGESTION_SOURCE_NAMESPACE_INVALID");
+  const envelopeSchemaVersion = nonBlank(input.envelopeSchemaVersion, "M5_INGESTION_ENVELOPE_SCHEMA_INVALID");
   const requestScope = object(input.requestScope, "M5_INGESTION_REQUEST_SCOPE_INVALID");
   const adapterContractVersion = nonBlank(input.adapterContractVersion, "M5_INGESTION_ADAPTER_VERSION_INVALID");
   const parserContractVersion = nonBlank(input.parserContractVersion, "M5_INGESTION_PARSER_VERSION_INVALID");
   const provenance = safeProvenance(input.provenance);
-  const material = { contractVersion: INGESTION_REQUEST_CONTRACT_VERSION, idempotencyKey, providerId, datasetId, datasetVersion, requestScope, adapterContractVersion, parserContractVersion } as const;
+  const material = { contractVersion: INGESTION_REQUEST_CONTRACT_VERSION, idempotencyKey, providerId, datasetId, datasetVersion, providerSourceNamespace, envelopeSchemaVersion, requestScope, adapterContractVersion, parserContractVersion } as const;
   const requestFingerprint = ingestionRequestFingerprint(material);
   return Object.freeze({ ...material, provenance, ingestionRequestId: ingestionRequestIdFor(idempotencyKey), requestFingerprint, requestedAt: timestamp(input.requestedAt, "M5_INGESTION_REQUESTED_AT_INVALID") });
 }

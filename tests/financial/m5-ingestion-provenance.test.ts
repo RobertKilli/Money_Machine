@@ -29,6 +29,8 @@ const request = (overrides: Record<string, unknown> = {}) => createIngestionRequ
   providerId: "provider-1",
   datasetId: "dataset-1",
   datasetVersion: "dataset-v1",
+  providerSourceNamespace: "FIXTURE",
+  envelopeSchemaVersion: "envelope/v1",
   requestScope: { assets: ["asset-1"], pageSize: 100 },
   adapterContractVersion: "adapter/v1",
   parserContractVersion: "parser/v1",
@@ -79,6 +81,8 @@ describe("M5 ingestion provenance domain", () => {
     expect(first.ingestionRequestId).toBe(replay.ingestionRequestId);
     expect(first.requestFingerprint).toBe(replay.requestFingerprint);
     expect(request({ idempotencyKey: "operator-request-2" }).ingestionRequestId).not.toBe(first.ingestionRequestId);
+    expect(request({ providerSourceNamespace: "OTHER" }).ingestionRequestId).toBe(first.ingestionRequestId);
+    expect(request({ providerSourceNamespace: "OTHER" }).requestFingerprint).not.toBe(first.requestFingerprint);
   });
 
   it("rejects a reused idempotency key with different material", () => {
@@ -97,7 +101,16 @@ describe("M5 ingestion provenance domain", () => {
 
   it("rejects same attempt ID with different execution material", () => {
     const { repos, value } = attempt();
-    expect(() => repos.attempts.save(createIngestionAttempt({ ingestionRequestId: value.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v2", parserVersion: "parser/v1", executionInput: {}, startedAt: t4 }))).toThrow("M5_INGESTION_ATTEMPT_CONFLICT");
+    expect(() => repos.attempts.save(createIngestionAttempt({ ingestionRequestId: value.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v1", parserVersion: "parser/v1", executionInput: { changed: true }, startedAt: t4 }))).toThrow("M5_INGESTION_ATTEMPT_CONFLICT");
+  });
+
+  it("enforces attempt parser and adapter contracts at repository save", () => {
+    const repos = createInMemoryIngestionProvenanceRepositories();
+    const savedRequest = repos.requests.save(request());
+    const parserMismatch = createIngestionAttempt({ ingestionRequestId: savedRequest.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v1", parserVersion: "parser/v2", executionInput: {}, startedAt: t1 });
+    expect(() => repos.attempts.save(parserMismatch)).toThrow("M5_INGESTION_ATTEMPT_PARSER_REQUEST_MISMATCH");
+    const adapterMismatch = createIngestionAttempt({ ingestionRequestId: savedRequest.ingestionRequestId, attemptNumber: 2, adapterVersion: "adapter/v2", parserVersion: "parser/v1", executionInput: {}, startedAt: t1 });
+    expect(() => repos.attempts.save(adapterMismatch)).toThrow("M5_INGESTION_ATTEMPT_ADAPTER_REQUEST_MISMATCH");
   });
 
   it("reduces STARTED, observations and each alternative terminal state", () => {
@@ -150,8 +163,8 @@ describe("M5 ingestion provenance domain", () => {
   it("rejects provider artifact conflicts and preserves replay", () => {
     const repos = createInMemoryIngestionProvenanceRepositories();
     const source = artifact();
-    expect(repos.artifacts.save(source)).toBe(source);
-    expect(repos.artifacts.save(artifact({ recordedAt: t4 }))).toBe(source);
+    expect(repos.artifacts.save(source)).toStrictEqual(source);
+    expect(repos.artifacts.save(artifact({ recordedAt: t4 }))).toStrictEqual(source);
     expect(() => repos.artifacts.save(artifact({ payloadFingerprint: "b".repeat(64) }))).toThrow("M5_SOURCE_ARTIFACT_CONFLICT");
     expect(() => repos.artifacts.save(artifact({ providerRevision: "2", payloadFingerprint: "b".repeat(64) }))).not.toThrow();
   });
@@ -162,8 +175,8 @@ describe("M5 ingestion provenance domain", () => {
     const source = artifact();
     repos.artifacts.save(source);
     const observation = createSourceObservation({ ingestionAttemptId: first.value.ingestionAttemptId, sourceArtifactId: source.sourceArtifactId, responsePageOrdinal: 0, itemOrdinal: 0, retrievedAt: t2, metadata: { pageOrdinal: 0, cursorSafety: "NONE" }, recordedAt: t3 });
-    expect(repos.observations.save(observation)).toBe(observation);
-    expect(repos.observations.save(observation)).toBe(observation);
+    expect(repos.observations.save(observation)).toStrictEqual(observation);
+    expect(repos.observations.save(observation)).toStrictEqual(observation);
     const secondAttempt = createIngestionAttempt({ ingestionRequestId: first.value.ingestionRequestId, attemptNumber: 2, adapterVersion: "adapter/v1", parserVersion: "parser/v1", executionInput: {}, startedAt: t3 });
     repos.attempts.save(secondAttempt);
     const secondObservation = createSourceObservation({ ingestionAttemptId: secondAttempt.ingestionAttemptId, sourceArtifactId: source.sourceArtifactId, responsePageOrdinal: 0, itemOrdinal: 0, retrievedAt: t0, metadata: { pageOrdinal: 0, cursorSafety: "NONE" }, recordedAt: t3 });
@@ -182,7 +195,7 @@ describe("M5 ingestion provenance domain", () => {
     const claim = createRetrievalAvailabilityClaim({ envelope: goodEnvelope, observation, recordedAt: t3 });
     expect(claim.effectiveAvailableAt).toBe(t2);
     expect(claim.availabilityClaimId).toBe(availabilityClaimIdFor(claim));
-    expect(repos.availabilityClaims.save(claim)).toBe(claim);
+    expect(repos.availabilityClaims.save(claim)).toStrictEqual(claim);
     const quarantined = envelope(source, { temporalQualityStatus: "QUARANTINED", temporalDiagnosticCodes: ["M5_INGESTION_PROVIDER_CLOCK_SKEW"] });
     expect(() => createRetrievalAvailabilityClaim({ envelope: quarantined, observation, recordedAt: t3 })).toThrow("M5_INGESTION_TEMPORAL_QUALITY_UNRESOLVED");
   });
@@ -219,7 +232,7 @@ describe("M5 ingestion provenance domain", () => {
 
   it("rejects unknown fields, invalid timestamps, conflicting duplicates and secret metadata", () => {
     const baseFixture = { fixtureVersion: "m5-ingestion-fixture/v1", providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "FIXTURE", parserContractVersion: "p/v1", envelopeSchemaVersion: "e/v1", pageMetadata: { pageOrdinal: 0, cursorSafety: "NONE" }, records: [] };
-    const contextRequest = createIngestionRequest({ idempotencyKey: "fixture", providerId: "p", datasetId: "d", datasetVersion: "v", requestScope: {}, adapterContractVersion: "adapter/v1", parserContractVersion: "p/v1", requestedAt: t0, provenance: {} });
+    const contextRequest = createIngestionRequest({ idempotencyKey: "fixture", providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "FIXTURE", envelopeSchemaVersion: "e/v1", requestScope: {}, adapterContractVersion: "adapter/v1", parserContractVersion: "p/v1", requestedAt: t0, provenance: {} });
     const contextAttempt = createIngestionAttempt({ ingestionRequestId: contextRequest.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v1", parserVersion: "p/v1", executionInput: {}, startedAt: t1 });
     const options = { request: contextRequest, attempt: contextAttempt, retrievedAt: t1, recordedAt: t2 };
     expect(() => parseM5IngestionFixture({ ...baseFixture, unknown: true }, options)).toThrow("M5_FIXTURE_UNKNOWN_FIELD");
@@ -229,9 +242,19 @@ describe("M5 ingestion provenance domain", () => {
     expect(() => parseM5IngestionFixture({ ...baseFixture, records: [{ providerExternalRecordId: "x", payloadFingerprint: "a".repeat(64), normalizedEnvelope: {}, selectedAuditableFields: {}, observedAt: t0, itemOrdinal: 0 }, { providerExternalRecordId: "x", payloadFingerprint: "b".repeat(64), normalizedEnvelope: {}, selectedAuditableFields: {}, observedAt: t0, itemOrdinal: 1 }] }, options)).toThrow("M5_INGESTION_FIXTURE_CONFLICT");
   });
 
+  it("validates fixture execution timestamps before empty record processing", () => {
+    const fixture = { fixtureVersion: "m5-ingestion-fixture/v1", providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "FIXTURE", parserContractVersion: "p/v1", envelopeSchemaVersion: "e/v1", pageMetadata: { pageOrdinal: 0, cursorSafety: "NONE" }, records: [] };
+    const contextRequest = createIngestionRequest({ idempotencyKey: "empty-time", providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "FIXTURE", envelopeSchemaVersion: "e/v1", requestScope: {}, adapterContractVersion: "adapter/v1", parserContractVersion: "p/v1", requestedAt: t0, provenance: {} });
+    const contextAttempt = createIngestionAttempt({ ingestionRequestId: contextRequest.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v1", parserVersion: "p/v1", executionInput: {}, startedAt: t1 });
+    expect(() => parseM5IngestionFixture(fixture, { request: contextRequest, attempt: contextAttempt, retrievedAt: "bad", recordedAt: t2 })).toThrow("M5_FIXTURE_RETRIEVED_AT_INVALID");
+    expect(() => parseM5IngestionFixture(fixture, { request: contextRequest, attempt: contextAttempt, retrievedAt: t1, recordedAt: "bad" })).toThrow("M5_FIXTURE_RECORDED_AT_INVALID");
+    expect(() => parseM5IngestionFixture(fixture, { request: contextRequest, attempt: contextAttempt, retrievedAt: t2, recordedAt: t1 })).toThrow("M5_FIXTURE_RETRIEVED_AFTER_RECORDED");
+    expect(parseM5IngestionFixture(fixture, { request: contextRequest, attempt: contextAttempt, retrievedAt: t1, recordedAt: t2 }).observations).toHaveLength(0);
+  });
+
   it("preserves an explicit temporal quarantine diagnostic without raw provider data", () => {
     const fixture = { fixtureVersion: "m5-ingestion-fixture/v1", providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "FIXTURE", parserContractVersion: "p/v1", envelopeSchemaVersion: "e/v1", pageMetadata: { pageOrdinal: 0, cursorSafety: "NONE" }, records: [{ providerExternalRecordId: "x", payloadFingerprint: "a".repeat(64), normalizedEnvelope: {}, selectedAuditableFields: {}, providerPublishedAt: t4, observedAt: t0, itemOrdinal: 0 }] };
-    const contextRequest = createIngestionRequest({ idempotencyKey: "fixture-skew", providerId: "p", datasetId: "d", datasetVersion: "v", requestScope: {}, adapterContractVersion: "adapter/v1", parserContractVersion: "p/v1", requestedAt: t0, provenance: {} });
+    const contextRequest = createIngestionRequest({ idempotencyKey: "fixture-skew", providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "FIXTURE", envelopeSchemaVersion: "e/v1", requestScope: {}, adapterContractVersion: "adapter/v1", parserContractVersion: "p/v1", requestedAt: t0, provenance: {} });
     const contextAttempt = createIngestionAttempt({ ingestionRequestId: contextRequest.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v1", parserVersion: "p/v1", executionInput: {}, startedAt: t1 });
     const result = parseM5IngestionFixture(fixture, { request: contextRequest, attempt: contextAttempt, retrievedAt: t1, recordedAt: t2 });
     expect(result.envelopes[0]?.temporalQualityStatus).toBe("QUARANTINED");
@@ -269,6 +292,31 @@ describe("M5 ingestion provenance domain", () => {
     const goodObservation = createSourceObservation({ ingestionAttemptId: attemptValue.ingestionAttemptId, sourceArtifactId: source.sourceArtifactId, responsePageOrdinal: 0, itemOrdinal: 0, retrievedAt: t2, metadata: { pageOrdinal: 0, cursorSafety: "NONE" }, recordedAt: t3 });
     expect(() => repos.events.save(event(attemptValue.ingestionAttemptId, 1, "STARTED"))).not.toThrow();
     expect(() => repos.events.save(event(attemptValue.ingestionAttemptId, 2, "SOURCE_OBSERVED", { sourceObservationId: goodObservation.sourceObservationId }))).toThrow("M5_INGESTION_EVENT_OBSERVATION_MISMATCH");
+  });
+
+  it("persists a complete positive lifecycle with source observation", () => {
+    const repos = createInMemoryIngestionProvenanceRepositories();
+    const { value: attemptValue } = attempt(repos);
+    const source = artifact();
+    repos.artifacts.save(source);
+    const observation = createSourceObservation({ ingestionAttemptId: attemptValue.ingestionAttemptId, sourceArtifactId: source.sourceArtifactId, responsePageOrdinal: 0, itemOrdinal: 0, retrievedAt: t2, metadata: { pageOrdinal: 0, cursorSafety: "NONE" }, recordedAt: t3 });
+    repos.observations.save(observation);
+    repos.events.save(event(attemptValue.ingestionAttemptId, 1, "STARTED"));
+    repos.events.save(event(attemptValue.ingestionAttemptId, 2, "SOURCE_OBSERVED", { sourceObservationId: observation.sourceObservationId }));
+    repos.events.save(event(attemptValue.ingestionAttemptId, 3, "COMPLETED"));
+    const history = repos.events.readByAttempt(attemptValue.ingestionAttemptId);
+    expect(reduceIngestionLifecycle(history).status).toBe("COMPLETED");
+  });
+
+  it("canonicalizes caller-owned nested JSON before storage", () => {
+    const repos = createInMemoryIngestionProvenanceRepositories();
+    const original = request({ requestScope: { nested: { values: ["original"] } } });
+    const mutableScope = { nested: { values: ["original"] } };
+    const callerRecord = { ...original, requestScope: mutableScope } as never;
+    const stored = repos.requests.save(callerRecord);
+    mutableScope.nested.values[0] = "mutated";
+    expect((stored.requestScope.nested as unknown as { readonly values: readonly string[] }).values[0]).toBe("original");
+    expect(Object.isFrozen(stored.requestScope)).toBe(true);
   });
 
   it("revalidates availability claims instead of trusting their fingerprint", () => {
