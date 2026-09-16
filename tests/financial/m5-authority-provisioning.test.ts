@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { M5_EVIDENCE_MANIFEST_VERSION, type M5EvidenceManifest, type M5EvidenceSemanticCompatibility } from "@/application/intelligence/assemble-m5-evidence";
 import { M5_MANIFEST_AUTHORITY_CONFIG_VERSION, parseM5ManifestAuthorityConfig, type M5ManifestAuthorityConfig } from "@/application/intelligence/m5-manifest-authority-config";
 import { provisionM5ManifestAuthority } from "@/application/intelligence/provision-m5-manifest-authority";
-import { parseProvisionM5ManifestAuthorityCliArgs } from "@/application/intelligence/provision-m5-manifest-authority-cli";
+import { formatProvisioningCliError, parseProvisionM5ManifestAuthorityCliArgs } from "@/application/intelligence/provision-m5-manifest-authority-cli";
 import { createAgeReferenceEligibilityEvidence, createQuantitativeEligibilityEvidence, createSuspiciousEligibilityEvidence, createVenueEligibilityEvidence, type RawEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
 
 const asOf = "2026-09-13T00:00:00.000Z";
@@ -76,6 +76,18 @@ describe("M5 authority provisioning", () => {
     const result = await provisionM5ManifestAuthority(config({ sourceContext: { ...sourceContext(), assetClass: "EQUITY" } }), "APPLY", deps);
     expect(["DRY_RUN_INVALID", "DRY_RUN_INCOMPLETE"]).toContain(result.status); expect(deps.authorityRepository.save).not.toHaveBeenCalled();
   });
+
+  it("uses provisioning scopes instead of false AGE diagnostics", async () => {
+    const fixture = complete(); const deps = dependencies(fixture.raw);
+    const contextInvalid = await provisionM5ManifestAuthority(config({ sourceContext: { ...sourceContext(), assetClass: "UNKNOWN" } as never }), "DRY_RUN", deps);
+    expect(contextInvalid.status).toBe("DRY_RUN_INVALID"); if (contextInvalid.status === "DRY_RUN_INVALID") expect(contextInvalid.errors[0]).toMatchObject({ scope: "CONTEXT" });
+    const pinInvalid = await provisionM5ManifestAuthority(config({ allowedDatasetPins: [pin, { ...pin, datasetVersion: "v2" }] }), "DRY_RUN", deps);
+    expect(pinInvalid.status).toBe("DRY_RUN_INVALID"); if (pinInvalid.status === "DRY_RUN_INVALID") expect(pinInvalid.errors[0]).toMatchObject({ scope: "DATASET_PINS" });
+    const authorityInvalid = await provisionM5ManifestAuthority(config({ authorityVersion: "" }), "DRY_RUN", deps);
+    expect(authorityInvalid.status).toBe("DRY_RUN_INVALID"); if (authorityInvalid.status === "DRY_RUN_INVALID") expect(authorityInvalid.errors[0]).toMatchObject({ scope: "AUTHORITY" });
+    const incomplete = await provisionM5ManifestAuthority(config({ manifest: { ...fixture.manifest, historySpan: undefined } }), "DRY_RUN", deps);
+    expect(incomplete.status).toBe("DRY_RUN_INCOMPLETE"); if (incomplete.status === "DRY_RUN_INCOMPLETE") expect(incomplete.missingRequirements[0]).toMatchObject({ scope: "ASSEMBLY", assemblyTarget: "HISTORY_SPAN" });
+  });
 });
 
 describe("M5 authority CLI arguments", () => {
@@ -87,5 +99,16 @@ describe("M5 authority CLI arguments", () => {
     expect(() => parseProvisionM5ManifestAuthorityCliArgs([])).toThrow("M5_CLI_CONFIG_REQUIRED");
     expect(() => parseProvisionM5ManifestAuthorityCliArgs(["--unknown"])).toThrow("M5_CLI_UNKNOWN_ARGUMENT");
     expect(() => parseProvisionM5ManifestAuthorityCliArgs(["--config", "authority.json", "--apply", "--apply"])).toThrow("M5_CLI_DUPLICATE_APPLY");
+  });
+
+  it("formats every operational failure without exposing exception text or secrets", () => {
+    const secret = new Error("postgres://user:super-secret@secret-host/database");
+    expect(formatProvisioningCliError(secret)).toEqual({ status: "INFRASTRUCTURE_FAILURE", code: "M5_AUTHORITY_INFRASTRUCTURE_FAILURE", exitCode: 3 });
+    expect(JSON.stringify(formatProvisioningCliError(secret))).not.toMatch(/postgres|super-secret|secret-host/);
+    expect(formatProvisioningCliError(new Error("DATABASE_UNCONFIGURED"))).toEqual({ status: "INFRASTRUCTURE_FAILURE", code: "DATABASE_UNCONFIGURED", exitCode: 3 });
+    expect(formatProvisioningCliError(new Error("M5_MANIFEST_AUTHORITY_CONFLICT"))).toEqual({ status: "AUTHORITY_CONFLICT", code: "M5_MANIFEST_AUTHORITY_CONFLICT", exitCode: 2 });
+    expect(formatProvisioningCliError(new Error("M5_CONFIG_JSON_INVALID"))).toEqual({ status: "DRY_RUN_INVALID", code: "M5_CONFIG_JSON_INVALID", exitCode: 2 });
+    expect(formatProvisioningCliError(new Error("M5_CONFIG_FILE_READ_FAILED"))).toEqual({ status: "DRY_RUN_INVALID", code: "M5_CONFIG_FILE_READ_FAILED", exitCode: 2 });
+    expect(formatProvisioningCliError(new Error("M5_CLI_UNKNOWN_ARGUMENT"))).toEqual({ status: "CLI_INVALID_ARGUMENTS", code: "M5_CLI_UNKNOWN_ARGUMENT", exitCode: 2 });
   });
 });

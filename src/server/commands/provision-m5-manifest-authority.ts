@@ -7,11 +7,23 @@ import { createRawEligibilityEvidenceRepository } from "@/infrastructure/postgre
 import { createM5ManifestAuthorityRepository } from "@/infrastructure/postgres/m5-manifest-authority-repository";
 
 export async function provisionM5ManifestAuthorityFromFile(configPath: string, mode: M5ManifestAuthorityProvisioningMode): Promise<M5ManifestAuthorityProvisioningResult> {
+  let source: string;
+  try {
+    source = await readFile(configPath, "utf8");
+  } catch {
+    throw new Error("M5_CONFIG_FILE_READ_FAILED");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new Error("M5_CONFIG_JSON_INVALID");
+  }
   let config: ReturnType<typeof parseM5ManifestAuthorityConfig>;
   try {
-    config = parseM5ManifestAuthorityConfig(JSON.parse(await readFile(configPath, "utf8")));
-  } catch (error) {
-    throw new Error(`M5_CONFIG_PARSE:${error instanceof Error ? error.message : "M5_CONFIG_INVALID"}`);
+    config = parseM5ManifestAuthorityConfig(parsed);
+  } catch {
+    throw new Error("M5_CONFIG_INVALID");
   }
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_UNCONFIGURED");

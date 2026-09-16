@@ -24,13 +24,29 @@ export interface M5ManifestAuthorityPreview {
   readonly materialEvidence: readonly Readonly<{ evidenceId: string; fingerprint: string }>[];
 }
 
+export type M5ProvisioningDiagnosticScope = "CONFIG" | "CONTEXT" | "DATASET_PINS" | "AUTHORITY" | "ASSEMBLY";
+
+export interface M5ProvisioningDiagnostic {
+  readonly code: string;
+  readonly scope: M5ProvisioningDiagnosticScope;
+  readonly assemblyTarget?: M5AssemblyDiagnostic["target"];
+  readonly evidenceIds: readonly string[];
+}
+
 export type M5ManifestAuthorityProvisioningResult =
   | { readonly status: "DRY_RUN_COMPLETE"; readonly preview: M5ManifestAuthorityPreview }
-  | { readonly status: "DRY_RUN_INCOMPLETE"; readonly preview: Readonly<Pick<M5ManifestAuthorityPreview, "sourceIdentity" | "asOf" | "canonicalContextId" | "authorityVersion">>; readonly missingRequirements: readonly M5AssemblyDiagnostic[]; readonly ambiguityDiagnostics: readonly M5AssemblyDiagnostic[]; readonly diagnosticEvidenceIds: readonly string[] }
-  | { readonly status: "DRY_RUN_INVALID"; readonly preview?: Readonly<Pick<M5ManifestAuthorityPreview, "sourceIdentity" | "asOf" | "canonicalContextId" | "authorityVersion">>; readonly errors: readonly M5AssemblyDiagnostic[]; readonly diagnosticEvidenceIds: readonly string[] }
+  | { readonly status: "DRY_RUN_INCOMPLETE"; readonly preview: Readonly<Pick<M5ManifestAuthorityPreview, "sourceIdentity" | "asOf" | "canonicalContextId" | "authorityVersion">>; readonly missingRequirements: readonly M5ProvisioningDiagnostic[]; readonly ambiguityDiagnostics: readonly M5ProvisioningDiagnostic[]; readonly diagnosticEvidenceIds: readonly string[] }
+  | { readonly status: "DRY_RUN_INVALID"; readonly preview?: Readonly<Pick<M5ManifestAuthorityPreview, "sourceIdentity" | "asOf" | "canonicalContextId" | "authorityVersion">>; readonly errors: readonly M5ProvisioningDiagnostic[]; readonly diagnosticEvidenceIds: readonly string[] }
   | { readonly status: "APPLIED"; readonly preview: M5ManifestAuthorityPreview };
 
-const invalidDiagnostic = (error: unknown): M5AssemblyDiagnostic => Object.freeze({ code: error instanceof Error ? error.message : "M5_AUTHORITY_INPUT_INVALID", target: "AGE", evidenceIds: Object.freeze([]) });
+const scopeForCode = (code: string): Exclude<M5ProvisioningDiagnosticScope, "ASSEMBLY"> => {
+  if (code.startsWith("PRODUCER_")) return "CONTEXT";
+  if (code.includes("PIN") || code.includes("DATASET")) return "DATASET_PINS";
+  if (code.startsWith("M5_MANIFEST_AUTHORITY_") || code.startsWith("M5_AUTHORITY_")) return "AUTHORITY";
+  return "CONFIG";
+};
+const invalidDiagnostic = (error: unknown): M5ProvisioningDiagnostic => Object.freeze({ code: error instanceof Error ? error.message : "M5_AUTHORITY_INPUT_INVALID", scope: scopeForCode(error instanceof Error ? error.message : "M5_AUTHORITY_INPUT_INVALID"), evidenceIds: Object.freeze([]) });
+const assemblyDiagnostic = (diagnostic: M5AssemblyDiagnostic): M5ProvisioningDiagnostic => Object.freeze({ code: diagnostic.code, scope: "ASSEMBLY", assemblyTarget: diagnostic.target, evidenceIds: Object.freeze([...diagnostic.evidenceIds]) });
 const pinKey = (pin: Pick<M5DatasetPin, "providerId" | "datasetId" | "datasetVersion">): string => `${pin.providerId}\u0000${pin.datasetId}\u0000${pin.datasetVersion}`;
 const contextPreview = (context: CanonicalProducerSourceContext, authorityVersion: string) => ({ sourceIdentity: { candidateId: context.candidateId, assetId: context.assetId, canonicalIdentifier: context.canonicalIdentifier, assetClass: context.assetClass }, asOf: context.asOf, canonicalContextId: canonicalContextIdForProducerContext(context), authorityVersion });
 
@@ -65,8 +81,8 @@ export async function provisionM5ManifestAuthority(config: M5ManifestAuthorityCo
   const base = contextPreview(sourceContext, authorityVersion);
   const rawEvidence = await dependencies.rawEvidenceRepository.readAt({ candidateId: sourceContext.candidateId, assetId: sourceContext.assetId, canonicalIdentifier: sourceContext.canonicalIdentifier, assetClass: sourceContext.assetClass, asOf: sourceContext.asOf, pins: allowedDatasetPins });
   const assembly = assembleM5Evidence({ context: normalizeM5AssemblyContext({ candidateId: sourceContext.candidateId, assetId: sourceContext.assetId, canonicalIdentifier: sourceContext.canonicalIdentifier, assetClass: sourceContext.assetClass, asOf: sourceContext.asOf, allowedPins: allowedDatasetPins }), manifest, compatibility, rawEvidence });
-  if (assembly.status === "INVALID_MANIFEST") return Object.freeze({ status: "DRY_RUN_INVALID", preview: base, errors: assembly.errors, diagnosticEvidenceIds: assembly.diagnosticEvidenceIds });
-  if (assembly.status === "INCOMPLETE") return Object.freeze({ status: "DRY_RUN_INCOMPLETE", preview: base, missingRequirements: assembly.missingRequirements, ambiguityDiagnostics: assembly.ambiguityDiagnostics, diagnosticEvidenceIds: assembly.diagnosticEvidenceIds });
+  if (assembly.status === "INVALID_MANIFEST") return Object.freeze({ status: "DRY_RUN_INVALID", preview: base, errors: assembly.errors.map(assemblyDiagnostic), diagnosticEvidenceIds: assembly.diagnosticEvidenceIds });
+  if (assembly.status === "INCOMPLETE") return Object.freeze({ status: "DRY_RUN_INCOMPLETE", preview: base, missingRequirements: assembly.missingRequirements.map(assemblyDiagnostic), ambiguityDiagnostics: assembly.ambiguityDiagnostics.map(assemblyDiagnostic), diagnosticEvidenceIds: assembly.diagnosticEvidenceIds });
   let record: M5ManifestAuthorityRecord;
   let materialEvidence: readonly { evidenceId: string; fingerprint: string }[];
   try {
