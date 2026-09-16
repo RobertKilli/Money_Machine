@@ -28,6 +28,8 @@ M5 evidence authority follows the same server-only, append-only principle. A `CO
 
 The browser may authenticate, request an account-scoped command with an idempotency key, and display server-provided projections. It must never receive privileged database credentials, use a service role, calculate an authoritative balance/risk result, write a ledger entry, mark an order filled, select an execution price, or create an audit result.
 
+M5 `CONFIGURED` authority records are provisioned by a server-only application service from a strict, version-controlled JSON document. The companion CLI is dry-run by default; `--apply` is accepted only after a complete assembly has proven every explicit manifest reference against visible raw evidence and exact dataset-pin triples. Provisioning never chooses “best” evidence and never invokes canonical M5 production. No production configuration exists yet because the deployed raw M5 tables are empty; external raw-data population remains the next blocker.
+
 Server-only code authorizes the authenticated owner, validates input schemas/scales, resolves the account aggregate, enforces idempotency and state transitions, pins dataset/strategy/risk versions, evaluates risk, writes the ledger/audit data in one database transaction, and emits rebuildable projection work. Node.js is the default runtime for financial commands and jobs. Server Components serve account-scoped reads; small Client Components handle visual interaction only. Server actions are suitable for same-origin forms, while versioned route handlers are reserved for command APIs/integrations. Neither replaces authorization or transactional validation.
 
 ## 3. Database and authorization model
