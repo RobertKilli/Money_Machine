@@ -23,6 +23,7 @@ export interface RawEligibilityEvidenceEnvelope {
   readonly providerId: string;
   readonly datasetId: string;
   readonly datasetVersion: string;
+  readonly mappingRevisionId: string;
   readonly observedAt: string;
   readonly availableAt: string;
   readonly provenance: EligibilityEvidenceProvenance;
@@ -95,14 +96,14 @@ function digest(value: unknown): string { return createHash("sha256").update(JSO
 function frozen<T extends object>(value: T): Readonly<T> { return Object.freeze(value); }
 
 function normalizedEnvelope(input: EnvelopeInput): Omit<RawEligibilityEvidenceEnvelope, "fingerprint"> {
-  for (const [field, value] of Object.entries({ evidenceId: input.evidenceId, candidateId: input.candidateId, assetId: input.assetId, canonicalIdentifier: input.canonicalIdentifier, assetClass: input.assetClass, providerId: input.providerId, datasetId: input.datasetId, datasetVersion: input.datasetVersion })) nonBlank(value, `M5_RAW_${field.toUpperCase()}_INVALID`);
+  for (const [field, value] of Object.entries({ evidenceId: input.evidenceId, candidateId: input.candidateId, assetId: input.assetId, canonicalIdentifier: input.canonicalIdentifier, assetClass: input.assetClass, providerId: input.providerId, datasetId: input.datasetId, datasetVersion: input.datasetVersion, mappingRevisionId: input.mappingRevisionId })) nonBlank(value, `M5_RAW_${field.toUpperCase()}_INVALID`);
   if (input.assetClass.trim() === "UNKNOWN") throw new Error("M5_RAW_ASSET_CLASS_UNKNOWN");
   timestamp(input.observedAt, "M5_RAW_OBSERVED_AT_INVALID");
   timestamp(input.availableAt, "M5_RAW_AVAILABLE_AT_INVALID");
   if (input.observedAt > input.availableAt) throw new Error("M5_RAW_TEMPORAL_ORDER_INVALID");
   nonBlank(input.provenance.sourceType, "M5_RAW_PROVENANCE_INVALID");
   nonBlank(input.provenance.payloadFingerprint, "M5_RAW_PROVENANCE_INVALID");
-  return frozen({ evidenceId: input.evidenceId.trim(), candidateId: input.candidateId.trim(), assetId: input.assetId.trim(), canonicalIdentifier: input.canonicalIdentifier.trim(), assetClass: input.assetClass.trim(), providerId: input.providerId.trim(), datasetId: input.datasetId.trim(), datasetVersion: input.datasetVersion.trim(), observedAt: input.observedAt, availableAt: input.availableAt, provenance: frozen({ sourceType: input.provenance.sourceType.trim(), sourceRecordIds: normalizedValues(input.provenance.sourceRecordIds, "M5_RAW_PROVENANCE_INVALID"), payloadFingerprint: input.provenance.payloadFingerprint.trim() }) });
+  return frozen({ evidenceId: input.evidenceId.trim(), candidateId: input.candidateId.trim(), assetId: input.assetId.trim(), canonicalIdentifier: input.canonicalIdentifier.trim(), assetClass: input.assetClass.trim(), providerId: input.providerId.trim(), datasetId: input.datasetId.trim(), datasetVersion: input.datasetVersion.trim(), mappingRevisionId: input.mappingRevisionId.trim(), observedAt: input.observedAt, availableAt: input.availableAt, provenance: frozen({ sourceType: input.provenance.sourceType.trim(), sourceRecordIds: normalizedValues(input.provenance.sourceRecordIds, "M5_RAW_PROVENANCE_INVALID"), payloadFingerprint: input.provenance.payloadFingerprint.trim() }) });
 }
 
 function normalizedWindow(window: QuantitativeEligibilityEvidenceInput["window"]): Readonly<{ startAt: string; endAt: string }> | undefined {
