@@ -9,7 +9,7 @@ Risk, Execution, or ledger settlement.
 
 ROB-58 adds a standards-based service worker, PushManager registration,
 admin-only subscription/preferences/test endpoints, `web-push` VAPID delivery,
-and the guarded migration `20260912000000_m8_notification_transport.sql`.
+and the guarded migration `20260910200831_m8_notification_transport.sql`.
 Operational tables are RLS-enabled with no browser policies; all reads and
 writes are server mediated. Subscription key material is never returned by
 ordinary APIs or Activity.
