@@ -26,7 +26,7 @@ describe("M8 deterministic notification alerts", () => {
     expect(evaluateHighInterest({ ...input, suspiciousFlags: ["SUSPICIOUS_ACTIVITY"] })).toBeNull();
   });
   it("canonical high-interest source applies temporal visibility before evaluation", () => {
-    const input = { candidateId: "c", assetDisplayIdentifier: "X", assetClass: "CRYPTO", eligibilityStatus: "ELIGIBLE" as const, trendStatus: "COMPLETE" as const, trendDirection: "UP" as const, signedChangeBps: 500n, accelerationStatus: "COMPLETE" as const, accelerationBps: 100n, distinctProviderCount: 2, suspiciousFlags: [], asOf: at, availableAt: at, datasetPins: ["fixture:v1"], evidenceIds: ["m4-1", "m5-1"] };
+    const input = { candidateId: "c", assetDisplayIdentifier: "X", assetClass: "CRYPTO", eligibilityStatus: "ELIGIBLE" as const, trendStatus: "COMPLETE" as const, trendDirection: "UP" as const, signedChangeBps: 500n, accelerationStatus: "COMPLETE" as const, accelerationBps: 100n, distinctProviderCount: 2, suspiciousFlags: [], asOf: at, availableAt: at, m4DatasetPins: ["fixture:v1"], m5DatasetPins: ["fixture-m5:v1"], evidenceIds: ["m4-1", "m5-1"] };
     expect(deriveHighInterestCandidates([input], at)).toHaveLength(1);
     expect(deriveHighInterestCandidates([input], new Date(at.getTime() - 1))).toHaveLength(0);
     expect(deriveHighInterestCandidates([input], at, ["other:v2"])).toHaveLength(0);
