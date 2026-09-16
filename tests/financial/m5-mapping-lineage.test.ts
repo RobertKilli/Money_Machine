@@ -65,8 +65,26 @@ describe("M5 revision-specific asset mapping", () => {
     const value = mapping();
     const repository = readOnly(async () => []);
     expect((await resolveAssetMappingRevision(repository, lookup())).status).toBe("NOT_FOUND");
-    const ambiguous = readOnly(async () => [value, mapping({ validFrom: "2026-02-01T00:00:00.000Z", providerAssetId: "0xdef" })]);
+    const ambiguous = readOnly(async () => [value, mapping({ mappingRevisionVersion: "mapping/v2" })]);
     expect((await resolveAssetMappingRevision(ambiguous, lookup())).status).toBe("AMBIGUOUS");
+  });
+
+  it("rejects every repository lookup-contract violation instead of filtering it", async () => {
+    const cases = [
+      { providerId: "other" },
+      { datasetId: "other" },
+      { datasetVersion: "other" },
+      { providerAssetNamespace: "CHAIN:BASE" },
+      { providerAssetId: "0xdef" },
+    ];
+    for (const change of cases) {
+      await expect(resolveAssetMappingRevision(readOnly(async () => [mapping(change)]), lookup())).rejects.toThrow("M5_MAPPING_REPOSITORY_CONTRACT_VIOLATION");
+    }
+    await expect(resolveAssetMappingRevision(readOnly(async () => [mapping({ validFrom: "2027-01-01T00:00:00.000Z" })]), lookup())).rejects.toThrow("M5_MAPPING_REPOSITORY_CONTRACT_VIOLATION");
+    const bounded = mapping({ validTo: "2026-02-01T00:00:00.000Z" });
+    await expect(resolveAssetMappingRevision(readOnly(async () => [bounded]), lookup({ asOf: "2026-02-01T00:00:00.000Z" }))).rejects.toThrow("M5_MAPPING_REPOSITORY_CONTRACT_VIOLATION");
+    await expect(resolveAssetMappingRevision(readOnly(async () => [bounded]), lookup({ asOf: "2026-03-01T00:00:00.000Z" }))).rejects.toThrow("M5_MAPPING_REPOSITORY_CONTRACT_VIOLATION");
+    await expect(resolveAssetMappingRevision(readOnly(async () => [mapAssetMappingRevisionRow({ ...row(mapping()), fingerprint: "invalid" })]), lookup())).rejects.toThrow("M5_MAPPING_FINGERPRINT_MISMATCH");
   });
 
   it("propagates repository failures and rejects invalid stored fingerprints", async () => {

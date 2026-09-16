@@ -8,11 +8,15 @@ describe("M5 mapping lineage migration", () => {
     expect(sql).toContain("create table public.intelligence_asset_mapping_revisions");
     expect(sql).toContain("mapping_revision_id text primary key");
     expect(sql).toContain("references public.intelligence_providers(provider_id)");
-    expect(sql).toContain("references public.intelligence_datasets(dataset_id)");
+    expect(sql).toContain("intelligence_datasets_mapping_owner_key unique (dataset_id, provider_id, dataset_version)");
+    expect(sql).toContain("intelligence_asset_mapping_dataset_owner_fk");
+    expect(sql).toContain("references public.intelligence_datasets(dataset_id, provider_id, dataset_version)");
+    expect(sql).toContain("intelligence_asset_mapping_identity_key unique");
     expect(sql).toContain("intelligence_asset_mapping_lookup_idx");
     for (const table of ["quantitative", "reference", "venue", "suspicious"]) {
       expect(sql).toContain(`alter table public.eligibility_${table}_evidence add column mapping_revision_id text not null`);
       expect(sql).toContain(`eligibility_${table}_mapping_revision_fk`);
+      expect(sql).toContain(`mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class`);
       expect(sql).toContain(`eligibility_${table}_mapping_revision_idx`);
     }
   });

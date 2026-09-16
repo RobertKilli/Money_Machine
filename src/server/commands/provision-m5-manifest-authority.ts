@@ -5,6 +5,7 @@ import { parseM5ManifestAuthorityConfig } from "@/application/intelligence/m5-ma
 import { provisionM5ManifestAuthority, type M5ManifestAuthorityProvisioningMode, type M5ManifestAuthorityProvisioningResult } from "@/application/intelligence/provision-m5-manifest-authority";
 import { createRawEligibilityEvidenceRepository } from "@/infrastructure/postgres/eligibility-evidence-repository";
 import { createM5ManifestAuthorityRepository } from "@/infrastructure/postgres/m5-manifest-authority-repository";
+import { createAssetMappingRevisionRepository } from "@/infrastructure/postgres/asset-mapping-revision-repository";
 
 export async function provisionM5ManifestAuthorityFromFile(configPath: string, mode: M5ManifestAuthorityProvisioningMode): Promise<M5ManifestAuthorityProvisioningResult> {
   let source: string;
@@ -29,7 +30,7 @@ export async function provisionM5ManifestAuthorityFromFile(configPath: string, m
   if (!databaseUrl) throw new Error("DATABASE_UNCONFIGURED");
   const sql = postgres(databaseUrl, { max: 1, prepare: true, ssl: "require" });
   try {
-    return await provisionM5ManifestAuthority(config, mode, { rawEvidenceRepository: createRawEligibilityEvidenceRepository(sql), authorityRepository: createM5ManifestAuthorityRepository(sql) });
+    return await provisionM5ManifestAuthority(config, mode, { rawEvidenceRepository: createRawEligibilityEvidenceRepository(sql, createAssetMappingRevisionRepository(sql)), authorityRepository: createM5ManifestAuthorityRepository(sql) });
   } finally {
     await sql.end({ timeout: 5 });
   }

@@ -13,7 +13,7 @@ create table public.intelligence_asset_mapping_revisions (
   mapping_revision_id text primary key,
   mapping_revision_version text not null,
   provider_id text not null references public.intelligence_providers(provider_id) on delete restrict,
-  dataset_id text not null references public.intelligence_datasets(dataset_id) on delete restrict,
+  dataset_id text not null,
   dataset_version text not null,
   provider_asset_namespace text not null,
   provider_asset_id text not null,
@@ -46,6 +46,19 @@ create table public.intelligence_asset_mapping_revisions (
   check (length(trim(fingerprint)) > 0)
 );
 
+alter table public.intelligence_datasets
+  add constraint intelligence_datasets_mapping_owner_key unique (dataset_id, provider_id, dataset_version);
+
+alter table public.intelligence_asset_mapping_revisions
+  add constraint intelligence_asset_mapping_dataset_owner_fk
+  foreign key (dataset_id, provider_id, dataset_version)
+  references public.intelligence_datasets(dataset_id, provider_id, dataset_version)
+  on delete restrict;
+
+alter table public.intelligence_asset_mapping_revisions
+  add constraint intelligence_asset_mapping_identity_key unique
+  (mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class);
+
 create index intelligence_asset_mapping_lookup_idx
   on public.intelligence_asset_mapping_revisions
   (provider_id, dataset_id, dataset_version, provider_asset_namespace, provider_asset_id, valid_from, valid_to, mapping_revision_id);
@@ -57,21 +70,25 @@ alter table public.eligibility_suspicious_evidence add column mapping_revision_i
 
 alter table public.eligibility_quantitative_evidence
   add constraint eligibility_quantitative_mapping_revision_nonblank check (length(trim(mapping_revision_id)) > 0),
-  add constraint eligibility_quantitative_mapping_revision_fk foreign key (mapping_revision_id) references public.intelligence_asset_mapping_revisions(mapping_revision_id) on delete restrict;
+  add constraint eligibility_quantitative_mapping_revision_fk foreign key (mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class)
+    references public.intelligence_asset_mapping_revisions(mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class) on delete restrict;
 alter table public.eligibility_reference_evidence
   add constraint eligibility_reference_mapping_revision_nonblank check (length(trim(mapping_revision_id)) > 0),
-  add constraint eligibility_reference_mapping_revision_fk foreign key (mapping_revision_id) references public.intelligence_asset_mapping_revisions(mapping_revision_id) on delete restrict;
+  add constraint eligibility_reference_mapping_revision_fk foreign key (mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class)
+    references public.intelligence_asset_mapping_revisions(mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class) on delete restrict;
 alter table public.eligibility_venue_evidence
   add constraint eligibility_venue_mapping_revision_nonblank check (length(trim(mapping_revision_id)) > 0),
-  add constraint eligibility_venue_mapping_revision_fk foreign key (mapping_revision_id) references public.intelligence_asset_mapping_revisions(mapping_revision_id) on delete restrict;
+  add constraint eligibility_venue_mapping_revision_fk foreign key (mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class)
+    references public.intelligence_asset_mapping_revisions(mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class) on delete restrict;
 alter table public.eligibility_suspicious_evidence
   add constraint eligibility_suspicious_mapping_revision_nonblank check (length(trim(mapping_revision_id)) > 0),
-  add constraint eligibility_suspicious_mapping_revision_fk foreign key (mapping_revision_id) references public.intelligence_asset_mapping_revisions(mapping_revision_id) on delete restrict;
+  add constraint eligibility_suspicious_mapping_revision_fk foreign key (mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class)
+    references public.intelligence_asset_mapping_revisions(mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class) on delete restrict;
 
-create index eligibility_quantitative_mapping_revision_idx on public.eligibility_quantitative_evidence(mapping_revision_id);
-create index eligibility_reference_mapping_revision_idx on public.eligibility_reference_evidence(mapping_revision_id);
-create index eligibility_venue_mapping_revision_idx on public.eligibility_venue_evidence(mapping_revision_id);
-create index eligibility_suspicious_mapping_revision_idx on public.eligibility_suspicious_evidence(mapping_revision_id);
+create index eligibility_quantitative_mapping_revision_idx on public.eligibility_quantitative_evidence(mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class);
+create index eligibility_reference_mapping_revision_idx on public.eligibility_reference_evidence(mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class);
+create index eligibility_venue_mapping_revision_idx on public.eligibility_venue_evidence(mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class);
+create index eligibility_suspicious_mapping_revision_idx on public.eligibility_suspicious_evidence(mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class);
 
 alter table public.intelligence_asset_mapping_revisions enable row level security;
 revoke all on public.intelligence_asset_mapping_revisions from anon, authenticated;
