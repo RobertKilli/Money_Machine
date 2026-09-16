@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { assertRawEligibilityEvidence, createAgeReferenceEligibilityEvidence, createContractVerificationEligibilityEvidence, createQuantitativeEligibilityEvidence, createSuspiciousEligibilityEvidence, createVenueEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
 
-const base = (overrides: Record<string, unknown> = {}) => ({ evidenceId: "evidence-1", candidateId: "candidate-1", assetId: "asset-1", canonicalIdentifier: "asset:one", assetClass: "CRYPTO", providerId: "provider-1", datasetId: "dataset-1", datasetVersion: "v1", observedAt: "2026-09-13T10:00:00.000Z", availableAt: "2026-09-13T10:05:00.000Z", provenance: { sourceType: "PROVIDER", sourceRecordIds: ["record-b", "record-a"], payloadFingerprint: "payload-1" }, ...overrides });
+const base = (overrides: Record<string, unknown> = {}) => ({ evidenceId: "evidence-1", candidateId: "candidate-1", assetId: "asset-1", canonicalIdentifier: "asset:one", assetClass: "CRYPTO", providerId: "provider-1", datasetId: "dataset-1", datasetVersion: "v1", mappingRevisionId: "mapping-1", observedAt: "2026-09-13T10:00:00.000Z", availableAt: "2026-09-13T10:05:00.000Z", provenance: { sourceType: "PROVIDER", sourceRecordIds: ["record-b", "record-a"], payloadFingerprint: "payload-1" }, ...overrides });
 const quantitative = (metricKind: "LIQUIDITY" | "VOLUME" | "MARKET_CAP" | "TOP10_CONCENTRATION" | "SINGLE_CONCENTRATION" | "VOLATILITY" | "HISTORY_SPAN", overrides: Record<string, unknown> = {}) => createQuantitativeEligibilityEvidence(base({ metricKind, valueAtoms: 1000n, scale: 0, unit: "MINOR", semanticsVersion: "metric/v1", currencyCode: "USD", window: { startAt: "2026-09-12T10:00:00.000Z", endAt: "2026-09-13T10:00:00.000Z" }, ...overrides }) as never);
 
 describe("M5 raw eligibility evidence", () => {
@@ -28,7 +28,11 @@ describe("M5 raw eligibility evidence", () => {
     expect(a.fingerprint).toBe(b.fingerprint); expect(a.provenance.sourceRecordIds).toEqual(["record-a", "record-b"]); expect(Object.isFrozen(a)).toBe(true); expect(Object.isFrozen(a.provenance.sourceRecordIds)).toBe(true); assertRawEligibilityEvidence(a);
   });
   it("changes fingerprints for material value, provider, dataset, and timestamp changes", () => {
-    const a = quantitative("LIQUIDITY"); for (const change of [{ valueAtoms: 1001n }, { providerId: "provider-2" }, { datasetVersion: "v2" }, { availableAt: "2026-09-13T10:06:00.000Z" }]) expect(quantitative("LIQUIDITY", change).fingerprint).not.toBe(a.fingerprint);
+    const a = quantitative("LIQUIDITY"); for (const change of [{ valueAtoms: 1001n }, { providerId: "provider-2" }, { datasetVersion: "v2" }, { mappingRevisionId: "mapping-2" }, { availableAt: "2026-09-13T10:06:00.000Z" }]) expect(quantitative("LIQUIDITY", change).fingerprint).not.toBe(a.fingerprint);
+  });
+
+  it("requires an explicit mapping revision on every raw evidence envelope", () => {
+    expect(() => quantitative("LIQUIDITY", { mappingRevisionId: " " })).toThrow("M5_RAW_MAPPINGREVISIONID_INVALID");
   });
   it("fails closed for invalid identity, timestamps, numeric representations, and ranges", () => {
     expect(() => quantitative("LIQUIDITY", { assetClass: " UNKNOWN " })).toThrow("M5_RAW_ASSET_CLASS_UNKNOWN"); expect(() => quantitative("LIQUIDITY", { candidateId: " " })).toThrow("M5_RAW_CANDIDATEID_INVALID"); expect(() => quantitative("LIQUIDITY", { observedAt: "2026-09-13T10:00:00Z" })).toThrow("M5_RAW_OBSERVED_AT_INVALID");
