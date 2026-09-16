@@ -22,6 +22,8 @@ flowchart LR
 
 The authoritative path is strictly `Strategy → Risk → Execution → Ledger`. Strategy code is pure and proposes intent; it cannot import repositories that mutate money. Risk may veto/resize and is persisted before execution. Execution accepts only a validated risk-approved order and posts its trade settlement and journal atomically. Projections, analytics, and dashboards are rebuildable consumers, never authorities.
 
+M5 evidence authority follows the same server-only, append-only principle. A `CONFIGURED` manifest-authority revision selects the exact raw evidence IDs/fingerprints, compatibility configuration, and dataset-pin triples for one canonical context and `asOf`. The producer consumes that record verbatim and never searches for or heuristically selects “best” evidence. Authority records are immutable and versioned; deterministic IDs/fingerprints make same-record replay idempotent while conflicting material content fails closed. Creating these configured records remains a separate provisioning/operations responsibility until an explicitly authorized source exists; external evidence population and scheduling are not part of this slice.
+
 ## 2. Server and browser boundary
 
 The browser may authenticate, request an account-scoped command with an idempotency key, and display server-provided projections. It must never receive privileged database credentials, use a service role, calculate an authoritative balance/risk result, write a ledger entry, mark an order filled, select an execution price, or create an audit result.
