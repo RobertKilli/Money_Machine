@@ -2,7 +2,11 @@
 -- a processing timestamp. Keep the original migration immutable and correct
 -- its temporal direction forward-only.
 alter table public.canonical_m4_analysis_snapshots
+  drop constraint if exists canonical_m4_analysis_snapshots_check;
+alter table public.canonical_m4_analysis_snapshots
   drop constraint if exists canonical_m4_analysis_snapshots_available_at_as_of_check;
+alter table public.canonical_m5_eligibility_evaluations
+  drop constraint if exists canonical_m5_eligibility_evaluations_check;
 alter table public.canonical_m5_eligibility_evaluations
   drop constraint if exists canonical_m5_eligibility_evaluations_available_at_as_of_check;
 

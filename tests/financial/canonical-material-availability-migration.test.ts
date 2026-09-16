@@ -5,9 +5,16 @@ const migration = readFileSync(
   "supabase/migrations/20260914000100_canonical_material_availability.sql",
   "utf8",
 );
+const canonicalBaseMigration = readFileSync(
+  "supabase/migrations/20260913153948_m4_m5_canonical_evidence.sql",
+  "utf8",
+);
 
 describe("canonical material availability migration", () => {
   it("replaces the old temporal direction for M4 and M5", () => {
+    expect(canonicalBaseMigration).toMatch(/check \(available_at >= as_of\)/g);
+    expect(migration).toContain("drop constraint if exists canonical_m4_analysis_snapshots_check");
+    expect(migration).toContain("drop constraint if exists canonical_m5_eligibility_evaluations_check");
     expect(migration).toContain("drop constraint if exists canonical_m4_analysis_snapshots_available_at_as_of_check");
     expect(migration).toContain("drop constraint if exists canonical_m5_eligibility_evaluations_available_at_as_of_check");
     expect(migration).toContain("canonical_m4_available_at_not_after_as_of");
