@@ -41,7 +41,9 @@ source observations, and a `RETRIEVAL_OBSERVED` availability claim pins the exac
 observation timestamp used for downstream temporal visibility. No ingestion path
 selects a “best” record, retains full provider payloads by default, or creates
 mapping revisions, raw M5 evidence, authority records, or canonical M5 output.
-Slice 1 is pure domain/application code with strict fixture parsing and in-memory
+Slice 1 is pure domain/application code with strict fixture parsing from a trusted
+request/attempt context; temporal quality is derived by policy rather than accepted
+from fixture input, and in-memory
 repositories; PostgreSQL persistence and normalized downstream lineage belong to
 Slice 2. M3 privilege hardening is mandatory before any real provider-data import.
 

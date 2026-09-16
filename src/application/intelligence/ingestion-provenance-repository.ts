@@ -1,11 +1,13 @@
 import {
   assertAvailabilityClaim,
+  assertLifecycleEvent,
   assertIngestionAttempt,
   assertIngestionRequest,
   assertSourceArtifact,
   assertSourceEnvelope,
   assertSourceObservation,
   reduceIngestionLifecycle,
+  createRetrievalAvailabilityClaim,
   type AvailabilityClaim,
   type IngestionAttempt,
   type IngestionRequest,
@@ -96,8 +98,15 @@ export function createInMemoryIngestionProvenanceRepositories(): InMemoryIngesti
   };
   const eventRepository: IngestionEventRepository = {
     save: record => {
+      assertLifecycleEvent(record);
       const attempt = attempts.get(record.ingestionAttemptId);
       if (!attempt) throw new Error("M5_INGESTION_ATTEMPT_NOT_FOUND");
+      if (record.eventType === "SOURCE_OBSERVED") {
+        const observationId = record.payload.sourceObservationId;
+        if (typeof observationId !== "string") throw new Error("M5_INGESTION_SOURCE_OBSERVED_PAYLOAD_INVALID");
+        const observation = observations.get(observationId);
+        if (!observation || observation.ingestionAttemptId !== record.ingestionAttemptId) throw new Error("M5_INGESTION_EVENT_OBSERVATION_MISMATCH");
+      }
       const existing = events.get(record.lifecycleEventId);
       if (existing) {
         if (existing.eventFingerprint !== record.eventFingerprint) throw new Error("M5_INGESTION_LIFECYCLE_EVENT_CONFLICT");
@@ -115,16 +124,16 @@ export function createInMemoryIngestionProvenanceRepositories(): InMemoryIngesti
     readById: id => artifacts.get(id),
   };
   const envelopeRepository: SourceEnvelopeRepository = {
-    save: record => { assertSourceEnvelope(record); if (!artifacts.has(record.sourceArtifactId)) throw new Error("M5_SOURCE_ARTIFACT_NOT_FOUND"); return idempotentSave(envelopes, record.sourceEnvelopeId, record, "sourceEnvelopeFingerprint", "M5_SOURCE_ENVELOPE_CONFLICT"); },
+    save: record => { assertSourceEnvelope(record); const artifact = artifacts.get(record.sourceArtifactId); if (!artifact) throw new Error("M5_SOURCE_ARTIFACT_NOT_FOUND"); if (artifact.payloadFingerprint !== record.payloadFingerprint) throw new Error("M5_SOURCE_ENVELOPE_PAYLOAD_MISMATCH"); return idempotentSave(envelopes, record.sourceEnvelopeId, record, "sourceEnvelopeFingerprint", "M5_SOURCE_ENVELOPE_CONFLICT"); },
     readById: id => envelopes.get(id),
   };
   const observationRepository: SourceObservationRepository = {
-    save: record => { assertSourceObservation(record); if (!attempts.has(record.ingestionAttemptId)) throw new Error("M5_INGESTION_ATTEMPT_NOT_FOUND"); if (!artifacts.has(record.sourceArtifactId)) throw new Error("M5_SOURCE_ARTIFACT_NOT_FOUND"); return idempotentSave(observations, record.sourceObservationId, record, "observationFingerprint", "M5_SOURCE_OBSERVATION_CONFLICT"); },
+    save: record => { assertSourceObservation(record); const attempt = attempts.get(record.ingestionAttemptId); if (!attempt) throw new Error("M5_INGESTION_ATTEMPT_NOT_FOUND"); const request = requests.get(attempt.ingestionRequestId); if (!request) throw new Error("M5_INGESTION_REQUEST_NOT_FOUND"); const artifact = artifacts.get(record.sourceArtifactId); if (!artifact) throw new Error("M5_SOURCE_ARTIFACT_NOT_FOUND"); if (artifact.providerId !== request.providerId || artifact.datasetId !== request.datasetId || artifact.datasetVersion !== request.datasetVersion) throw new Error("M5_INGESTION_OBSERVATION_REQUEST_MISMATCH"); return idempotentSave(observations, record.sourceObservationId, record, "observationFingerprint", "M5_SOURCE_OBSERVATION_CONFLICT"); },
     readById: id => observations.get(id),
     readByArtifact: artifactId => Object.freeze([...observations.values()].filter(value => value.sourceArtifactId === artifactId).sort((a, b) => a.retrievedAt.localeCompare(b.retrievedAt) || a.sourceObservationId.localeCompare(b.sourceObservationId))),
   };
   const claimRepository: AvailabilityClaimRepository = {
-    save: record => { assertAvailabilityClaim(record); if (!envelopes.has(record.sourceEnvelopeId)) throw new Error("M5_SOURCE_ENVELOPE_NOT_FOUND"); const observation = observations.get(record.sourceObservationId); if (!observation) throw new Error("M5_SOURCE_OBSERVATION_NOT_FOUND"); const envelope = envelopes.get(record.sourceEnvelopeId)!; if (envelope.sourceArtifactId !== observation.sourceArtifactId) throw new Error("M5_INGESTION_AVAILABILITY_ARTIFACT_MISMATCH"); return idempotentSave(availabilityClaims, record.availabilityClaimId, record, "claimFingerprint", "M5_AVAILABILITY_CLAIM_CONFLICT"); },
+    save: record => { assertAvailabilityClaim(record); const envelope = envelopes.get(record.sourceEnvelopeId); if (!envelope) throw new Error("M5_SOURCE_ENVELOPE_NOT_FOUND"); const observation = observations.get(record.sourceObservationId); if (!observation) throw new Error("M5_SOURCE_OBSERVATION_NOT_FOUND"); if (envelope.providerPublishedAt !== undefined && envelope.providerPublishedAt > observation.retrievedAt) throw new Error("M5_INGESTION_TEMPORAL_QUALITY_UNRESOLVED"); const expected = createRetrievalAvailabilityClaim({ envelope, observation, recordedAt: record.recordedAt }); if (expected.availabilityClaimId !== record.availabilityClaimId || expected.claimFingerprint !== record.claimFingerprint || expected.effectiveAvailableAt !== record.effectiveAvailableAt) throw new Error("M5_INGESTION_AVAILABILITY_CLAIM_INVALID"); return idempotentSave(availabilityClaims, record.availabilityClaimId, record, "claimFingerprint", "M5_AVAILABILITY_CLAIM_CONFLICT"); },
     readById: id => availabilityClaims.get(id),
   };
   return Object.freeze({ requests: requestRepository, attempts: attemptRepository, events: eventRepository, artifacts: artifactRepository, envelopes: envelopeRepository, observations: observationRepository, availabilityClaims: claimRepository });

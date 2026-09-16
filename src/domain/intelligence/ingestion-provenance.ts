@@ -165,7 +165,7 @@ function integer(value: unknown, code: string, minimum = 0): number {
 function jsonValue(value: unknown, code: string): JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (Array.isArray(value)) return value.map(item => jsonValue(item, code));
+  if (Array.isArray(value)) return Object.freeze(value.map(item => jsonValue(item, code))) as JsonValue[];
   if (value && typeof value === "object") {
     return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => {
       if (SECRET_KEYS.test(key)) throw new Error("M5_INGESTION_SECRET_METADATA_REJECTED");
@@ -241,7 +241,8 @@ export function ingestionRequestIdFor(idempotencyKey: string): string {
   return `m5-ingestion-request:${digest({ version: INGESTION_REQUEST_CONTRACT_VERSION, idempotencyKey: nonBlank(idempotencyKey, "M5_INGESTION_IDEMPOTENCY_KEY_INVALID") })}`;
 }
 
-export function ingestionRequestFingerprint(input: Omit<IngestionRequest, "ingestionRequestId" | "requestFingerprint" | "requestedAt">): string {
+type IngestionRequestMaterial = Pick<IngestionRequest, "contractVersion" | "idempotencyKey" | "providerId" | "datasetId" | "datasetVersion" | "requestScope" | "adapterContractVersion" | "parserContractVersion">;
+export function ingestionRequestFingerprint(input: IngestionRequestMaterial): string {
   return fingerprint({ version: INGESTION_REQUEST_CONTRACT_VERSION, ...input });
 }
 
@@ -255,9 +256,9 @@ export function createIngestionRequest(input: Omit<IngestionRequest, "ingestionR
   const adapterContractVersion = nonBlank(input.adapterContractVersion, "M5_INGESTION_ADAPTER_VERSION_INVALID");
   const parserContractVersion = nonBlank(input.parserContractVersion, "M5_INGESTION_PARSER_VERSION_INVALID");
   const provenance = safeProvenance(input.provenance);
-  const material = { contractVersion: INGESTION_REQUEST_CONTRACT_VERSION, idempotencyKey, providerId, datasetId, datasetVersion, requestScope, adapterContractVersion, parserContractVersion, provenance };
+  const material = { contractVersion: INGESTION_REQUEST_CONTRACT_VERSION, idempotencyKey, providerId, datasetId, datasetVersion, requestScope, adapterContractVersion, parserContractVersion } as const;
   const requestFingerprint = ingestionRequestFingerprint(material);
-  return Object.freeze({ ...material, ingestionRequestId: ingestionRequestIdFor(idempotencyKey), requestFingerprint, requestedAt: timestamp(input.requestedAt, "M5_INGESTION_REQUESTED_AT_INVALID") });
+  return Object.freeze({ ...material, provenance, ingestionRequestId: ingestionRequestIdFor(idempotencyKey), requestFingerprint, requestedAt: timestamp(input.requestedAt, "M5_INGESTION_REQUESTED_AT_INVALID") });
 }
 
 export function assertIngestionRequest(record: IngestionRequest): void {
@@ -287,7 +288,15 @@ export function assertIngestionAttempt(record: IngestionAttempt): void {
   if (validated.ingestionAttemptId !== record.ingestionAttemptId || validated.attemptFingerprint !== record.attemptFingerprint) throw new Error("M5_INGESTION_ATTEMPT_FINGERPRINT_MISMATCH");
 }
 
-function lifecyclePayload(value: unknown): JsonObject { return object(value, "M5_INGESTION_EVENT_PAYLOAD_INVALID"); }
+function lifecyclePayload(eventType: LifecycleEventType, value: unknown): JsonObject {
+  const payload = object(value, "M5_INGESTION_EVENT_PAYLOAD_INVALID");
+  const keys = Object.keys(payload).sort();
+  if (eventType === "STARTED" && keys.length !== 0) throw new Error("M5_INGESTION_STARTED_PAYLOAD_INVALID");
+  if (eventType === "SOURCE_OBSERVED") {
+    if (keys.length !== 1 || keys[0] !== "sourceObservationId" || typeof payload.sourceObservationId !== "string" || !payload.sourceObservationId.trim()) throw new Error("M5_INGESTION_SOURCE_OBSERVED_PAYLOAD_INVALID");
+  }
+  return payload;
+}
 
 export function lifecycleEventIdFor(attemptId: string, sequence: number): string {
   return `m5-ingestion-event:${digest({ version: INGESTION_EVENT_CONTRACT_VERSION, ingestionAttemptId: nonBlank(attemptId, "M5_INGESTION_ATTEMPT_ID_INVALID"), sequence: integer(sequence, "M5_INGESTION_SEQUENCE_INVALID", 1) })}`;
@@ -299,9 +308,14 @@ export function createLifecycleEvent(input: Omit<LifecycleEvent, "lifecycleEvent
   if (input.contractVersion !== undefined && input.contractVersion !== INGESTION_EVENT_CONTRACT_VERSION) throw new Error("M5_INGESTION_EVENT_CONTRACT_INVALID");
   const sequence = integer(input.sequence, "M5_INGESTION_SEQUENCE_INVALID", 1);
   if (!new Set<LifecycleEventType>(["STARTED", "SOURCE_OBSERVED", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED"]).has(input.eventType)) throw new Error("M5_INGESTION_EVENT_TYPE_INVALID");
-  const payload = lifecyclePayload(input.payload);
+  const payload = lifecyclePayload(input.eventType, input.payload);
   const material = { contractVersion: INGESTION_EVENT_CONTRACT_VERSION, ingestionAttemptId: nonBlank(input.ingestionAttemptId, "M5_INGESTION_ATTEMPT_ID_INVALID"), sequence, eventType: input.eventType, payload } as const;
   return Object.freeze({ ...material, lifecycleEventId: lifecycleEventIdFor(material.ingestionAttemptId, sequence), eventFingerprint: lifecycleEventFingerprint(material), recordedAt: timestamp(input.recordedAt, "M5_INGESTION_RECORDED_AT_INVALID") });
+}
+
+export function assertLifecycleEvent(record: LifecycleEvent): void {
+  const validated = createLifecycleEvent(record);
+  if (validated.lifecycleEventId !== record.lifecycleEventId || validated.eventFingerprint !== record.eventFingerprint) throw new Error("M5_INGESTION_LIFECYCLE_EVENT_FINGERPRINT_MISMATCH");
 }
 
 export function reduceIngestionLifecycle(events: readonly LifecycleEvent[]): LifecycleState {
@@ -309,6 +323,8 @@ export function reduceIngestionLifecycle(events: readonly LifecycleEvent[]): Lif
   const byId = new Map<string, LifecycleEvent>();
   const bySequence = new Map<number, LifecycleEvent>();
   for (const event of events) {
+    assertLifecycleEvent(event);
+    if (state.events.length > 0 && event.ingestionAttemptId !== state.events[0].ingestionAttemptId) throw new Error("M5_INGESTION_LIFECYCLE_ATTEMPT_MISMATCH");
     const existingId = byId.get(event.lifecycleEventId);
     if (existingId) {
       if (existingId.eventFingerprint !== event.eventFingerprint) throw new Error("M5_INGESTION_LIFECYCLE_EVENT_CONFLICT");
@@ -335,11 +351,13 @@ export function reduceIngestionLifecycle(events: readonly LifecycleEvent[]): Lif
 
 function artifactMaterial(input: Pick<SourceArtifact, "providerId" | "datasetId" | "datasetVersion" | "providerSourceNamespace" | "providerExternalRecordId" | "providerRevision">): JsonObject { return { version: SOURCE_ARTIFACT_CONTRACT_VERSION, providerId: input.providerId, datasetId: input.datasetId, datasetVersion: input.datasetVersion, providerSourceNamespace: input.providerSourceNamespace, providerExternalRecordId: input.providerExternalRecordId, providerRevision: input.providerRevision ?? null }; }
 export function sourceArtifactIdFor(input: Pick<SourceArtifact, "providerId" | "datasetId" | "datasetVersion" | "providerSourceNamespace" | "providerExternalRecordId" | "providerRevision">): string { return `m5-source-artifact:${digest(artifactMaterial(input))}`; }
-export function sourceArtifactFingerprint(input: Pick<SourceArtifact, "providerId" | "datasetId" | "datasetVersion" | "providerSourceNamespace" | "providerExternalRecordId" | "providerRevision" | "payloadFingerprint">): string { return fingerprint({ ...artifactMaterial(input), payloadFingerprint: nonBlank(input.payloadFingerprint, "M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID") }); }
+export function sourceArtifactFingerprint(input: Pick<SourceArtifact, "providerId" | "datasetId" | "datasetVersion" | "providerSourceNamespace" | "providerExternalRecordId" | "providerRevision" | "payloadFingerprint">): string { const payloadFingerprint = nonBlank(input.payloadFingerprint, "M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID"); if (!HASH.test(payloadFingerprint)) throw new Error("M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID"); return fingerprint({ ...artifactMaterial(input), payloadFingerprint }); }
 
 export function createSourceArtifact(input: Omit<SourceArtifact, "sourceArtifactId" | "contractVersion" | "sourceArtifactFingerprint"> & { readonly contractVersion?: typeof SOURCE_ARTIFACT_CONTRACT_VERSION }): SourceArtifact {
   if (input.contractVersion !== undefined && input.contractVersion !== SOURCE_ARTIFACT_CONTRACT_VERSION) throw new Error("M5_SOURCE_ARTIFACT_CONTRACT_INVALID");
-  const material = { providerId: nonBlank(input.providerId, "M5_INGESTION_PROVIDER_INVALID"), datasetId: nonBlank(input.datasetId, "M5_INGESTION_DATASET_INVALID"), datasetVersion: nonBlank(input.datasetVersion, "M5_INGESTION_DATASET_VERSION_INVALID"), providerSourceNamespace: nonBlank(input.providerSourceNamespace, "M5_INGESTION_SOURCE_NAMESPACE_INVALID"), providerExternalRecordId: nonBlank(input.providerExternalRecordId, "M5_INGESTION_EXTERNAL_RECORD_ID_INVALID"), ...(input.providerRevision === undefined ? {} : { providerRevision: nonBlank(input.providerRevision, "M5_INGESTION_PROVIDER_REVISION_INVALID") }), payloadFingerprint: nonBlank(input.payloadFingerprint, "M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID") } as const;
+  const payloadFingerprint = nonBlank(input.payloadFingerprint, "M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID");
+  if (!HASH.test(payloadFingerprint)) throw new Error("M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID");
+  const material = { providerId: nonBlank(input.providerId, "M5_INGESTION_PROVIDER_INVALID"), datasetId: nonBlank(input.datasetId, "M5_INGESTION_DATASET_INVALID"), datasetVersion: nonBlank(input.datasetVersion, "M5_INGESTION_DATASET_VERSION_INVALID"), providerSourceNamespace: nonBlank(input.providerSourceNamespace, "M5_INGESTION_SOURCE_NAMESPACE_INVALID"), providerExternalRecordId: nonBlank(input.providerExternalRecordId, "M5_INGESTION_EXTERNAL_RECORD_ID_INVALID"), ...(input.providerRevision === undefined ? {} : { providerRevision: nonBlank(input.providerRevision, "M5_INGESTION_PROVIDER_REVISION_INVALID") }), payloadFingerprint } as const;
   return Object.freeze({ ...material, sourceArtifactId: sourceArtifactIdFor(material), contractVersion: SOURCE_ARTIFACT_CONTRACT_VERSION, sourceArtifactFingerprint: sourceArtifactFingerprint(material), recordedAt: timestamp(input.recordedAt, "M5_INGESTION_RECORDED_AT_INVALID") });
 }
 
@@ -347,7 +365,7 @@ export function assertSourceArtifact(record: SourceArtifact): void { const valid
 
 function envelopeMaterial(input: Pick<SourceEnvelope, "sourceArtifactId" | "parserContractVersion" | "envelopeSchemaVersion" | "normalizedEnvelope" | "selectedAuditableFields" | "payloadFingerprint" | "providerPublishedAt" | "observedAt" | "temporalQualityStatus" | "temporalDiagnosticCodes">): unknown { return { version: SOURCE_ENVELOPE_CONTRACT_VERSION, sourceArtifactId: input.sourceArtifactId, parserContractVersion: input.parserContractVersion, envelopeSchemaVersion: input.envelopeSchemaVersion, normalizedEnvelope: input.normalizedEnvelope, selectedAuditableFields: input.selectedAuditableFields, payloadFingerprint: input.payloadFingerprint, ...(input.providerPublishedAt === undefined ? {} : { providerPublishedAt: input.providerPublishedAt }), observedAt: input.observedAt, temporalQualityStatus: input.temporalQualityStatus, temporalDiagnosticCodes: [...input.temporalDiagnosticCodes].sort() }; }
 export function sourceEnvelopeIdFor(input: Pick<SourceEnvelope, "sourceArtifactId" | "parserContractVersion" | "envelopeSchemaVersion">): string { return `m5-source-envelope:${digest({ version: SOURCE_ENVELOPE_CONTRACT_VERSION, sourceArtifactId: input.sourceArtifactId, parserContractVersion: nonBlank(input.parserContractVersion, "M5_INGESTION_PARSER_VERSION_INVALID"), envelopeSchemaVersion: nonBlank(input.envelopeSchemaVersion, "M5_INGESTION_ENVELOPE_SCHEMA_INVALID") })}`; }
-export function sourceEnvelopeFingerprint(input: Pick<SourceEnvelope, "sourceArtifactId" | "parserContractVersion" | "envelopeSchemaVersion" | "normalizedEnvelope" | "selectedAuditableFields" | "payloadFingerprint" | "providerPublishedAt" | "observedAt" | "temporalQualityStatus" | "temporalDiagnosticCodes">): string { return fingerprint(envelopeMaterial(input)); }
+export function sourceEnvelopeFingerprint(input: Pick<SourceEnvelope, "sourceArtifactId" | "parserContractVersion" | "envelopeSchemaVersion" | "normalizedEnvelope" | "selectedAuditableFields" | "payloadFingerprint" | "providerPublishedAt" | "observedAt" | "temporalQualityStatus" | "temporalDiagnosticCodes">): string { const payloadFingerprint = nonBlank(input.payloadFingerprint, "M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID"); if (!HASH.test(payloadFingerprint)) throw new Error("M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID"); return fingerprint(envelopeMaterial({ ...input, payloadFingerprint })); }
 
 export function createSourceEnvelope(input: Omit<SourceEnvelope, "sourceEnvelopeId" | "contractVersion" | "sourceEnvelopeFingerprint"> & { readonly contractVersion?: typeof SOURCE_ENVELOPE_CONTRACT_VERSION }): SourceEnvelope {
   if (input.contractVersion !== undefined && input.contractVersion !== SOURCE_ENVELOPE_CONTRACT_VERSION) throw new Error("M5_SOURCE_ENVELOPE_CONTRACT_INVALID");
@@ -357,7 +375,9 @@ export function createSourceEnvelope(input: Omit<SourceEnvelope, "sourceEnvelope
   const temporalDiagnosticCodes = Object.freeze([...new Set(input.temporalDiagnosticCodes.map(code => nonBlank(code, "M5_INGESTION_TEMPORAL_DIAGNOSTIC_INVALID", 128)))].sort());
   if (input.temporalQualityStatus === "QUARANTINED" && temporalDiagnosticCodes.length === 0) throw new Error("M5_INGESTION_TEMPORAL_DIAGNOSTIC_INVALID");
   if (input.temporalQualityStatus === "RESOLVED" && temporalDiagnosticCodes.length > 0) throw new Error("M5_INGESTION_TEMPORAL_STATUS_INVALID");
-  const material = { sourceArtifactId: nonBlank(input.sourceArtifactId, "M5_INGESTION_SOURCE_ARTIFACT_ID_INVALID"), parserContractVersion: nonBlank(input.parserContractVersion, "M5_INGESTION_PARSER_VERSION_INVALID"), envelopeSchemaVersion: nonBlank(input.envelopeSchemaVersion, "M5_INGESTION_ENVELOPE_SCHEMA_INVALID"), normalizedEnvelope: object(input.normalizedEnvelope, "M5_INGESTION_ENVELOPE_INVALID"), selectedAuditableFields: object(input.selectedAuditableFields, "M5_INGESTION_AUDIT_FIELDS_INVALID"), payloadFingerprint: nonBlank(input.payloadFingerprint, "M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID"), ...(providerPublishedAt === undefined ? {} : { providerPublishedAt }), observedAt, temporalQualityStatus: input.temporalQualityStatus, temporalDiagnosticCodes } as const;
+  const payloadFingerprint = nonBlank(input.payloadFingerprint, "M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID");
+  if (!HASH.test(payloadFingerprint)) throw new Error("M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID");
+  const material = { sourceArtifactId: nonBlank(input.sourceArtifactId, "M5_INGESTION_SOURCE_ARTIFACT_ID_INVALID"), parserContractVersion: nonBlank(input.parserContractVersion, "M5_INGESTION_PARSER_VERSION_INVALID"), envelopeSchemaVersion: nonBlank(input.envelopeSchemaVersion, "M5_INGESTION_ENVELOPE_SCHEMA_INVALID"), normalizedEnvelope: object(input.normalizedEnvelope, "M5_INGESTION_ENVELOPE_INVALID"), selectedAuditableFields: object(input.selectedAuditableFields, "M5_INGESTION_AUDIT_FIELDS_INVALID"), payloadFingerprint, ...(providerPublishedAt === undefined ? {} : { providerPublishedAt }), observedAt, temporalQualityStatus: input.temporalQualityStatus, temporalDiagnosticCodes } as const;
   return Object.freeze({ ...material, sourceEnvelopeId: sourceEnvelopeIdFor(material), contractVersion: SOURCE_ENVELOPE_CONTRACT_VERSION, sourceEnvelopeFingerprint: sourceEnvelopeFingerprint(material), recordedAt: timestamp(input.recordedAt, "M5_INGESTION_RECORDED_AT_INVALID") });
 }
 

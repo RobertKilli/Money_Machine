@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   availabilityClaimIdFor,
+  availabilityClaimFingerprint,
   createIngestionAttempt,
   createIngestionRequest,
   createLifecycleEvent,
@@ -42,7 +43,7 @@ const artifact = (overrides: Record<string, unknown> = {}) => createSourceArtifa
   datasetVersion: "dataset-v1",
   providerSourceNamespace: "FIXTURE",
   providerExternalRecordId: "external-1",
-  payloadFingerprint: "payload-1",
+  payloadFingerprint: "a".repeat(64),
   recordedAt: t1,
   ...overrides,
 } as never);
@@ -76,7 +77,7 @@ describe("M5 ingestion provenance domain", () => {
     const replay = request({ requestedAt: t4, provenance: { system: "other-run" } });
     expect(first.ingestionRequestId).toBe(ingestionRequestIdFor("operator-request-1"));
     expect(first.ingestionRequestId).toBe(replay.ingestionRequestId);
-    expect(first.requestFingerprint).not.toBe(replay.requestFingerprint);
+    expect(first.requestFingerprint).toBe(replay.requestFingerprint);
     expect(request({ idempotencyKey: "operator-request-2" }).ingestionRequestId).not.toBe(first.ingestionRequestId);
   });
 
@@ -151,8 +152,8 @@ describe("M5 ingestion provenance domain", () => {
     const source = artifact();
     expect(repos.artifacts.save(source)).toBe(source);
     expect(repos.artifacts.save(artifact({ recordedAt: t4 }))).toBe(source);
-    expect(() => repos.artifacts.save(artifact({ payloadFingerprint: "changed" }))).toThrow("M5_SOURCE_ARTIFACT_CONFLICT");
-    expect(() => repos.artifacts.save(artifact({ providerRevision: "2", payloadFingerprint: "changed" }))).not.toThrow();
+    expect(() => repos.artifacts.save(artifact({ payloadFingerprint: "b".repeat(64) }))).toThrow("M5_SOURCE_ARTIFACT_CONFLICT");
+    expect(() => repos.artifacts.save(artifact({ providerRevision: "2", payloadFingerprint: "b".repeat(64) }))).not.toThrow();
   });
 
   it("supports observations of one artifact across attempts and idempotent occurrence replay", () => {
@@ -203,12 +204,14 @@ describe("M5 ingestion provenance domain", () => {
       parserContractVersion: "parser/v1", envelopeSchemaVersion: "envelope/v1",
       pageMetadata: { pageOrdinal: 0, cursorSafety: "NONE", correlationId: "corr-1" },
       records: [
-        { providerExternalRecordId: "b", payloadFingerprint: "pb", normalizedEnvelope: { value: "2" }, selectedAuditableFields: { id: "b" }, observedAt: t0, itemOrdinal: 1 },
-        { providerExternalRecordId: "a", payloadFingerprint: "pa", normalizedEnvelope: { value: "1" }, selectedAuditableFields: { id: "a" }, observedAt: t0, itemOrdinal: 0 },
-        { providerExternalRecordId: "a", payloadFingerprint: "pa", normalizedEnvelope: { value: "1" }, selectedAuditableFields: { id: "a" }, observedAt: t0, itemOrdinal: 0 },
+        { providerExternalRecordId: "b", payloadFingerprint: "b".repeat(64), normalizedEnvelope: { value: "2" }, selectedAuditableFields: { id: "b" }, observedAt: t0, itemOrdinal: 1 },
+        { providerExternalRecordId: "a", payloadFingerprint: "c".repeat(64), normalizedEnvelope: { value: "1" }, selectedAuditableFields: { id: "a" }, observedAt: t0, itemOrdinal: 0 },
+        { providerExternalRecordId: "a", payloadFingerprint: "c".repeat(64), normalizedEnvelope: { value: "1" }, selectedAuditableFields: { id: "a" }, observedAt: t0, itemOrdinal: 0 },
       ],
     };
-    const result = parseM5IngestionFixture(fixture, { ingestionAttemptId: "attempt-1", retrievedAt: t1, recordedAt: t2 });
+    const contextRequest = request();
+    const contextAttempt = createIngestionAttempt({ ingestionRequestId: contextRequest.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v1", parserVersion: "parser/v1", executionInput: {}, startedAt: t1 });
+    const result = parseM5IngestionFixture(fixture, { request: contextRequest, attempt: contextAttempt, retrievedAt: t1, recordedAt: t2 });
     expect(result.artifacts).toHaveLength(2);
     expect(result.observations.map(value => value.itemOrdinal)).toEqual([0, 0, 1]);
     expect(result.duplicateArtifactIds).toHaveLength(1);
@@ -216,17 +219,68 @@ describe("M5 ingestion provenance domain", () => {
 
   it("rejects unknown fields, invalid timestamps, conflicting duplicates and secret metadata", () => {
     const baseFixture = { fixtureVersion: "m5-ingestion-fixture/v1", providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "FIXTURE", parserContractVersion: "p/v1", envelopeSchemaVersion: "e/v1", pageMetadata: { pageOrdinal: 0, cursorSafety: "NONE" }, records: [] };
-    expect(() => parseM5IngestionFixture({ ...baseFixture, unknown: true }, { ingestionAttemptId: "a", retrievedAt: t1, recordedAt: t2 })).toThrow("M5_FIXTURE_UNKNOWN_FIELD:unknown");
-    expect(() => parseM5IngestionFixture({ ...baseFixture, records: [{ providerExternalRecordId: "x", payloadFingerprint: "p", normalizedEnvelope: {}, selectedAuditableFields: {}, observedAt: "bad", itemOrdinal: 0 }] }, { ingestionAttemptId: "a", retrievedAt: t1, recordedAt: t2 })).toThrow("M5_INGESTION_OBSERVED_AT_INVALID");
-    expect(() => parseM5IngestionFixture({ ...baseFixture, pageMetadata: { pageOrdinal: 0, cursorSafety: "SAFE", cursor: "authorization=secret" } }, { ingestionAttemptId: "a", retrievedAt: t1, recordedAt: t2 })).toThrow("M5_INGESTION_SECRET_METADATA_REJECTED");
-    expect(() => parseM5IngestionFixture({ ...baseFixture, records: [{ providerExternalRecordId: "x", payloadFingerprint: "p", normalizedEnvelope: { token: "secret" }, selectedAuditableFields: {}, observedAt: t0, itemOrdinal: 0 }] }, { ingestionAttemptId: "a", retrievedAt: t1, recordedAt: t2 })).toThrow("M5_INGESTION_SECRET_METADATA_REJECTED");
-    expect(() => parseM5IngestionFixture({ ...baseFixture, records: [{ providerExternalRecordId: "x", payloadFingerprint: "p", normalizedEnvelope: {}, selectedAuditableFields: {}, observedAt: t0, itemOrdinal: 0 }, { providerExternalRecordId: "x", payloadFingerprint: "other", normalizedEnvelope: {}, selectedAuditableFields: {}, observedAt: t0, itemOrdinal: 1 }] }, { ingestionAttemptId: "a", retrievedAt: t1, recordedAt: t2 })).toThrow("M5_INGESTION_FIXTURE_CONFLICT");
+    const contextRequest = createIngestionRequest({ idempotencyKey: "fixture", providerId: "p", datasetId: "d", datasetVersion: "v", requestScope: {}, adapterContractVersion: "adapter/v1", parserContractVersion: "p/v1", requestedAt: t0, provenance: {} });
+    const contextAttempt = createIngestionAttempt({ ingestionRequestId: contextRequest.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v1", parserVersion: "p/v1", executionInput: {}, startedAt: t1 });
+    const options = { request: contextRequest, attempt: contextAttempt, retrievedAt: t1, recordedAt: t2 };
+    expect(() => parseM5IngestionFixture({ ...baseFixture, unknown: true }, options)).toThrow("M5_FIXTURE_UNKNOWN_FIELD");
+    expect(() => parseM5IngestionFixture({ ...baseFixture, records: [{ providerExternalRecordId: "x", payloadFingerprint: "a".repeat(64), normalizedEnvelope: {}, selectedAuditableFields: {}, observedAt: "bad", itemOrdinal: 0 }] }, options)).toThrow("M5_INGESTION_OBSERVED_AT_INVALID");
+    expect(() => parseM5IngestionFixture({ ...baseFixture, pageMetadata: { pageOrdinal: 0, cursorSafety: "SAFE", cursor: "authorization=secret" } }, options)).toThrow("M5_FIXTURE_CURSOR_UNTRUSTED");
+    expect(() => parseM5IngestionFixture({ ...baseFixture, records: [{ providerExternalRecordId: "x", payloadFingerprint: "a".repeat(64), normalizedEnvelope: { token: "secret" }, selectedAuditableFields: {}, observedAt: t0, itemOrdinal: 0 }] }, options)).toThrow("M5_INGESTION_SECRET_METADATA_REJECTED");
+    expect(() => parseM5IngestionFixture({ ...baseFixture, records: [{ providerExternalRecordId: "x", payloadFingerprint: "a".repeat(64), normalizedEnvelope: {}, selectedAuditableFields: {}, observedAt: t0, itemOrdinal: 0 }, { providerExternalRecordId: "x", payloadFingerprint: "b".repeat(64), normalizedEnvelope: {}, selectedAuditableFields: {}, observedAt: t0, itemOrdinal: 1 }] }, options)).toThrow("M5_INGESTION_FIXTURE_CONFLICT");
   });
 
   it("preserves an explicit temporal quarantine diagnostic without raw provider data", () => {
-    const fixture = { fixtureVersion: "m5-ingestion-fixture/v1", providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "FIXTURE", parserContractVersion: "p/v1", envelopeSchemaVersion: "e/v1", pageMetadata: { pageOrdinal: 0, cursorSafety: "NONE" }, records: [{ providerExternalRecordId: "x", payloadFingerprint: "p", normalizedEnvelope: {}, selectedAuditableFields: {}, providerPublishedAt: t4, observedAt: t0, temporalQuality: { status: "QUARANTINED", diagnosticCodes: ["M5_INGESTION_PROVIDER_CLOCK_SKEW"] }, itemOrdinal: 0 }] };
-    const result = parseM5IngestionFixture(fixture, { ingestionAttemptId: "a", retrievedAt: t1, recordedAt: t2 });
+    const fixture = { fixtureVersion: "m5-ingestion-fixture/v1", providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "FIXTURE", parserContractVersion: "p/v1", envelopeSchemaVersion: "e/v1", pageMetadata: { pageOrdinal: 0, cursorSafety: "NONE" }, records: [{ providerExternalRecordId: "x", payloadFingerprint: "a".repeat(64), normalizedEnvelope: {}, selectedAuditableFields: {}, providerPublishedAt: t4, observedAt: t0, itemOrdinal: 0 }] };
+    const contextRequest = createIngestionRequest({ idempotencyKey: "fixture-skew", providerId: "p", datasetId: "d", datasetVersion: "v", requestScope: {}, adapterContractVersion: "adapter/v1", parserContractVersion: "p/v1", requestedAt: t0, provenance: {} });
+    const contextAttempt = createIngestionAttempt({ ingestionRequestId: contextRequest.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v1", parserVersion: "p/v1", executionInput: {}, startedAt: t1 });
+    const result = parseM5IngestionFixture(fixture, { request: contextRequest, attempt: contextAttempt, retrievedAt: t1, recordedAt: t2 });
     expect(result.envelopes[0]?.temporalQualityStatus).toBe("QUARANTINED");
     expect(result.envelopes[0]?.temporalDiagnosticCodes).toEqual(["M5_INGESTION_PROVIDER_CLOCK_SKEW"]);
+  });
+
+  it("validates lifecycle identities, payloads and attempt ownership", () => {
+    const started = event("attempt-a", 1, "STARTED");
+    expect(() => reduceIngestionLifecycle([{ ...started, eventFingerprint: "b".repeat(64) } as never])).toThrow("M5_INGESTION_LIFECYCLE_EVENT_FINGERPRINT_MISMATCH");
+    expect(() => reduceIngestionLifecycle([started, event("attempt-b", 2, "COMPLETED")])).toThrow("M5_INGESTION_LIFECYCLE_ATTEMPT_MISMATCH");
+    expect(() => createLifecycleEvent({ ingestionAttemptId: "x", sequence: 1, eventType: "STARTED", payload: { unexpected: true } as never, recordedAt: t1 })).toThrow("M5_INGESTION_STARTED_PAYLOAD_INVALID");
+    expect(() => createLifecycleEvent({ ingestionAttemptId: "x", sequence: 2, eventType: "SOURCE_OBSERVED", payload: {} as never, recordedAt: t1 })).toThrow("M5_INGESTION_SOURCE_OBSERVED_PAYLOAD_INVALID");
+  });
+
+  it("deep freezes material JSON and validates payload fingerprints", () => {
+    const value = request({ requestScope: { nested: { values: ["a"] } } });
+    expect(() => ((value.requestScope.nested as { readonly values: string[] }).values).push("b")).toThrow();
+    expect(() => artifact({ payloadFingerprint: "payload-1" })).toThrow("M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID");
+    expect(() => envelope(artifact(), { payloadFingerprint: "payload-1" })).toThrow("M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID");
+  });
+
+  it("binds envelopes and observations to their trusted parents", () => {
+    const repos = createInMemoryIngestionProvenanceRepositories();
+    const { value: attemptValue } = attempt(repos);
+    const source = artifact();
+    repos.artifacts.save(source);
+    expect(() => repos.envelopes.save(envelope(source, { payloadFingerprint: "b".repeat(64) }))).toThrow("M5_SOURCE_ENVELOPE_PAYLOAD_MISMATCH");
+    for (const dimension of [{ providerId: "provider-other" }, { datasetId: "dataset-other" }, { datasetVersion: "dataset-v2" }]) {
+      const otherRequest = request({ idempotencyKey: `other-${Object.keys(dimension)[0]}`, ...dimension });
+      const otherAttempt = createIngestionAttempt({ ingestionRequestId: otherRequest.ingestionRequestId, attemptNumber: 1, adapterVersion: "adapter/v1", parserVersion: "parser/v1", executionInput: {}, startedAt: t1 });
+      repos.requests.save(otherRequest); repos.attempts.save(otherAttempt);
+      const observation = createSourceObservation({ ingestionAttemptId: otherAttempt.ingestionAttemptId, sourceArtifactId: source.sourceArtifactId, responsePageOrdinal: 0, itemOrdinal: 0, retrievedAt: t2, metadata: { pageOrdinal: 0, cursorSafety: "NONE" }, recordedAt: t3 });
+      expect(() => repos.observations.save(observation)).toThrow("M5_INGESTION_OBSERVATION_REQUEST_MISMATCH");
+    }
+    const goodObservation = createSourceObservation({ ingestionAttemptId: attemptValue.ingestionAttemptId, sourceArtifactId: source.sourceArtifactId, responsePageOrdinal: 0, itemOrdinal: 0, retrievedAt: t2, metadata: { pageOrdinal: 0, cursorSafety: "NONE" }, recordedAt: t3 });
+    expect(() => repos.events.save(event(attemptValue.ingestionAttemptId, 1, "STARTED"))).not.toThrow();
+    expect(() => repos.events.save(event(attemptValue.ingestionAttemptId, 2, "SOURCE_OBSERVED", { sourceObservationId: goodObservation.sourceObservationId }))).toThrow("M5_INGESTION_EVENT_OBSERVATION_MISMATCH");
+  });
+
+  it("revalidates availability claims instead of trusting their fingerprint", () => {
+    const repos = createInMemoryIngestionProvenanceRepositories();
+    const { value: attemptValue } = attempt(repos);
+    const source = artifact();
+    const parsed = envelope(source);
+    repos.artifacts.save(source); repos.envelopes.save(parsed);
+    const observation = createSourceObservation({ ingestionAttemptId: attemptValue.ingestionAttemptId, sourceArtifactId: source.sourceArtifactId, responsePageOrdinal: 0, itemOrdinal: 0, retrievedAt: t2, metadata: { pageOrdinal: 0, cursorSafety: "NONE" }, recordedAt: t3 });
+    repos.observations.save(observation);
+    const forged = createRetrievalAvailabilityClaim({ envelope: parsed, observation, recordedAt: t3 });
+    const invalid = { ...forged, effectiveAvailableAt: t1, claimFingerprint: availabilityClaimFingerprint({ ...forged, effectiveAvailableAt: t1 }) } as never;
+    expect(() => repos.availabilityClaims.save(invalid)).toThrow("M5_INGESTION_AVAILABILITY_CLAIM_INVALID");
   });
 });
