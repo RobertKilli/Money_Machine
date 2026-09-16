@@ -83,6 +83,7 @@ export interface M5AssemblyDiagnostic {
 
 type CompleteAssembly = {
   readonly status: "COMPLETE";
+  readonly context: M5AssemblyContext;
   readonly evidence: EligibilityEvidence;
   readonly materialEvidenceIds: readonly string[];
   readonly diagnosticEvidenceIds: readonly string[];
@@ -94,6 +95,7 @@ type CompleteAssembly = {
 
 type IncompleteAssembly = {
   readonly status: "INCOMPLETE";
+  readonly context: M5AssemblyContext;
   readonly evidence: EligibilityEvidence;
   readonly missingRequirements: readonly M5AssemblyDiagnostic[];
   readonly ambiguityDiagnostics: readonly M5AssemblyDiagnostic[];
@@ -335,9 +337,9 @@ export function assembleM5Evidence(input: { readonly context: M5AssemblyContext;
   const fingerprint = assemblyFingerprint(context, manifest, compatibility, materialValues, diagnostics);
   const frozenEvidence: EligibilityEvidence = freeze({ ...evidence, suspiciousFlags: frozenArray(evidence.suspiciousFlags ?? []), evidenceIds: materialEvidenceIds });
   const diagnosticEvidenceIds = frozenArray([...diagnosticIds].sort((a, b) => a.localeCompare(b)));
-  if (missing.length || ambiguities.length) return freeze({ status: "INCOMPLETE", evidence: frozenEvidence, missingRequirements: frozenArray(missing), ambiguityDiagnostics: frozenArray(ambiguities), materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
-  if (!materialAvailableAt) return freeze({ status: "INCOMPLETE", evidence: frozenEvidence, missingRequirements: frozenArray([diagnostic("M5_ASSEMBLY_MATERIAL_EVIDENCE_MISSING", "AGE")]), ambiguityDiagnostics: frozenArray([]), materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt: null, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
-  return freeze({ status: "COMPLETE", evidence: frozenEvidence, materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
+  if (missing.length || ambiguities.length) return freeze({ status: "INCOMPLETE", context, evidence: frozenEvidence, missingRequirements: frozenArray(missing), ambiguityDiagnostics: frozenArray(ambiguities), materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
+  if (!materialAvailableAt) return freeze({ status: "INCOMPLETE", context, evidence: frozenEvidence, missingRequirements: frozenArray([diagnostic("M5_ASSEMBLY_MATERIAL_EVIDENCE_MISSING", "AGE")]), ambiguityDiagnostics: frozenArray([]), materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt: null, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
+  return freeze({ status: "COMPLETE", context, evidence: frozenEvidence, materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
 }
 
 function invalid(errors: readonly M5AssemblyDiagnostic[], ids: ReadonlySet<string> = new Set()): InvalidManifestAssembly {
