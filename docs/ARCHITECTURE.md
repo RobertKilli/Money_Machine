@@ -32,6 +32,19 @@ M5 `CONFIGURED` authority records are provisioned by a server-only application s
 
 External M5 evidence must bind a revision-specific, append-only asset mapping. The mapping key includes provider, dataset/version, provider namespace and provider asset ID; ticker/symbol alone is never authoritative. Raw evidence carries `mappingRevisionId` in its domain fingerprint and PostgreSQL row, and the resolver returns `NOT_FOUND` or `AMBIGUOUS` instead of selecting a newest or “best” mapping. No external provider client is selected or implemented yet; provider/legal approval and trustworthy `availableAt` semantics remain separate blockers.
 
+M5 ingestion provenance is provider-neutral and server-only. A logical request is
+bound to a mandatory idempotency key, then to explicit execution attempts and
+contiguous immutable lifecycle events. Provider material is represented by an
+immutable source artifact; parser output is a separate versioned source envelope,
+so parser upgrades never overwrite prior normalized output. Attempts append
+source observations, and a `RETRIEVAL_OBSERVED` availability claim pins the exact
+observation timestamp used for downstream temporal visibility. No ingestion path
+selects a “best” record, retains full provider payloads by default, or creates
+mapping revisions, raw M5 evidence, authority records, or canonical M5 output.
+Slice 1 is pure domain/application code with strict fixture parsing and in-memory
+repositories; PostgreSQL persistence and normalized downstream lineage belong to
+Slice 2. M3 privilege hardening is mandatory before any real provider-data import.
+
 Server-only code authorizes the authenticated owner, validates input schemas/scales, resolves the account aggregate, enforces idempotency and state transitions, pins dataset/strategy/risk versions, evaluates risk, writes the ledger/audit data in one database transaction, and emits rebuildable projection work. Node.js is the default runtime for financial commands and jobs. Server Components serve account-scoped reads; small Client Components handle visual interaction only. Server actions are suitable for same-origin forms, while versioned route handlers are reserved for command APIs/integrations. Neither replaces authorization or transactional validation.
 
 ## 3. Database and authorization model
