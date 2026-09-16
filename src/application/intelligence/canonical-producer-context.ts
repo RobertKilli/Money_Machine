@@ -20,7 +20,8 @@ export interface CanonicalProducerSourceContext {
   readonly assetId: string;
   readonly assetClass: string;
   readonly asOf: string;
-  readonly availableAt: string;
+  /** @deprecated Availability is derived from material evidence, not producer input. */
+  readonly availableAt?: string;
   readonly providerDatasetPins: readonly CanonicalProducerDatasetPin[];
   readonly relevantEvidence: readonly CanonicalProducerEvidenceRef[];
 }
@@ -65,8 +66,8 @@ export function validateCanonicalProducerSourceContext(
   const assetClass = nonBlank(input.assetClass, "PRODUCER_ASSET_CLASS_INVALID");
   if (assetClass === "UNKNOWN") throw new Error("PRODUCER_ASSET_CLASS_UNKNOWN");
   const asOf = validTimestamp(input.asOf, "PRODUCER_AS_OF_INVALID");
-  const availableAt = validTimestamp(input.availableAt, "PRODUCER_AVAILABLE_AT_INVALID");
-  if (availableAt > asOf) throw new Error("PRODUCER_AVAILABLE_AT_AFTER_AS_OF");
+  const legacyAvailableAt = (input as CanonicalProducerSourceContext & { availableAt?: string }).availableAt;
+  if (legacyAvailableAt !== undefined && validTimestamp(legacyAvailableAt, "PRODUCER_AVAILABLE_AT_INVALID") > asOf) throw new Error("PRODUCER_AVAILABLE_AT_AFTER_AS_OF");
 
   const providerDatasetPins = normalizeProducerDatasetPins(input.providerDatasetPins);
   const pinByProvider = new Map(providerDatasetPins.map(pin => [pin.providerId, pin.datasetVersion]));
@@ -93,7 +94,6 @@ export function validateCanonicalProducerSourceContext(
     assetId,
     assetClass,
     asOf,
-    availableAt,
     providerDatasetPins: Object.freeze(providerDatasetPins),
     relevantEvidence: Object.freeze([...evidenceById.values()].sort(
       (a, b) => a.evidenceId.localeCompare(b.evidenceId),
