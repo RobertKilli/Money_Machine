@@ -7,6 +7,7 @@ import {
   mapSourceArtifactRow,
   mapSourceEnvelopeRow,
   mapSourceObservationRow,
+  validateLifecycleHistoryForReplay,
 } from "@/infrastructure/postgres/ingestion-provenance-repository";
 import { createIngestionAttempt, createIngestionRequest, createLifecycleEvent, createRetrievalAvailabilityClaim, createSourceArtifact, createSourceEnvelope, createSourceObservation } from "@/domain/intelligence/ingestion-provenance";
 import * as postgresRepository from "@/infrastructure/postgres/ingestion-provenance-repository";
@@ -17,6 +18,13 @@ describe("M5 provenance PostgreSQL row mapping", () => {
   it("exposes lifecycle persistence only through the transaction unit of work", () => {
     expect("createIngestionProvenanceRepositories" in postgresRepository).toBe(false);
     expect(typeof postgresRepository.createIngestionProvenanceUnitOfWork).toBe("function");
+  });
+
+  it("validates the complete lifecycle history before replay handling", () => {
+    const started = createLifecycleEvent({ ingestionAttemptId: "replay-attempt", sequence: 1, eventType: "STARTED", payload: {}, recordedAt: time });
+    const completed = createLifecycleEvent({ ingestionAttemptId: "replay-attempt", sequence: 3, eventType: "COMPLETED", payload: {}, recordedAt: time });
+    expect(() => validateLifecycleHistoryForReplay([started, completed])).toThrow("M5_INGESTION_LIFECYCLE_SEQUENCE_INVALID");
+    expect(() => validateLifecycleHistoryForReplay([started, started])).not.toThrow();
   });
 
   it("maps a request with trusted registry and parser material", () => {
@@ -53,6 +61,8 @@ describe("M5 provenance PostgreSQL row mapping", () => {
     const claimRecord = createRetrievalAvailabilityClaim({ envelope: envelopeRecord, observation: observationRecord, recordedAt: time });
     const claim = mapAvailabilityClaimRow({ availability_claim_id: claimRecord.availabilityClaimId, source_envelope_id: claimRecord.sourceEnvelopeId, source_observation_id: claimRecord.sourceObservationId, contract_version: claimRecord.contractVersion, basis: claimRecord.basis, effective_available_at: claimRecord.effectiveAvailableAt, claim_fingerprint: claimRecord.claimFingerprint, recorded_at: claimRecord.recordedAt, source_artifact_id: artifactRecord.sourceArtifactId, temporal_quality_status: "RESOLVED" });
     expect(claim.basis).toBe("RETRIEVAL_OBSERVED");
+    expect(Object.isFrozen(claim)).toBe(true);
+    expect(() => { (claim as unknown as { basis: string }).basis = "FORGED"; }).toThrow();
     expect(() => mapSourceArtifactRow({ source_artifact_id: artifactRecord.sourceArtifactId, contract_version: artifactRecord.contractVersion, provider_id: artifactRecord.providerId, dataset_id: artifactRecord.datasetId, dataset_version: artifactRecord.datasetVersion, provider_source_namespace: artifactRecord.providerSourceNamespace, provider_external_record_id: artifactRecord.providerExternalRecordId, provider_revision: null, payload_fingerprint: "bad", source_artifact_fingerprint: artifactRecord.sourceArtifactFingerprint, recorded_at: artifactRecord.recordedAt })).toThrow("M5_INGESTION_PAYLOAD_FINGERPRINT_INVALID");
   });
 

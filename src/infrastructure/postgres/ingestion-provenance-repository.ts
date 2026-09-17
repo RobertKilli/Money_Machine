@@ -18,6 +18,13 @@ import {
   reduceIngestionLifecycle,
   availabilityClaimFingerprint,
   availabilityClaimIdFor,
+  INGESTION_REQUEST_CONTRACT_VERSION,
+  INGESTION_ATTEMPT_CONTRACT_VERSION,
+  INGESTION_EVENT_CONTRACT_VERSION,
+  SOURCE_ARTIFACT_CONTRACT_VERSION,
+  SOURCE_ENVELOPE_CONTRACT_VERSION,
+  SOURCE_OBSERVATION_CONTRACT_VERSION,
+  AVAILABILITY_CLAIM_CONTRACT_VERSION,
   type AvailabilityClaim,
   type IngestionAttempt,
   type IngestionRequest,
@@ -60,7 +67,7 @@ export function mapIngestionRequestRow(value: RawRow): IngestionRequest {
   const storedFingerprint = text(value.request_fingerprint, "M5_INGESTION_REQUEST_ROW_FINGERPRINT_INVALID");
   const record = createIngestionRequest({
     ingestionRequestId: text(value.ingestion_request_id, "M5_INGESTION_REQUEST_ROW_ID_INVALID"),
-    contractVersion: storedContract(value.contract_version, "m5-ingestion-request/v1", "M5_INGESTION_REQUEST_ROW_CONTRACT_INVALID") as IngestionRequest["contractVersion"],
+    contractVersion: storedContract(value.contract_version, INGESTION_REQUEST_CONTRACT_VERSION, "M5_INGESTION_REQUEST_ROW_CONTRACT_INVALID") as IngestionRequest["contractVersion"],
     idempotencyKey: text(value.idempotency_key, "M5_INGESTION_REQUEST_ROW_IDEMPOTENCY_INVALID"),
     providerId: text(value.provider_id, "M5_INGESTION_REQUEST_ROW_PROVIDER_INVALID"),
     datasetId: text(value.dataset_id, "M5_INGESTION_REQUEST_ROW_DATASET_INVALID"),
@@ -83,7 +90,7 @@ export function mapIngestionAttemptRow(value: RawRow): IngestionAttempt {
   const storedFingerprint = text(value.attempt_fingerprint, "M5_INGESTION_ATTEMPT_ROW_FINGERPRINT_INVALID");
   const record = createIngestionAttempt({
     ingestionAttemptId: storedId,
-    contractVersion: storedContract(value.contract_version, "m5-ingestion-attempt/v1", "M5_INGESTION_ATTEMPT_ROW_CONTRACT_INVALID") as IngestionAttempt["contractVersion"],
+    contractVersion: storedContract(value.contract_version, INGESTION_ATTEMPT_CONTRACT_VERSION, "M5_INGESTION_ATTEMPT_ROW_CONTRACT_INVALID") as IngestionAttempt["contractVersion"],
     ingestionRequestId: text(value.ingestion_request_id, "M5_INGESTION_ATTEMPT_ROW_REQUEST_INVALID"),
     attemptNumber: Number(value.attempt_number),
     adapterVersion: text(value.adapter_version, "M5_INGESTION_ATTEMPT_ROW_ADAPTER_INVALID"),
@@ -103,7 +110,7 @@ export function mapLifecycleEventRow(value: RawRow): LifecycleEvent {
   const record = createLifecycleEvent({
     lifecycleEventId: storedId,
     ingestionAttemptId: text(value.ingestion_attempt_id, "M5_INGESTION_EVENT_ROW_ATTEMPT_INVALID"),
-    contractVersion: storedContract(value.contract_version, "m5-ingestion-event/v1", "M5_INGESTION_EVENT_ROW_CONTRACT_INVALID") as LifecycleEvent["contractVersion"],
+    contractVersion: storedContract(value.contract_version, INGESTION_EVENT_CONTRACT_VERSION, "M5_INGESTION_EVENT_ROW_CONTRACT_INVALID") as LifecycleEvent["contractVersion"],
     sequence: Number(value.sequence),
     eventType: text(value.event_type, "M5_INGESTION_EVENT_ROW_TYPE_INVALID") as LifecycleEvent["eventType"],
     payload: payload as LifecycleEvent["payload"],
@@ -119,7 +126,7 @@ export function mapSourceArtifactRow(value: RawRow): SourceArtifact {
   const storedFingerprint = text(value.source_artifact_fingerprint, "M5_SOURCE_ARTIFACT_ROW_FINGERPRINT_INVALID");
   const record = createSourceArtifact({
     sourceArtifactId: storedId,
-    contractVersion: storedContract(value.contract_version, "m5-source-artifact/v1", "M5_SOURCE_ARTIFACT_ROW_CONTRACT_INVALID") as SourceArtifact["contractVersion"],
+    contractVersion: storedContract(value.contract_version, SOURCE_ARTIFACT_CONTRACT_VERSION, "M5_SOURCE_ARTIFACT_ROW_CONTRACT_INVALID") as SourceArtifact["contractVersion"],
     providerId: text(value.provider_id, "M5_SOURCE_ARTIFACT_ROW_PROVIDER_INVALID"),
     datasetId: text(value.dataset_id, "M5_SOURCE_ARTIFACT_ROW_DATASET_INVALID"),
     datasetVersion: text(value.dataset_version, "M5_SOURCE_ARTIFACT_ROW_DATASET_VERSION_INVALID"),
@@ -139,7 +146,7 @@ export function mapSourceEnvelopeRow(value: RawRow): SourceEnvelope {
   const storedFingerprint = text(value.source_envelope_fingerprint, "M5_SOURCE_ENVELOPE_ROW_FINGERPRINT_INVALID");
   const record = createSourceEnvelope({
     sourceEnvelopeId: storedId,
-    contractVersion: storedContract(value.contract_version, "m5-source-envelope/v1", "M5_SOURCE_ENVELOPE_ROW_CONTRACT_INVALID") as SourceEnvelope["contractVersion"],
+    contractVersion: storedContract(value.contract_version, SOURCE_ENVELOPE_CONTRACT_VERSION, "M5_SOURCE_ENVELOPE_ROW_CONTRACT_INVALID") as SourceEnvelope["contractVersion"],
     sourceArtifactId: text(value.source_artifact_id, "M5_SOURCE_ENVELOPE_ROW_ARTIFACT_INVALID"),
     parserContractVersion: text(value.parser_contract_version, "M5_SOURCE_ENVELOPE_ROW_PARSER_INVALID"),
     envelopeSchemaVersion: text(value.envelope_schema_version, "M5_SOURCE_ENVELOPE_ROW_SCHEMA_INVALID"),
@@ -162,7 +169,7 @@ export function mapSourceObservationRow(value: RawRow): SourceObservation {
   const storedFingerprint = text(value.observation_fingerprint, "M5_SOURCE_OBSERVATION_ROW_FINGERPRINT_INVALID");
   const record = createSourceObservation({
     sourceObservationId: storedId,
-    contractVersion: storedContract(value.contract_version, "m5-source-observation/v1", "M5_SOURCE_OBSERVATION_ROW_CONTRACT_INVALID") as SourceObservation["contractVersion"],
+    contractVersion: storedContract(value.contract_version, SOURCE_OBSERVATION_CONTRACT_VERSION, "M5_SOURCE_OBSERVATION_ROW_CONTRACT_INVALID") as SourceObservation["contractVersion"],
     ingestionAttemptId: text(value.ingestion_attempt_id, "M5_SOURCE_OBSERVATION_ROW_ATTEMPT_INVALID"),
     sourceArtifactId: text(value.source_artifact_id, "M5_SOURCE_OBSERVATION_ROW_ARTIFACT_INVALID"),
     responsePageOrdinal: Number(value.response_page_ordinal),
@@ -183,7 +190,7 @@ export function mapAvailabilityClaimRow(value: RawRow): AvailabilityClaim {
     availabilityClaimId: storedId,
     sourceEnvelopeId: text(value.source_envelope_id, "M5_AVAILABILITY_ROW_ENVELOPE_INVALID"),
     sourceObservationId: text(value.source_observation_id, "M5_AVAILABILITY_ROW_OBSERVATION_INVALID"),
-    contractVersion: storedContract(value.contract_version, "m5-availability-claim/v1", "M5_AVAILABILITY_ROW_CONTRACT_INVALID") as AvailabilityClaim["contractVersion"],
+    contractVersion: storedContract(value.contract_version, AVAILABILITY_CLAIM_CONTRACT_VERSION, "M5_AVAILABILITY_ROW_CONTRACT_INVALID") as AvailabilityClaim["contractVersion"],
     basis: text(value.basis, "M5_AVAILABILITY_ROW_BASIS_INVALID") as AvailabilityClaim["basis"],
     effectiveAvailableAt: timestamp(value.effective_available_at, "M5_AVAILABILITY_ROW_AVAILABLE_INVALID"),
     claimFingerprint: storedFingerprint,
@@ -196,7 +203,12 @@ export function mapAvailabilityClaimRow(value: RawRow): AvailabilityClaim {
   const expectedId = availabilityClaimIdFor(record);
   const expectedFingerprint = availabilityClaimFingerprint(record);
   compareStored(storedId, expectedId, storedFingerprint, expectedFingerprint, "M5_AVAILABILITY_ROW_ID_MISMATCH", "M5_AVAILABILITY_ROW_FINGERPRINT_MISMATCH");
-  return record;
+  return Object.freeze({ ...record });
+}
+
+/** Pure pre-replay guard used inside the locked transaction before ID replay handling. */
+export function validateLifecycleHistoryForReplay(history: readonly LifecycleEvent[]): void {
+  reduceIngestionLifecycle(history);
 }
 
 async function saveRequest(client: DbClient, input: IngestionRequest): Promise<IngestionRequest> {
@@ -311,6 +323,7 @@ async function saveEvent(client: DbClient, input: LifecycleEvent): Promise<Lifec
   if (attempts.length !== 1) throw new Error("M5_INGESTION_ATTEMPT_NOT_FOUND");
   const historyRows = await client`select * from public.intelligence_ingestion_events where ingestion_attempt_id=${record.ingestionAttemptId} order by sequence asc, lifecycle_event_id asc`;
   const history = historyRows.map(value => mapLifecycleEventRow(row(value)));
+  validateLifecycleHistoryForReplay(history);
   const existing = history.find(value => value.lifecycleEventId === record.lifecycleEventId);
   if (existing) {
     if (existing.eventFingerprint !== record.eventFingerprint) throw new Error("M5_INGESTION_LIFECYCLE_EVENT_CONFLICT");
