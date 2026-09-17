@@ -165,7 +165,7 @@ create table public.intelligence_ingestion_source_observations (
   metadata jsonb not null,
   observation_fingerprint text not null,
   recorded_at timestamptz not null,
-  unique (source_observation_id, ingestion_attempt_id, source_artifact_id, retrieved_at),
+  unique (source_observation_id, source_artifact_id, retrieved_at),
   unique (ingestion_attempt_id, source_observation_id),
   check (length(trim(source_observation_id)) > 0),
   check (length(trim(contract_version)) > 0),
@@ -226,6 +226,10 @@ alter table public.intelligence_source_availability_claims
 
 create index intelligence_availability_claims_time_idx
   on public.intelligence_source_availability_claims(effective_available_at, availability_claim_id);
+create index intelligence_availability_claims_envelope_fk_idx
+  on public.intelligence_source_availability_claims(source_envelope_id, source_artifact_id, temporal_quality_status);
+create index intelligence_availability_claims_observation_fk_idx
+  on public.intelligence_source_availability_claims(source_observation_id, source_artifact_id, effective_available_at);
 
 create table public.intelligence_ingestion_events (
   lifecycle_event_id text primary key,
@@ -266,6 +270,8 @@ create unique index intelligence_ingestion_events_terminal_idx
   where event_type in ('COMPLETED','PARTIAL','FAILED','CANCELLED');
 create index intelligence_ingestion_events_attempt_sequence_idx
   on public.intelligence_ingestion_events(ingestion_attempt_id, sequence);
+create index intelligence_ingestion_events_observation_fk_idx
+  on public.intelligence_ingestion_events(ingestion_attempt_id, source_observation_id);
 
 alter table public.intelligence_ingestion_requests enable row level security;
 alter table public.intelligence_ingestion_attempts enable row level security;

@@ -27,6 +27,14 @@ describe("M5 ingestion provenance migration", () => {
     expect(sql).toContain("intelligence_availability_envelope_fk");
     expect(sql).toContain("intelligence_availability_observation_fk");
     expect(sql).toContain("intelligence_ingestion_events_observation_fk");
+    expect(sql).toContain("unique (source_observation_id, source_artifact_id, retrieved_at)");
+    expect(sql).not.toContain("unique (source_observation_id, ingestion_attempt_id, source_artifact_id, retrieved_at)");
+    expect(sql).toContain("intelligence_availability_claims_envelope_fk_idx");
+    expect(sql).toContain("intelligence_availability_claims_observation_fk_idx");
+    expect(sql).toContain("intelligence_ingestion_events_observation_fk_idx");
+    expect(sql).toContain("foreign key (source_observation_id, source_artifact_id, effective_available_at)");
+    expect(sql).toContain("references public.intelligence_ingestion_source_observations(source_observation_id, source_artifact_id, retrieved_at)");
+    expect(sql).toContain("foreign key (ingestion_attempt_id, source_observation_id)");
     expect(sql).toContain("unique (ingestion_attempt_id, sequence)");
     expect(sql).toContain("intelligence_ingestion_events_terminal_idx");
     expect(sql).toContain("payload = jsonb_build_object('sourceObservationId', source_observation_id)");
