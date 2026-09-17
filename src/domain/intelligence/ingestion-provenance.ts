@@ -196,6 +196,9 @@ function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
 
+/** Shared deterministic SHA-256 primitive for adjacent provenance aggregates. */
+export function canonicalSha256(value: unknown): string { return digest(value); }
+
 function fingerprint(value: unknown): string { return digest(value); }
 
 function safeProvenance(input: SecretSafeProvenance): SecretSafeProvenance {

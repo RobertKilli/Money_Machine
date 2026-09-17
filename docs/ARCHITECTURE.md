@@ -54,6 +54,16 @@ calls, file reads and parsing remain outside the transaction. Slice 2B will add
 normalized downstream lineage to mapping and raw M5 evidence separately. M3
 privilege hardening remains a required step before real provider import.
 
+Slice 2B.1 adds source-material lineage authority only. A lineage parent seals
+one normalized, sorted, non-empty availability-claim list; duplicate claim IDs
+are rejected rather than silently deduplicated. Immutable member rows
+are a database-readable projection and never a second authority. The aggregate
+contains no candidate, purpose, mapping revision, or canonical identity. It
+accepts COMPLETED and PARTIAL ingestion attempts, while future mapping and raw
+evidence writers apply their own stricter policies. Mapping revisions remain the
+canonical-identity authority, and downstream sourceLineageId bindings are
+deliberately deferred to later slices.
+
 Server-only code authorizes the authenticated owner, validates input schemas/scales, resolves the account aggregate, enforces idempotency and state transitions, pins dataset/strategy/risk versions, evaluates risk, writes the ledger/audit data in one database transaction, and emits rebuildable projection work. Node.js is the default runtime for financial commands and jobs. Server Components serve account-scoped reads; small Client Components handle visual interaction only. Server actions are suitable for same-origin forms, while versioned route handlers are reserved for command APIs/integrations. Neither replaces authorization or transactional validation.
 
 ## 3. Database and authorization model
