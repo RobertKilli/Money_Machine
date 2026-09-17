@@ -55,7 +55,8 @@ normalized downstream lineage to mapping and raw M5 evidence separately. M3
 privilege hardening remains a required step before real provider import.
 
 Slice 2B.1 adds source-material lineage authority only. A lineage parent seals
-one normalized, sorted, non-empty availability-claim list; immutable member rows
+one normalized, sorted, non-empty availability-claim list; duplicate claim IDs
+are rejected rather than silently deduplicated. Immutable member rows
 are a database-readable projection and never a second authority. The aggregate
 contains no candidate, purpose, mapping revision, or canonical identity. It
 accepts COMPLETED and PARTIAL ingestion attempts, while future mapping and raw

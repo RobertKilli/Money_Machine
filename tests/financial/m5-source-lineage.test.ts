@@ -8,6 +8,7 @@ import {
   createSourceObservation,
 } from "@/domain/intelligence/ingestion-provenance";
 import { createSourceLineage, sourceLineageFingerprint, sourceLineageIdFor } from "@/domain/intelligence/source-lineage";
+import { mapSourceLineageMemberRow, mapSourceLineageRow } from "@/infrastructure/postgres/source-lineage-repository";
 
 const t0 = "2026-01-01T00:00:00.000Z";
 const t1 = "2026-01-01T00:01:00.000Z";
@@ -49,6 +50,11 @@ describe("M5 source-lineage authority", () => {
     expect(sourceLineageFingerprint(one.lineage)).toBe(one.lineage.fingerprint);
   });
 
+  it("keeps source lineage independent from downstream candidate and identity authorities", () => {
+    const source = readFileSync("src/domain/intelligence/source-lineage.ts", "utf8");
+    for (const forbidden of ["candidateId", "mappingRevisionId", "canonicalAssetId", "canonicalIdentifier", "assetClass", "purpose"]) expect(source).not.toContain(forbidden);
+  });
+
   it("rejects duplicate claims and unsupported attempt status", () => {
     const first = authority("a");
     expect(() => createSourceLineage({ providerId: "p", datasetId: "d", datasetVersion: "v1", members: [first, first], recordedAt: t1 })).toThrow("M5_SOURCE_LINEAGE_CLAIM_INVALID");
@@ -72,5 +78,57 @@ describe("M5 source-lineage authority", () => {
     expect(sql).not.toMatch(/\binsert\s+into\s+public\./i);
     expect(sql).not.toMatch(/\b(update|delete)\s+public\./i);
     expect(sql).not.toContain("SECURITY DEFINER");
+  });
+
+  it("rejects corrupted stored parent and member rows", () => {
+    const value = authority("mapper");
+    const built = createSourceLineage({ providerId: "p", datasetId: "d", datasetVersion: "v1", members: [value], recordedAt: t1 });
+    const parentRow = {
+      contract_version: built.lineage.contractVersion,
+      source_lineage_id: built.lineage.sourceLineageId,
+      provider_id: built.lineage.providerId,
+      dataset_id: built.lineage.datasetId,
+      dataset_version: built.lineage.datasetVersion,
+      availability_claim_ids: built.lineage.availabilityClaimIds,
+      source_artifact_ids: built.lineage.sourceArtifactIds,
+      ingestion_attempt_ids: built.lineage.ingestionAttemptIds,
+      member_count: built.lineage.memberCount,
+      observed_at: built.lineage.observedAt,
+      effective_available_at: built.lineage.effectiveAvailableAt,
+      fingerprint: built.lineage.fingerprint,
+      recorded_at: built.lineage.recordedAt,
+    };
+    expect(Object.isFrozen(mapSourceLineageRow(parentRow))).toBe(true);
+    expect(() => mapSourceLineageRow({ ...parentRow, source_lineage_id: "forged" })).toThrow("M5_SOURCE_LINEAGE_STORED_FINGERPRINT_INVALID");
+    expect(() => mapSourceLineageRow({ ...parentRow, fingerprint: "b".repeat(64) })).toThrow("M5_SOURCE_LINEAGE_STORED_FINGERPRINT_INVALID");
+    expect(() => mapSourceLineageRow({ ...parentRow, contract_version: "m5-source-lineage/v999" })).toThrow("M5_SOURCE_LINEAGE_STORED_CONTRACT_INVALID");
+    const member = built.members[0];
+    const memberRow = {
+      source_lineage_id: member.sourceLineageId,
+      member_ordinal: member.memberOrdinal,
+      availability_claim_id: member.availabilityClaimId,
+      source_artifact_id: member.sourceArtifactId,
+      source_envelope_id: member.sourceEnvelopeId,
+      source_observation_id: member.sourceObservationId,
+      ingestion_attempt_id: member.ingestionAttemptId,
+      provider_id: member.providerId,
+      dataset_id: member.datasetId,
+      dataset_version: member.datasetVersion,
+      observed_at: member.observedAt,
+      effective_available_at: member.effectiveAvailableAt,
+      member_fingerprint: member.memberFingerprint,
+    };
+    expect(Object.isFrozen(mapSourceLineageMemberRow(memberRow))).toBe(true);
+    expect(() => mapSourceLineageMemberRow({ ...memberRow, member_fingerprint: "b".repeat(64) })).toThrow("M5_SOURCE_LINEAGE_MEMBER_FINGERPRINT_INVALID");
+    expect(() => mapSourceLineageMemberRow({ ...memberRow, member_ordinal: 1 })).toThrow("M5_SOURCE_LINEAGE_MEMBER_FINGERPRINT_INVALID");
+  });
+
+  it("keeps creation transaction-only and locks attempts before rereading lifecycle history", () => {
+    const source = readFileSync("src/infrastructure/postgres/source-lineage-repository.ts", "utf8");
+    expect(source).toMatch(/function createRepository\(client: TransactionSql\)/);
+    expect(source).not.toMatch(/export function createRepository/);
+    expect(source).toMatch(/for update`;/);
+    expect(source.indexOf("for update`;")).toBeLessThan(source.indexOf("from public.intelligence_ingestion_events"));
+    expect(source).toMatch(/client\.begin\(async transaction => work\(createRepository\(transaction\)\)\)/);
   });
 });

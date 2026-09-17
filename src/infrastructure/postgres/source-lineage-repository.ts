@@ -28,7 +28,7 @@ const jsonArray = (value: unknown, code: string): readonly string[] => { if (!Ar
 const json = (value: unknown): string => JSON.stringify(value);
 const sortedUnique = (values: readonly string[], code: string): readonly string[] => { const sorted = [...values].sort((a, b) => a.localeCompare(b)); if (sorted.length === 0 || sorted.some((value, index) => index > 0 && value === sorted[index - 1])) throw new Error(code); if (sorted.some((value, index) => value !== values[index])) throw new Error(code); return sorted; };
 
-function mapLineageRow(value: RawRow): SourceLineage {
+export function mapSourceLineageRow(value: RawRow): SourceLineage {
   if (value.contract_version !== SOURCE_LINEAGE_CONTRACT_VERSION) throw new Error("M5_SOURCE_LINEAGE_STORED_CONTRACT_INVALID");
   const record = Object.freeze({
     contractVersion: text(value.contract_version, "M5_SOURCE_LINEAGE_STORED_CONTRACT_INVALID") as typeof SOURCE_LINEAGE_CONTRACT_VERSION,
@@ -51,7 +51,7 @@ function mapLineageRow(value: RawRow): SourceLineage {
   return record;
 }
 
-function mapMemberRow(value: RawRow): SourceLineageMember {
+export function mapSourceLineageMemberRow(value: RawRow): SourceLineageMember {
   const record = Object.freeze({
     sourceLineageId: text(value.source_lineage_id, "M5_SOURCE_LINEAGE_MEMBER_LINEAGE_INVALID"),
     memberOrdinal: Number(value.member_ordinal),
@@ -146,23 +146,23 @@ function createRepository(client: TransactionSql): SourceLineageRepository {
       const inserted = await client`insert into public.intelligence_source_lineages (contract_version,source_lineage_id,provider_id,dataset_id,dataset_version,availability_claim_ids,source_artifact_ids,ingestion_attempt_ids,member_count,observed_at,effective_available_at,fingerprint,recorded_at) values (${built.lineage.contractVersion},${built.lineage.sourceLineageId},${built.lineage.providerId},${built.lineage.datasetId},${built.lineage.datasetVersion},${json(built.lineage.availabilityClaimIds)}::jsonb,${json(built.lineage.sourceArtifactIds)}::jsonb,${json(built.lineage.ingestionAttemptIds)}::jsonb,${built.lineage.memberCount},${built.lineage.observedAt},${built.lineage.effectiveAvailableAt},${built.lineage.fingerprint},${built.lineage.recordedAt}) on conflict (source_lineage_id) do nothing returning source_lineage_id`;
       const parentRows = await client`select * from public.intelligence_source_lineages where source_lineage_id=${built.lineage.sourceLineageId} for update`;
       if (parentRows.length !== 1) throw new Error("M5_SOURCE_LINEAGE_REPOSITORY_CONTRACT_VIOLATION");
-      const parent = mapLineageRow(row(parentRows[0]));
+      const parent = mapSourceLineageRow(row(parentRows[0]));
       if (inserted.length) {
         for (const member of built.members) await client`insert into public.intelligence_source_lineage_members (source_lineage_id,member_ordinal,availability_claim_id,source_artifact_id,source_envelope_id,source_observation_id,ingestion_attempt_id,provider_id,dataset_id,dataset_version,observed_at,effective_available_at,member_fingerprint) values (${member.sourceLineageId},${member.memberOrdinal},${member.availabilityClaimId},${member.sourceArtifactId},${member.sourceEnvelopeId},${member.sourceObservationId},${member.ingestionAttemptId},${member.providerId},${member.datasetId},${member.datasetVersion},${member.observedAt},${member.effectiveAvailableAt},${member.memberFingerprint}) on conflict do nothing`;
       }
       const memberRows = await client`select * from public.intelligence_source_lineage_members where source_lineage_id=${parent.sourceLineageId} order by member_ordinal asc`;
-      const members = Object.freeze(memberRows.map(value => mapMemberRow(row(value))));
+      const members = Object.freeze(memberRows.map(value => mapSourceLineageMemberRow(row(value))));
       if (parent.fingerprint !== built.lineage.fingerprint || JSON.stringify(parent.availabilityClaimIds) !== JSON.stringify(built.lineage.availabilityClaimIds)) throw new Error("M5_SOURCE_LINEAGE_CONFLICT");
       validateMembers(parent, members, built.members);
       return parent;
     },
     readById: async sourceLineageId => {
       const rows = await client`select * from public.intelligence_source_lineages where source_lineage_id=${sourceLineageId}`;
-      return rows.length === 0 ? undefined : mapLineageRow(row(rows[0]));
+      return rows.length === 0 ? undefined : mapSourceLineageRow(row(rows[0]));
     },
     readMembers: async sourceLineageId => {
       const rows = await client`select * from public.intelligence_source_lineage_members where source_lineage_id=${sourceLineageId} order by member_ordinal asc`;
-      return Object.freeze(rows.map(value => mapMemberRow(row(value))));
+      return Object.freeze(rows.map(value => mapSourceLineageMemberRow(row(value))));
     },
   };
 }
