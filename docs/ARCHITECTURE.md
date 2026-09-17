@@ -47,6 +47,13 @@ from fixture input, and in-memory
 repositories; PostgreSQL persistence and normalized downstream lineage belong to
 Slice 2. M3 privilege hardening is mandatory before any real provider-data import.
 
+Slice 2A adds seven server-only, append-only PostgreSQL provenance tables and
+explicit asynchronous persistence ports. A PostgreSQL unit of work locks an
+attempt parent while validating and appending lifecycle events; provider network
+calls, file reads and parsing remain outside the transaction. Slice 2B will add
+normalized downstream lineage to mapping and raw M5 evidence separately. M3
+privilege hardening remains a required step before real provider import.
+
 Server-only code authorizes the authenticated owner, validates input schemas/scales, resolves the account aggregate, enforces idempotency and state transitions, pins dataset/strategy/risk versions, evaluates risk, writes the ledger/audit data in one database transaction, and emits rebuildable projection work. Node.js is the default runtime for financial commands and jobs. Server Components serve account-scoped reads; small Client Components handle visual interaction only. Server actions are suitable for same-origin forms, while versioned route handlers are reserved for command APIs/integrations. Neither replaces authorization or transactional validation.
 
 ## 3. Database and authorization model
