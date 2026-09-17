@@ -102,9 +102,7 @@ async function authority(client: TransactionSql, claimId: string): Promise<Sourc
   const artifact = mapSourceArtifactRow({ source_artifact_id: value.source_artifact_id, contract_version: value.artifact_contract_version, provider_id: value.provider_id, dataset_id: value.dataset_id, dataset_version: value.dataset_version, provider_source_namespace: value.provider_source_namespace, provider_external_record_id: value.provider_external_record_id, provider_revision: value.provider_revision, payload_fingerprint: value.artifact_payload_fingerprint, source_artifact_fingerprint: value.source_artifact_fingerprint, recorded_at: value.artifact_recorded_at });
   if (envelope.payloadFingerprint !== artifact.payloadFingerprint) throw new Error("M5_SOURCE_LINEAGE_CLAIM_INVALID");
   const attempt = mapIngestionAttemptRow({ ingestion_attempt_id: value.attempt_id, ingestion_request_id: value.ingestion_request_id, contract_version: value.attempt_contract_version, attempt_number: value.attempt_number, adapter_version: value.adapter_version, parser_version: value.parser_version, execution_input: value.execution_input, attempt_fingerprint: value.attempt_fingerprint, started_at: value.started_at });
-  const eventRows = await client`select * from public.intelligence_ingestion_events where ingestion_attempt_id=${attempt.ingestionAttemptId} order by sequence asc, lifecycle_event_id asc`;
-  const lifecycle = Object.freeze(eventRows.map(value => mapLifecycleEventRow(row(value))));
-  return { claim, envelope, observation, artifact, attempt, lifecycleStatus: "COMPLETED", lifecycle };
+  return { claim, envelope, observation, artifact, attempt, lifecycleStatus: "COMPLETED", lifecycle: Object.freeze([]) };
 }
 
 function validateMembers(parent: SourceLineage, members: readonly SourceLineageMember[], expected?: readonly SourceLineageMember[]): void {
@@ -132,10 +130,17 @@ function createRepository(client: TransactionSql): SourceLineageRepository {
       for (const claimId of normalized) authorities.push(await authority(client, claimId));
       const attemptIds = [...new Set(authorities.map(value => value.attempt.ingestionAttemptId))].sort((a, b) => a.localeCompare(b));
       for (const attemptId of attemptIds) await client`select ingestion_attempt_id from public.intelligence_ingestion_attempts where ingestion_attempt_id=${attemptId} for update`;
+      const lifecycleByAttempt = new Map<string, readonly ReturnType<typeof mapLifecycleEventRow>[]>();
+      for (const attemptId of attemptIds) {
+        const eventRows = await client`select * from public.intelligence_ingestion_events where ingestion_attempt_id=${attemptId} order by sequence asc, lifecycle_event_id asc`;
+        lifecycleByAttempt.set(attemptId, Object.freeze(eventRows.map(value => mapLifecycleEventRow(row(value)))));
+      }
       const validatedAuthorities = authorities.map(value => {
-        const status = reduceIngestionLifecycle(value.lifecycle).status;
+        const lifecycle = lifecycleByAttempt.get(value.attempt.ingestionAttemptId);
+        if (!lifecycle) throw new Error("M5_SOURCE_LINEAGE_ATTEMPT_INVALID");
+        const status = reduceIngestionLifecycle(lifecycle).status;
         if (status !== "COMPLETED" && status !== "PARTIAL") throw new Error("M5_SOURCE_LINEAGE_ATTEMPT_NOT_TERMINAL");
-        return { ...value, lifecycleStatus: status } as SourceLineageMemberInput;
+        return { ...value, lifecycle, lifecycleStatus: status } as SourceLineageMemberInput;
       });
       const built = createSourceLineage({ providerId: scope.providerId, datasetId: scope.datasetId, datasetVersion: scope.datasetVersion, members: validatedAuthorities, recordedAt });
       const inserted = await client`insert into public.intelligence_source_lineages (contract_version,source_lineage_id,provider_id,dataset_id,dataset_version,availability_claim_ids,source_artifact_ids,ingestion_attempt_ids,member_count,observed_at,effective_available_at,fingerprint,recorded_at) values (${built.lineage.contractVersion},${built.lineage.sourceLineageId},${built.lineage.providerId},${built.lineage.datasetId},${built.lineage.datasetVersion},${json(built.lineage.availabilityClaimIds)}::jsonb,${json(built.lineage.sourceArtifactIds)}::jsonb,${json(built.lineage.ingestionAttemptIds)}::jsonb,${built.lineage.memberCount},${built.lineage.observedAt},${built.lineage.effectiveAvailableAt},${built.lineage.fingerprint},${built.lineage.recordedAt}) on conflict (source_lineage_id) do nothing returning source_lineage_id`;
