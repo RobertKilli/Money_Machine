@@ -112,3 +112,15 @@ tests/
   unit/ property/ integration/ e2e/ fixtures/
 docs/
 ```
+
+## 8. M5 source-lineage-backed mapping
+
+`SourceLineage` is immutable source-material authority. New
+`AssetMappingRevision` records carry a mandatory `sourceLineageId`; the
+mapping revision ID remains the logical provider-asset identity, while a
+lineage change under that identity is a fingerprint conflict. Source record
+IDs, payload fingerprint, observed time, and available time are derived from
+the validated lineage. Mapping creation accepts only COMPLETED ingestion
+attempts and is transaction-scoped. Provider namespace and asset identity are
+reviewed mapping inputs until a typed provider identity contract exists.
+Raw M5 binding remains a separate Slice 2B.3 concern.

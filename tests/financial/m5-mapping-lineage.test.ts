@@ -9,6 +9,7 @@ const base = (overrides: Record<string, unknown> = {}) => ({
   providerId: "provider-1",
   datasetId: "dataset-1",
   datasetVersion: "dataset-v1",
+  sourceLineageId: "lineage-1",
   providerAssetNamespace: "CHAIN:ETHEREUM",
   providerAssetId: "0xabc",
   canonicalAssetId: "asset-1",
@@ -24,8 +25,8 @@ const base = (overrides: Record<string, unknown> = {}) => ({
 });
 const mapping = (overrides: Record<string, unknown> = {}) => createAssetMappingRevision(base(overrides) as never);
 const lookup = (overrides: Record<string, unknown> = {}) => ({ providerId: "provider-1", datasetId: "dataset-1", datasetVersion: "dataset-v1", providerAssetNamespace: "CHAIN:ETHEREUM", providerAssetId: "0xabc", asOf: "2026-02-01T00:00:00.000Z", ...overrides });
-const readOnly = (readCandidatesAt: AssetMappingRevisionRepository["readCandidatesAt"]): AssetMappingRevisionRepository => ({ save: async () => undefined, readCandidatesAt });
-const row = (value: AssetMappingRevision) => ({ mapping_revision_id: value.mappingRevisionId, mapping_revision_version: value.mappingRevisionVersion, provider_id: value.providerId, dataset_id: value.datasetId, dataset_version: value.datasetVersion, provider_asset_namespace: value.providerAssetNamespace, provider_asset_id: value.providerAssetId, canonical_asset_id: value.canonicalAssetId, canonical_identifier: value.canonicalIdentifier, asset_class: value.assetClass, valid_from: value.validFrom, valid_to: value.validTo ?? null, observed_at: value.observedAt, available_at: value.availableAt, source_record_ids: value.sourceRecordIds, payload_fingerprint: value.payloadFingerprint, fingerprint: value.fingerprint, recorded_at: value.recordedAt });
+const readOnly = (readCandidatesAt: AssetMappingRevisionRepository["readCandidatesAt"]): AssetMappingRevisionRepository => ({ save: async mapping => mapping, readCandidatesAt });
+const row = (value: AssetMappingRevision) => ({ mapping_revision_id: value.mappingRevisionId, mapping_revision_version: value.mappingRevisionVersion, provider_id: value.providerId, dataset_id: value.datasetId, dataset_version: value.datasetVersion, source_lineage_id: value.sourceLineageId, provider_asset_namespace: value.providerAssetNamespace, provider_asset_id: value.providerAssetId, canonical_asset_id: value.canonicalAssetId, canonical_identifier: value.canonicalIdentifier, asset_class: value.assetClass, valid_from: value.validFrom, valid_to: value.validTo ?? null, observed_at: value.observedAt, available_at: value.availableAt, source_record_ids: value.sourceRecordIds, payload_fingerprint: value.payloadFingerprint, fingerprint: value.fingerprint, recorded_at: value.recordedAt });
 
 describe("M5 revision-specific asset mapping", () => {
   it("creates deterministic IDs and fingerprints independent of source ordering or recorded time", () => {
@@ -41,6 +42,13 @@ describe("M5 revision-specific asset mapping", () => {
     for (const change of [{ canonicalAssetId: "asset-2" }, { validTo: "2026-03-01T00:00:00.000Z" }, { availableAt: "2026-01-01T00:02:00.000Z" }, { payloadFingerprint: "payload-2" }, { mappingRevisionVersion: "mapping/v2" }]) {
       expect(mapping(change).fingerprint).not.toBe(first.fingerprint);
     }
+  });
+
+  it("binds source lineage in the fingerprint without changing logical mapping identity", () => {
+    const first = mapping({ sourceLineageId: "lineage-1" });
+    const second = mapping({ sourceLineageId: "lineage-2" });
+    expect(first.mappingRevisionId).toBe(second.mappingRevisionId);
+    expect(first.fingerprint).not.toBe(second.fingerprint);
   });
 
   it("rejects invalid intervals, UNKNOWN, ticker-only identity, and non-canonical timestamps", () => {
@@ -98,8 +106,9 @@ describe("M5 revision-specific asset mapping", () => {
     const fake = async (strings: TemplateStringsArray, ..._values: unknown[]) => {
       void _values;
       const sql = strings.join("?"); calls.push(sql);
-      if (sql.includes("select mapping_revision_id")) return [];
+      if (sql.includes("select mapping_revision_id from")) return [];
       if (sql.includes("insert into")) return [{ mapping_revision_id: value.mappingRevisionId }];
+      if (sql.includes("select * from public.intelligence_asset_mapping_revisions")) return [row(value)];
       return [];
     };
     const repository = createAssetMappingRevisionRepository(fake as never);
@@ -125,6 +134,26 @@ describe("M5 revision-specific asset mapping", () => {
     const value = mapping();
     expect(mapAssetMappingRevisionRow(row(value))).toEqual(value);
     expect(() => mapAssetMappingRevisionRow({ ...row(value), fingerprint: "wrong" })).toThrow("M5_MAPPING_FINGERPRINT_MISMATCH");
+  });
+
+  it("fails closed on every mapping/source-lineage read binding", async () => {
+    const value = mapping();
+    const lineage = { sourceLineageId: value.sourceLineageId, providerId: value.providerId, datasetId: value.datasetId, datasetVersion: value.datasetVersion, fingerprint: value.payloadFingerprint, sourceArtifactIds: value.sourceRecordIds, observedAt: value.observedAt, effectiveAvailableAt: value.availableAt };
+    const cases = [
+      [{ ...row(value), source_lineage_id: "" }, "M5_MAPPING_ROW_SOURCE_LINEAGE_INVALID"],
+      [row(value), "M5_MAPPING_SOURCE_LINEAGE_NOT_FOUND", undefined],
+      [row(value), "M5_MAPPING_PAYLOAD_FINGERPRINT_MISMATCH", { ...lineage, fingerprint: "x" }],
+      [row(value), "M5_MAPPING_SOURCE_RECORD_PROJECTION_MISMATCH", { ...lineage, sourceArtifactIds: ["other"] }],
+      [row(value), "M5_MAPPING_TEMPORAL_MISMATCH", { ...lineage, observedAt: "2027-01-01T00:00:00.000Z" }],
+      [row(value), "M5_MAPPING_TEMPORAL_MISMATCH", { ...lineage, effectiveAvailableAt: "2027-01-01T00:00:00.000Z" }],
+      [row(value), "M5_MAPPING_SOURCE_LINEAGE_SCOPE_MISMATCH", { ...lineage, providerId: "other" }],
+    ] as const;
+    for (const [stored, code, authority] of cases) {
+      const client = async (strings: TemplateStringsArray) => strings.join("?").includes("select * from") ? [stored] : [];
+      await expect(createAssetMappingRevisionRepository(client as never, { readById: async () => authority as never }).readById!(value.mappingRevisionId)).rejects.toThrow(code);
+    }
+    const client = async (strings: TemplateStringsArray) => strings.join("?").includes("select * from") ? [row(value)] : [];
+    await expect(createAssetMappingRevisionRepository(client as never, { readById: async () => lineage as never }).readById!(value.mappingRevisionId)).resolves.toEqual(value);
   });
 });
 

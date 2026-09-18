@@ -8,6 +8,7 @@ export interface AssetMappingRevision {
   readonly providerId: string;
   readonly datasetId: string;
   readonly datasetVersion: string;
+  readonly sourceLineageId: string;
   readonly providerAssetNamespace: string;
   readonly providerAssetId: string;
   readonly canonicalAssetId: string;
@@ -75,6 +76,7 @@ function material(input: AssetMappingRevisionInput): Omit<AssetMappingRevision, 
     providerId: nonBlank(input.providerId, "M5_MAPPING_PROVIDER_INVALID"),
     datasetId: nonBlank(input.datasetId, "M5_MAPPING_DATASET_INVALID"),
     datasetVersion: nonBlank(input.datasetVersion, "M5_MAPPING_DATASET_VERSION_INVALID"),
+    sourceLineageId: nonBlank(input.sourceLineageId, "M5_MAPPING_SOURCE_LINEAGE_ID_INVALID"),
     providerAssetNamespace,
     providerAssetId: nonBlank(input.providerAssetId, "M5_MAPPING_PROVIDER_ASSET_ID_INVALID"),
     canonicalAssetId: nonBlank(input.canonicalAssetId, "M5_MAPPING_CANONICAL_ASSET_INVALID"),
