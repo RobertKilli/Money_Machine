@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRawEligibilityEvidenceFromMapping } from "@/application/intelligence/create-raw-eligibility-evidence-from-mapping";
 import { createAssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
+import { createRawEligibilityEvidenceReadRepository } from "@/infrastructure/postgres/eligibility-evidence-repository";
 
 const t = "2026-01-01T00:00:00.000Z";
 const a = "2026-01-01T00:01:00.000Z";
@@ -11,6 +12,11 @@ const mapping = createAssetMappingRevision({ mappingRevisionVersion: "mapping/v1
 const input = (overrides: Record<string, unknown> = {}) => ({ evidenceId: "evidence-1", mappingRevisionId: mapping.mappingRevisionId, candidateId: "candidate-1", family: "VENUE" as const, payload: { venueId: "venue-1", eligibilityState: "ELIGIBLE" as const }, ...overrides });
 
 describe("M5 raw source-lineage creation", () => {
+  it("keeps autocommit provisioning read-only", () => {
+    const reader = createRawEligibilityEvidenceReadRepository(({} as never));
+    expect(typeof reader.readAt).toBe("function");
+    expect("save" in reader).toBe(false);
+  });
   it("derives all shared authority fields and saves once", async () => {
     const save = vi.fn(async (record) => record);
     const result = await createRawEligibilityEvidenceFromMapping({ unitOfWork: { withTransaction: async work => work({ mappingRepository: { readById: async () => mapping } as never, sourceLineageRepository: { validateForRawEvidenceCreation: async () => lineage } as never, rawEvidenceRepository: { save } }) }, value: input() });

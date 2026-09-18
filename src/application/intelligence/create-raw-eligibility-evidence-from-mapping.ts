@@ -38,7 +38,6 @@ export async function createRawEligibilityEvidenceFromMapping(input: Readonly<{ 
     else if (value.family === "REFERENCE_CONTRACT") record = createContractVerificationEligibilityEvidence({ ...shared, ...value.payload } as ContractVerificationEligibilityEvidenceInput);
     else if (value.family === "VENUE") record = createVenueEligibilityEvidence({ ...shared, ...value.payload } as VenueEligibilityEvidenceInput);
     else record = createSuspiciousEligibilityEvidence({ ...shared, ...value.payload } as SuspiciousEligibilityEvidenceInput);
-    await rawEvidenceRepository.save(record);
-    return record;
+    return rawEvidenceRepository.save(record);
   });
 }

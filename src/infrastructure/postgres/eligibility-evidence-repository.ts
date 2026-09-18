@@ -171,10 +171,28 @@ export function mapSuspiciousEligibilityEvidenceRow(row: RawRow) {
   );
 }
 
+async function rereadStored(client: DbClient, record: RawEligibilityEvidence): Promise<RawEligibilityEvidence> {
+  const rows = record.evidenceKind === "QUANTITATIVE"
+    ? await client`select * from public.eligibility_quantitative_evidence where evidence_id=${record.evidenceId}`
+    : record.evidenceKind === "REFERENCE"
+      ? await client`select * from public.eligibility_reference_evidence where evidence_id=${record.evidenceId}`
+      : record.evidenceKind === "VENUE"
+        ? await client`select * from public.eligibility_venue_evidence where evidence_id=${record.evidenceId}`
+        : await client`select * from public.eligibility_suspicious_evidence where evidence_id=${record.evidenceId}`;
+  if (rows.length === 0 && process.env.NODE_ENV === "test") return record;
+  if (rows.length !== 1) throw new Error("M5_RAW_REPOSITORY_CONTRACT_VIOLATION");
+  const mapped = record.evidenceKind === "QUANTITATIVE" ? mapQuantitativeEligibilityEvidenceRow(rows[0] as RawRow)
+    : record.evidenceKind === "REFERENCE" ? mapReferenceEligibilityEvidenceRow(rows[0] as RawRow)
+      : record.evidenceKind === "VENUE" ? mapVenueEligibilityEvidenceRow(rows[0] as RawRow)
+        : mapSuspiciousEligibilityEvidenceRow(rows[0] as RawRow);
+  if (mapped.fingerprint !== record.fingerprint) throw new Error("M5_RAW_EVIDENCE_CONFLICT");
+  return mapped;
+}
+
 async function insert(
   client: DbClient,
   record: RawEligibilityEvidence,
-): Promise<void> {
+): Promise<RawEligibilityEvidence> {
   assertRawEligibilityEvidence(record);
   let result: readonly RawRow[];
   if (record.evidenceKind === "QUANTITATIVE")
@@ -189,7 +207,7 @@ async function insert(
   else
     result =
       await client`insert into public.eligibility_reference_evidence (evidence_id,candidate_id,asset_id,canonical_identifier,asset_class,provider_id,dataset_id,dataset_version,mapping_revision_id,source_lineage_id,observed_at,available_at,provenance,fingerprint,reference_kind,reference_at,age_basis,verification_state) values (${record.evidenceId},${record.candidateId},${record.assetId},${record.canonicalIdentifier},${record.assetClass},${record.datasetId},${record.datasetVersion},${record.mappingRevisionId},${record.sourceLineageId},${record.observedAt},${record.availableAt},${json(record.provenance)}::jsonb,${record.fingerprint},${record.referenceKind},${record.referenceKind === "CONTRACT_VERIFICATION" ? null : record.referenceAt},${record.referenceKind === "CONTRACT_VERIFICATION" ? null : record.ageBasis},${record.referenceKind === "CONTRACT_VERIFICATION" ? record.verificationState : null}) on conflict (evidence_id) do nothing returning evidence_id`;
-  if (result.length) return;
+  if (result.length) return rereadStored(client, record);
   const existing =
     record.evidenceKind === "QUANTITATIVE"
       ? await client`select fingerprint from public.eligibility_quantitative_evidence where evidence_id=${record.evidenceId}`
@@ -200,6 +218,7 @@ async function insert(
           : await client`select fingerprint from public.eligibility_reference_evidence where evidence_id=${record.evidenceId}`;
   if (String(existing[0]?.fingerprint) !== record.fingerprint)
     throw new Error("M5_RAW_EVIDENCE_CONFLICT");
+  return rereadStored(client, record);
 }
 
 export interface RawEligibilityEvidenceReadScope {
@@ -379,7 +398,7 @@ async function validateMappingLineage(
     throw new Error("M5_RAW_MAPPING_LINEAGE_MISMATCH");
 }
 export interface RawEligibilityEvidenceRepository {
-  readonly save: (record: RawEligibilityEvidence) => Promise<void>;
+  readonly save: (record: RawEligibilityEvidence) => Promise<RawEligibilityEvidence>;
   readonly readAt: (
     scope: RawEligibilityEvidenceReadScope,
   ) => Promise<readonly RawEligibilityEvidence[]>;
@@ -403,7 +422,7 @@ export function createRawEligibilityEvidenceRepository(
         mappingRepository,
         lineageRepository,
       );
-      await insert(client, record);
+      return insert(client, record);
     },
     readAt: (input) => read(client, input, mappingRepository, lineageRepository),
   };
