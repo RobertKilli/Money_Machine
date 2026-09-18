@@ -54,6 +54,12 @@ calls, file reads and parsing remain outside the transaction. Slice 2B will add
 normalized downstream lineage to mapping and raw M5 evidence separately. M3
 privilege hardening remains a required step before real provider import.
 
+M3 registry and evidence tables are server-only: RLS remains defense-in-depth,
+and `anon`/`authenticated` have no direct table privileges. This hardening does
+not authorize real provider import; provider approval, legal review, typed
+provider identity, and the remaining M5 temporal/derivation contracts remain
+required before production data is introduced.
+
 Slice 2B.1 adds source-material lineage authority only. A lineage parent seals
 one normalized, sorted, non-empty availability-claim list; duplicate claim IDs
 are rejected rather than silently deduplicated. Immutable member rows
