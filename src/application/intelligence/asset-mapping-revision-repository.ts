@@ -1,4 +1,5 @@
 import type { AssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
+import type { SourceLineage } from "@/domain/intelligence/source-lineage";
 
 export interface AssetMappingRevisionLookup {
   readonly providerId: string;
@@ -10,7 +11,11 @@ export interface AssetMappingRevisionLookup {
 }
 
 export interface AssetMappingRevisionRepository {
-  readonly save: (mapping: AssetMappingRevision) => Promise<void>;
+  readonly save: (mapping: AssetMappingRevision) => Promise<AssetMappingRevision>;
   readonly readCandidatesAt: (lookup: AssetMappingRevisionLookup) => Promise<readonly AssetMappingRevision[]>;
   readonly readById?: (mappingRevisionId: string) => Promise<AssetMappingRevision | undefined>;
+}
+
+export interface MappingSourceLineageReader {
+  readonly readById: (sourceLineageId: string) => Promise<SourceLineage | undefined>;
 }
