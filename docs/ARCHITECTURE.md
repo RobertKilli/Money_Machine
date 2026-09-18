@@ -123,4 +123,12 @@ IDs, payload fingerprint, observed time, and available time are derived from
 the validated lineage. Mapping creation accepts only COMPLETED ingestion
 attempts and is transaction-scoped. Provider namespace and asset identity are
 reviewed mapping inputs until a typed provider identity contract exists.
-Raw M5 binding remains a separate Slice 2B.3 concern.
+Raw M5 evidence now binds to the same mapping-derived `sourceLineageId`.
+Raw provenance is derived as `M5_SOURCE_LINEAGE`, the lineage artifact-ID
+projection, the lineage fingerprint, and the lineage observed/available
+timestamps. Raw creation is COMPLETED-only under the current mapping
+contract; provisional PARTIAL evidence requires a future staging contract.
+The extended database foreign key proves mapping revision, source lineage,
+provider/dataset scope, and canonical identity together. Assembly continues
+to select exact manifest evidence IDs and never selects a lineage.
+Provider import and real-data population remain unimplemented.

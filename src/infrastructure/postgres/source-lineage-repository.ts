@@ -188,6 +188,27 @@ function createRepository(client: TransactionSql): SourceLineageRepository {
       }
       return parent;
     },
+    validateForRawEvidenceCreation: async sourceLineageId => {
+      const rows = await client`select * from public.intelligence_source_lineages where source_lineage_id=${sourceLineageId} for update`;
+      if (rows.length !== 1) throw new Error("M5_RAW_SOURCE_LINEAGE_NOT_FOUND");
+      const parent = mapSourceLineageRow(row(rows[0]));
+      const memberRows = await client`select * from public.intelligence_source_lineage_members where source_lineage_id=${sourceLineageId} order by member_ordinal asc`;
+      const members = Object.freeze(memberRows.map(value => mapSourceLineageMemberRow(row(value))));
+      try { validateMembers(parent, members); } catch { throw new Error("M5_RAW_SOURCE_LINEAGE_SEAL_INVALID"); }
+      const attemptIds = [...new Set(parent.ingestionAttemptIds)].sort((a, b) => a.localeCompare(b));
+      for (const attemptId of attemptIds) {
+        const locked = await client`select ingestion_attempt_id from public.intelligence_ingestion_attempts where ingestion_attempt_id=${attemptId} for update`;
+        if (locked.length !== 1) throw new Error("M5_RAW_SOURCE_LINEAGE_ATTEMPT_OPEN");
+        const events = await client`select * from public.intelligence_ingestion_events where ingestion_attempt_id=${attemptId} order by sequence asc, lifecycle_event_id asc`;
+        let status: string;
+        try { status = reduceIngestionLifecycle(Object.freeze(events.map(value => mapLifecycleEventRow(row(value))))).status; } catch { throw new Error("M5_RAW_SOURCE_LINEAGE_LIFECYCLE_INVALID"); }
+        if (status === "PARTIAL") throw new Error("M5_RAW_SOURCE_LINEAGE_ATTEMPT_PARTIAL");
+        if (status === "FAILED") throw new Error("M5_RAW_SOURCE_LINEAGE_ATTEMPT_FAILED");
+        if (status === "CANCELLED") throw new Error("M5_RAW_SOURCE_LINEAGE_ATTEMPT_CANCELLED");
+        if (status !== "COMPLETED") throw new Error("M5_RAW_SOURCE_LINEAGE_ATTEMPT_OPEN");
+      }
+      return parent;
+    },
   };
 }
 

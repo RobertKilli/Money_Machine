@@ -16,6 +16,8 @@ export interface SourceLineageRepository {
   readonly readMembers: (sourceLineageId: string) => Promise<readonly SourceLineageMember[]>;
   /** Mapping-specific authority check; requires every referenced attempt to be COMPLETED. */
   readonly validateForMappingCreation?: (sourceLineageId: string) => Promise<SourceLineage>;
+  /** Raw-evidence authority check; this architecture is COMPLETED-only. */
+  readonly validateForRawEvidenceCreation?: (sourceLineageId: string) => Promise<SourceLineage>;
 }
 
 export interface SourceLineageUnitOfWork {
