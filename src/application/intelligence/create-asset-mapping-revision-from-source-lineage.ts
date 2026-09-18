@@ -18,16 +18,23 @@ export type AssetMappingFromLineageInput = Readonly<{
   recordedAt: string;
 }>;
 
+export interface AssetMappingSourceLineageUnitOfWork {
+  readonly withTransaction: <T>(work: (repositories: {
+    readonly sourceLineageRepository: SourceLineageRepository;
+    readonly mappingRepository: AssetMappingRevisionRepository;
+  }) => Promise<T>) => Promise<T>;
+}
+
 /** Creates a mapping from one exact, already sealed source-lineage authority. */
 export async function createAssetMappingRevisionFromSourceLineage(input: {
-  readonly sourceLineageRepository: SourceLineageRepository;
-  readonly mappingRepository: AssetMappingRevisionRepository;
+  readonly unitOfWork: AssetMappingSourceLineageUnitOfWork;
   readonly value: AssetMappingFromLineageInput;
 }): Promise<AssetMappingRevision> {
+ return input.unitOfWork.withTransaction(async ({ sourceLineageRepository, mappingRepository }) => {
   const value = input.value;
-  const lineage = input.sourceLineageRepository.validateForMappingCreation
-    ? await input.sourceLineageRepository.validateForMappingCreation(value.sourceLineageId)
-    : await input.sourceLineageRepository.readById(value.sourceLineageId);
+  const lineage = sourceLineageRepository.validateForMappingCreation
+    ? await sourceLineageRepository.validateForMappingCreation(value.sourceLineageId)
+    : await sourceLineageRepository.readById(value.sourceLineageId);
   if (!lineage) throw new Error("M5_MAPPING_SOURCE_LINEAGE_NOT_FOUND");
   if (lineage.providerId !== value.providerId || lineage.datasetId !== value.datasetId || lineage.datasetVersion !== value.datasetVersion) throw new Error("M5_MAPPING_SOURCE_LINEAGE_SCOPE_MISMATCH");
 
@@ -42,5 +49,6 @@ export async function createAssetMappingRevisionFromSourceLineage(input: {
     observedAt: lineage.observedAt,
     availableAt: lineage.effectiveAvailableAt,
   });
-  return input.mappingRepository.save(mapping);
+  return mappingRepository.save(mapping);
+ });
 }

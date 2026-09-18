@@ -2,6 +2,8 @@ import "server-only";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { assertAssetMappingRevision, createAssetMappingRevision, type AssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
 import type { AssetMappingRevisionLookup, AssetMappingRevisionRepository, MappingSourceLineageReader } from "@/application/intelligence/asset-mapping-revision-repository";
+import type { AssetMappingSourceLineageUnitOfWork } from "@/application/intelligence/create-asset-mapping-revision-from-source-lineage";
+import { createSourceLineageRepository } from "@/infrastructure/postgres/source-lineage-repository";
 
 type DbClient = Sql | TransactionSql;
 type RawRow = Record<string, unknown>;
@@ -119,6 +121,17 @@ async function readById(client: DbClient, mappingRevisionId: string, lineageRead
 
 export function createAssetMappingRevisionRepository(client: DbClient, lineageReader?: MappingSourceLineageReader): AssetMappingRevisionRepository {
   return { save: mapping => save(client, mapping, lineageReader), readCandidatesAt: lookup => readCandidatesAt(client, lookup, lineageReader), readById: mappingRevisionId => readById(client, mappingRevisionId, lineageReader) };
+}
+
+/** Shared transaction boundary for mapping creation and lineage validation. */
+export function createAssetMappingSourceLineageUnitOfWork(client: Sql): AssetMappingSourceLineageUnitOfWork {
+  return {
+    withTransaction: <T>(work: (repositories: { readonly sourceLineageRepository: ReturnType<typeof createSourceLineageRepository>; readonly mappingRepository: AssetMappingRevisionRepository }) => Promise<T>) => client.begin(async transaction => {
+      const sourceLineageRepository = createSourceLineageRepository(transaction);
+      const mappingRepository = createAssetMappingRevisionRepository(transaction, sourceLineageRepository);
+      return work({ sourceLineageRepository, mappingRepository });
+    }) as unknown as Promise<T>,
+  };
 }
 
 export async function saveAssetMappingRevision(mapping: AssetMappingRevision): Promise<void> {

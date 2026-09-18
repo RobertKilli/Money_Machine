@@ -191,6 +191,10 @@ function createRepository(client: TransactionSql): SourceLineageRepository {
   };
 }
 
+export function createSourceLineageRepository(client: TransactionSql): SourceLineageRepository {
+  return createRepository(client);
+}
+
 export function createSourceLineageUnitOfWork(client: Sql): SourceLineageUnitOfWork {
   return { withTransaction: <T>(work: (repository: SourceLineageRepository) => Promise<T>) => client.begin(async transaction => work(createRepository(transaction))) as unknown as Promise<T> };
 }
@@ -199,5 +203,5 @@ export async function withSourceLineageUnitOfWork<T>(work: (repository: SourceLi
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_UNCONFIGURED");
   const sql = postgres(url, { max: 1, prepare: true, ssl: "require" });
-  try { return await sql.begin(async transaction => work(createRepository(transaction))) as unknown as T; } finally { await sql.end({ timeout: 5 }); }
+  try { return await sql.begin(async transaction => work(createSourceLineageRepository(transaction))) as unknown as T; } finally { await sql.end({ timeout: 5 }); }
 }
