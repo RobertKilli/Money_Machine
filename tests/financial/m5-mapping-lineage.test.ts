@@ -135,6 +135,26 @@ describe("M5 revision-specific asset mapping", () => {
     expect(mapAssetMappingRevisionRow(row(value))).toEqual(value);
     expect(() => mapAssetMappingRevisionRow({ ...row(value), fingerprint: "wrong" })).toThrow("M5_MAPPING_FINGERPRINT_MISMATCH");
   });
+
+  it("fails closed on every mapping/source-lineage read binding", async () => {
+    const value = mapping();
+    const lineage = { sourceLineageId: value.sourceLineageId, providerId: value.providerId, datasetId: value.datasetId, datasetVersion: value.datasetVersion, fingerprint: value.payloadFingerprint, sourceArtifactIds: value.sourceRecordIds, observedAt: value.observedAt, effectiveAvailableAt: value.availableAt };
+    const cases = [
+      [{ ...row(value), source_lineage_id: "" }, "M5_MAPPING_ROW_SOURCE_LINEAGE_INVALID"],
+      [row(value), "M5_MAPPING_SOURCE_LINEAGE_NOT_FOUND", undefined],
+      [row(value), "M5_MAPPING_PAYLOAD_FINGERPRINT_MISMATCH", { ...lineage, fingerprint: "x" }],
+      [row(value), "M5_MAPPING_SOURCE_RECORD_PROJECTION_MISMATCH", { ...lineage, sourceArtifactIds: ["other"] }],
+      [row(value), "M5_MAPPING_TEMPORAL_MISMATCH", { ...lineage, observedAt: "2027-01-01T00:00:00.000Z" }],
+      [row(value), "M5_MAPPING_TEMPORAL_MISMATCH", { ...lineage, effectiveAvailableAt: "2027-01-01T00:00:00.000Z" }],
+      [row(value), "M5_MAPPING_SOURCE_LINEAGE_SCOPE_MISMATCH", { ...lineage, providerId: "other" }],
+    ] as const;
+    for (const [stored, code, authority] of cases) {
+      const client = async (strings: TemplateStringsArray) => strings.join("?").includes("select * from") ? [stored] : [];
+      await expect(createAssetMappingRevisionRepository(client as never, { readById: async () => authority as never }).readById!(value.mappingRevisionId)).rejects.toThrow(code);
+    }
+    const client = async (strings: TemplateStringsArray) => strings.join("?").includes("select * from") ? [row(value)] : [];
+    await expect(createAssetMappingRevisionRepository(client as never, { readById: async () => lineage as never }).readById!(value.mappingRevisionId)).resolves.toEqual(value);
+  });
 });
 
 describe("M5 mapping migration safety", () => {
