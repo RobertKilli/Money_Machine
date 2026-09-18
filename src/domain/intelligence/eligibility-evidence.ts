@@ -24,6 +24,7 @@ export interface RawEligibilityEvidenceEnvelope {
   readonly datasetId: string;
   readonly datasetVersion: string;
   readonly mappingRevisionId: string;
+  readonly sourceLineageId: string;
   readonly observedAt: string;
   readonly availableAt: string;
   readonly provenance: EligibilityEvidenceProvenance;
@@ -87,6 +88,7 @@ const AGE_REFERENCE_KINDS = new Set<AgeReferenceEligibilityEvidence["referenceKi
 const CONTRACT_STATES = new Set<ContractVerificationState>(["VERIFIED", "UNVERIFIED", "UNKNOWN"]);
 const VENUE_STATES = new Set<VenueEligibilityState>(["ELIGIBLE", "INELIGIBLE", "UNKNOWN"]);
 const SEVERITIES = new Set<SuspiciousEvidenceSeverity>(["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]);
+const SHA256 = /^[a-f0-9]{64}$/;
 
 function nonBlank(value: string, code: string): void { if (typeof value !== "string" || value.trim() === "") throw new Error(code); }
 function timestamp(value: string, code: string): void { if (!UTC_TIMESTAMP.test(value) || Number.isNaN(Date.parse(value)) || new Date(value).toISOString() !== value) throw new Error(code); }
@@ -96,14 +98,14 @@ function digest(value: unknown): string { return createHash("sha256").update(JSO
 function frozen<T extends object>(value: T): Readonly<T> { return Object.freeze(value); }
 
 function normalizedEnvelope(input: EnvelopeInput): Omit<RawEligibilityEvidenceEnvelope, "fingerprint"> {
-  for (const [field, value] of Object.entries({ evidenceId: input.evidenceId, candidateId: input.candidateId, assetId: input.assetId, canonicalIdentifier: input.canonicalIdentifier, assetClass: input.assetClass, providerId: input.providerId, datasetId: input.datasetId, datasetVersion: input.datasetVersion, mappingRevisionId: input.mappingRevisionId })) nonBlank(value, `M5_RAW_${field.toUpperCase()}_INVALID`);
+  for (const [field, value] of Object.entries({ evidenceId: input.evidenceId, candidateId: input.candidateId, assetId: input.assetId, canonicalIdentifier: input.canonicalIdentifier, assetClass: input.assetClass, providerId: input.providerId, datasetId: input.datasetId, datasetVersion: input.datasetVersion, mappingRevisionId: input.mappingRevisionId, sourceLineageId: input.sourceLineageId })) nonBlank(value, `M5_RAW_${field.toUpperCase()}_INVALID`);
   if (input.assetClass.trim() === "UNKNOWN") throw new Error("M5_RAW_ASSET_CLASS_UNKNOWN");
   timestamp(input.observedAt, "M5_RAW_OBSERVED_AT_INVALID");
   timestamp(input.availableAt, "M5_RAW_AVAILABLE_AT_INVALID");
   if (input.observedAt > input.availableAt) throw new Error("M5_RAW_TEMPORAL_ORDER_INVALID");
-  nonBlank(input.provenance.sourceType, "M5_RAW_PROVENANCE_INVALID");
-  nonBlank(input.provenance.payloadFingerprint, "M5_RAW_PROVENANCE_INVALID");
-  return frozen({ evidenceId: input.evidenceId.trim(), candidateId: input.candidateId.trim(), assetId: input.assetId.trim(), canonicalIdentifier: input.canonicalIdentifier.trim(), assetClass: input.assetClass.trim(), providerId: input.providerId.trim(), datasetId: input.datasetId.trim(), datasetVersion: input.datasetVersion.trim(), mappingRevisionId: input.mappingRevisionId.trim(), observedAt: input.observedAt, availableAt: input.availableAt, provenance: frozen({ sourceType: input.provenance.sourceType.trim(), sourceRecordIds: normalizedValues(input.provenance.sourceRecordIds, "M5_RAW_PROVENANCE_INVALID"), payloadFingerprint: input.provenance.payloadFingerprint.trim() }) });
+  if (input.provenance.sourceType !== "M5_SOURCE_LINEAGE") throw new Error("M5_RAW_SOURCE_TYPE_INVALID");
+  if (!SHA256.test(input.provenance.payloadFingerprint)) throw new Error("M5_RAW_PAYLOAD_FINGERPRINT_INVALID");
+  return frozen({ evidenceId: input.evidenceId.trim(), candidateId: input.candidateId.trim(), assetId: input.assetId.trim(), canonicalIdentifier: input.canonicalIdentifier.trim(), assetClass: input.assetClass.trim(), providerId: input.providerId.trim(), datasetId: input.datasetId.trim(), datasetVersion: input.datasetVersion.trim(), mappingRevisionId: input.mappingRevisionId.trim(), sourceLineageId: input.sourceLineageId.trim(), observedAt: input.observedAt, availableAt: input.availableAt, provenance: frozen({ sourceType: input.provenance.sourceType, sourceRecordIds: normalizedValues(input.provenance.sourceRecordIds, "M5_RAW_PROVENANCE_INVALID"), payloadFingerprint: input.provenance.payloadFingerprint }) });
 }
 
 function normalizedWindow(window: QuantitativeEligibilityEvidenceInput["window"]): Readonly<{ startAt: string; endAt: string }> | undefined {

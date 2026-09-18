@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { assertRawEligibilityEvidence, createAgeReferenceEligibilityEvidence, createContractVerificationEligibilityEvidence, createQuantitativeEligibilityEvidence, createSuspiciousEligibilityEvidence, createVenueEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
 
-const base = (overrides: Record<string, unknown> = {}) => ({ evidenceId: "evidence-1", candidateId: "candidate-1", assetId: "asset-1", canonicalIdentifier: "asset:one", assetClass: "CRYPTO", providerId: "provider-1", datasetId: "dataset-1", datasetVersion: "v1", mappingRevisionId: "mapping-1", observedAt: "2026-09-13T10:00:00.000Z", availableAt: "2026-09-13T10:05:00.000Z", provenance: { sourceType: "PROVIDER", sourceRecordIds: ["record-b", "record-a"], payloadFingerprint: "payload-1" }, ...overrides });
+const base = (overrides: Record<string, unknown> = {}) => ({ evidenceId: "evidence-1", candidateId: "candidate-1", assetId: "asset-1", canonicalIdentifier: "asset:one", assetClass: "CRYPTO", providerId: "provider-1", datasetId: "dataset-1", datasetVersion: "v1", mappingRevisionId: "mapping-1", sourceLineageId: "lineage-1", observedAt: "2026-09-13T10:00:00.000Z", availableAt: "2026-09-13T10:05:00.000Z", provenance: { sourceType: "M5_SOURCE_LINEAGE", sourceRecordIds: ["record-b", "record-a"], payloadFingerprint: "a".repeat(64) }, ...overrides });
 const quantitative = (metricKind: "LIQUIDITY" | "VOLUME" | "MARKET_CAP" | "TOP10_CONCENTRATION" | "SINGLE_CONCENTRATION" | "VOLATILITY" | "HISTORY_SPAN", overrides: Record<string, unknown> = {}) => createQuantitativeEligibilityEvidence(base({ metricKind, valueAtoms: 1000n, scale: 0, unit: "MINOR", semanticsVersion: "metric/v1", currencyCode: "USD", window: { startAt: "2026-09-12T10:00:00.000Z", endAt: "2026-09-13T10:00:00.000Z" }, ...overrides }) as never);
 
 describe("M5 raw eligibility evidence", () => {
@@ -24,7 +24,7 @@ describe("M5 raw eligibility evidence", () => {
     expect(low.flagCode).toBe(critical.flagCode); expect(low.severity).toBe("LOW"); expect(critical.severity).toBe("CRITICAL"); expect("status" in low).toBe(false);
   });
   it("normalizes unordered provenance and replays a deterministic immutable fingerprint", () => {
-    const a = quantitative("LIQUIDITY"); const b = quantitative("LIQUIDITY", { provenance: { sourceType: "PROVIDER", sourceRecordIds: ["record-a", "record-b", "record-a"], payloadFingerprint: "payload-1" } });
+    const a = quantitative("LIQUIDITY"); const b = quantitative("LIQUIDITY", { provenance: { sourceType: "M5_SOURCE_LINEAGE", sourceRecordIds: ["record-a", "record-b", "record-a"], payloadFingerprint: "a".repeat(64) } });
     expect(a.fingerprint).toBe(b.fingerprint); expect(a.provenance.sourceRecordIds).toEqual(["record-a", "record-b"]); expect(Object.isFrozen(a)).toBe(true); expect(Object.isFrozen(a.provenance.sourceRecordIds)).toBe(true); assertRawEligibilityEvidence(a);
   });
   it("changes fingerprints for material value, provider, dataset, and timestamp changes", () => {
@@ -33,6 +33,9 @@ describe("M5 raw eligibility evidence", () => {
 
   it("requires an explicit mapping revision on every raw evidence envelope", () => {
     expect(() => quantitative("LIQUIDITY", { mappingRevisionId: " " })).toThrow("M5_RAW_MAPPINGREVISIONID_INVALID");
+    expect(() => quantitative("LIQUIDITY", { sourceLineageId: " " })).toThrow("M5_RAW_SOURCELINEAGEID_INVALID");
+    expect(() => quantitative("LIQUIDITY", { provenance: { sourceType: "PROVIDER", sourceRecordIds: ["record"], payloadFingerprint: "a".repeat(64) } })).toThrow("M5_RAW_SOURCE_TYPE_INVALID");
+    expect(() => quantitative("LIQUIDITY", { provenance: { sourceType: "M5_SOURCE_LINEAGE", sourceRecordIds: ["record"], payloadFingerprint: "payload" } })).toThrow("M5_RAW_PAYLOAD_FINGERPRINT_INVALID");
   });
   it("fails closed for invalid identity, timestamps, numeric representations, and ranges", () => {
     expect(() => quantitative("LIQUIDITY", { assetClass: " UNKNOWN " })).toThrow("M5_RAW_ASSET_CLASS_UNKNOWN"); expect(() => quantitative("LIQUIDITY", { candidateId: " " })).toThrow("M5_RAW_CANDIDATEID_INVALID"); expect(() => quantitative("LIQUIDITY", { observedAt: "2026-09-13T10:00:00Z" })).toThrow("M5_RAW_OBSERVED_AT_INVALID");
