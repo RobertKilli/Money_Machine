@@ -10,7 +10,7 @@ const base = (overrides: Record<string, unknown> = {}) => ({
   datasetId: "dataset-1",
   datasetVersion: "dataset-v1",
   sourceLineageId: "lineage-1",
-  providerAssetIdentityAssertionId: "m5-provider-asset-identity:test",
+  providerAssetIdentityAssertionId: "m5-provider-asset-identity:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   providerAssetNamespace: "CHAIN:ETHEREUM",
   providerAssetId: "0xabc",
   canonicalAssetId: "asset-1",
@@ -48,6 +48,13 @@ describe("M5 revision-specific asset mapping", () => {
   it("binds source lineage in the fingerprint without changing logical mapping identity", () => {
     const first = mapping({ sourceLineageId: "lineage-1" });
     const second = mapping({ sourceLineageId: "lineage-2" });
+    expect(first.mappingRevisionId).toBe(second.mappingRevisionId);
+    expect(first.fingerprint).not.toBe(second.fingerprint);
+  });
+
+  it("binds provider assertion in the fingerprint without changing logical mapping identity", () => {
+    const first = mapping({ providerAssetIdentityAssertionId: "m5-provider-asset-identity:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" });
+    const second = mapping({ providerAssetIdentityAssertionId: "m5-provider-asset-identity:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" });
     expect(first.mappingRevisionId).toBe(second.mappingRevisionId);
     expect(first.fingerprint).not.toBe(second.fingerprint);
   });
@@ -135,6 +142,11 @@ describe("M5 revision-specific asset mapping", () => {
     const value = mapping();
     expect(mapAssetMappingRevisionRow(row(value))).toEqual(value);
     expect(() => mapAssetMappingRevisionRow({ ...row(value), fingerprint: "wrong" })).toThrow("M5_MAPPING_FINGERPRINT_MISMATCH");
+  });
+  it("fails closed when a mapping read cannot resolve its assertion authority", async () => {
+    const value = mapping();
+    const client = async (strings: TemplateStringsArray) => strings.join("?").includes("select * from") ? [row(value)] : [];
+    await expect(createAssetMappingRevisionRepository(client as never, undefined, { readById: async () => undefined }).readById!(value.mappingRevisionId)).rejects.toThrow("M5_MAPPING_PROVIDER_ASSET_IDENTITY_ASSERTION_NOT_FOUND");
   });
 
   it("fails closed on every mapping/source-lineage read binding", async () => {

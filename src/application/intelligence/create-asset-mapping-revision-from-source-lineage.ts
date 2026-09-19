@@ -1,4 +1,5 @@
 import { createAssetMappingRevision, type AssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
+import { assertProviderAssetIdentityAssertion } from "@/domain/intelligence/provider-asset-identity-assertion";
 import type { AssetMappingRevisionRepository } from "@/application/intelligence/asset-mapping-revision-repository";
 import type { SourceLineageRepository } from "@/application/intelligence/source-lineage-repository";
 import type { AsyncProviderAssetIdentityAssertionRepository } from "@/application/intelligence/provider-asset-identity-repository";
@@ -32,6 +33,7 @@ export async function createAssetMappingRevisionFromSourceLineage(input: {
   const value = input.value;
   const assertion = await providerAssetIdentityAssertionRepository.readById(value.providerAssetIdentityAssertionId);
   if (!assertion) throw new Error("M5_MAPPING_PROVIDER_ASSET_IDENTITY_ASSERTION_NOT_FOUND");
+  assertProviderAssetIdentityAssertion(assertion);
   const lineage = sourceLineageRepository.validateForMappingCreation
     ? await sourceLineageRepository.validateForMappingCreation(value.sourceLineageId)
     : await sourceLineageRepository.readById(value.sourceLineageId);

@@ -1,10 +1,11 @@
 import "server-only";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { assertAssetMappingRevision, createAssetMappingRevision, type AssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
-import type { AssetMappingRevisionLookup, AssetMappingRevisionRepository, MappingSourceLineageReader } from "@/application/intelligence/asset-mapping-revision-repository";
+import type { AssetMappingRevisionLookup, AssetMappingRevisionRepository, MappingSourceLineageReader, MappingProviderAssetIdentityReader } from "@/application/intelligence/asset-mapping-revision-repository";
 import type { AssetMappingSourceLineageUnitOfWork } from "@/application/intelligence/create-asset-mapping-revision-from-source-lineage";
 import { createSourceLineageRepository } from "@/infrastructure/postgres/source-lineage-repository";
 import { createProviderAssetIdentityReadRepository } from "@/infrastructure/postgres/provider-asset-identity-repository";
+import { assertProviderAssetIdentityAssertion } from "@/domain/intelligence/provider-asset-identity-assertion";
 
 type DbClient = Sql | TransactionSql;
 type RawRow = Record<string, unknown>;
@@ -57,8 +58,16 @@ const overlap = (client: DbClient, mapping: AssetMappingRevision) => {
 `;
 };
 
-async function save(client: DbClient, mapping: AssetMappingRevision, lineageReader?: MappingSourceLineageReader): Promise<AssetMappingRevision> {
+async function validateAssertionBinding(mapping: AssetMappingRevision, assertionReader?: MappingProviderAssetIdentityReader): Promise<void> {
+  if (!assertionReader) return;
+  const assertion = await assertionReader.readById(mapping.providerAssetIdentityAssertionId);
+  if (!assertion) throw new Error("M5_MAPPING_PROVIDER_ASSET_IDENTITY_ASSERTION_NOT_FOUND");
+  assertProviderAssetIdentityAssertion(assertion);
+  if (assertion.providerId !== mapping.providerId || assertion.datasetId !== mapping.datasetId || assertion.datasetVersion !== mapping.datasetVersion || assertion.providerSourceNamespace !== mapping.providerAssetNamespace || assertion.providerAssetId !== mapping.providerAssetId) throw new Error("M5_MAPPING_PROVIDER_ASSET_IDENTITY_SCOPE_MISMATCH");
+}
+async function save(client: DbClient, mapping: AssetMappingRevision, lineageReader?: MappingSourceLineageReader, assertionReader?: MappingProviderAssetIdentityReader): Promise<AssetMappingRevision> {
   assertAssetMappingRevision(mapping);
+  await validateAssertionBinding(mapping, assertionReader);
   if (lineageReader) {
     const lineage = await lineageReader.readById(mapping.sourceLineageId);
     if (!lineage) throw new Error("M5_MAPPING_SOURCE_LINEAGE_NOT_FOUND");
@@ -91,7 +100,8 @@ async function save(client: DbClient, mapping: AssetMappingRevision, lineageRead
   return stored;
 }
 
-async function validateLineageBinding(mapping: AssetMappingRevision, lineageReader?: MappingSourceLineageReader): Promise<AssetMappingRevision> {
+async function validateLineageBinding(mapping: AssetMappingRevision, lineageReader?: MappingSourceLineageReader, assertionReader?: MappingProviderAssetIdentityReader): Promise<AssetMappingRevision> {
+  await validateAssertionBinding(mapping, assertionReader);
   if (!lineageReader) return mapping;
   const lineage = await lineageReader.readById(mapping.sourceLineageId);
   if (!lineage) throw new Error("M5_MAPPING_SOURCE_LINEAGE_NOT_FOUND");
@@ -102,7 +112,7 @@ async function validateLineageBinding(mapping: AssetMappingRevision, lineageRead
   return mapping;
 }
 
-async function readCandidatesAt(client: DbClient, lookup: AssetMappingRevisionLookup, lineageReader?: MappingSourceLineageReader): Promise<readonly AssetMappingRevision[]> {
+async function readCandidatesAt(client: DbClient, lookup: AssetMappingRevisionLookup, lineageReader?: MappingSourceLineageReader, assertionReader?: MappingProviderAssetIdentityReader): Promise<readonly AssetMappingRevision[]> {
   const rows = await client`
     select * from public.intelligence_asset_mapping_revisions
     where provider_id=${lookup.providerId} and dataset_id=${lookup.datasetId} and dataset_version=${lookup.datasetVersion}
@@ -111,18 +121,18 @@ async function readCandidatesAt(client: DbClient, lookup: AssetMappingRevisionLo
     order by valid_from asc, valid_to asc nulls last, mapping_revision_id asc
   `;
   const mapped = rows.map(row => mapAssetMappingRevisionRow(row as RawRow));
-  return Promise.all(mapped.map(mapping => validateLineageBinding(mapping, lineageReader)));
+  return Promise.all(mapped.map(mapping => validateLineageBinding(mapping, lineageReader, assertionReader)));
 }
 
-async function readById(client: DbClient, mappingRevisionId: string, lineageReader?: MappingSourceLineageReader): Promise<AssetMappingRevision | undefined> {
+async function readById(client: DbClient, mappingRevisionId: string, lineageReader?: MappingSourceLineageReader, assertionReader?: MappingProviderAssetIdentityReader): Promise<AssetMappingRevision | undefined> {
   const rows = await client`select * from public.intelligence_asset_mapping_revisions where mapping_revision_id=${mappingRevisionId}`;
   if (rows.length === 0) return undefined;
   if (rows.length !== 1) throw new Error("M5_MAPPING_ROW_AMBIGUOUS");
-  return validateLineageBinding(mapAssetMappingRevisionRow(rows[0] as RawRow), lineageReader);
+  return validateLineageBinding(mapAssetMappingRevisionRow(rows[0] as RawRow), lineageReader, assertionReader);
 }
 
-export function createAssetMappingRevisionRepository(client: DbClient, lineageReader?: MappingSourceLineageReader): AssetMappingRevisionRepository {
-  return { save: mapping => save(client, mapping, lineageReader), readCandidatesAt: lookup => readCandidatesAt(client, lookup, lineageReader), readById: mappingRevisionId => readById(client, mappingRevisionId, lineageReader) };
+export function createAssetMappingRevisionRepository(client: DbClient, lineageReader?: MappingSourceLineageReader, assertionReader?: MappingProviderAssetIdentityReader): AssetMappingRevisionRepository {
+  return { save: mapping => save(client, mapping, lineageReader, assertionReader), readCandidatesAt: lookup => readCandidatesAt(client, lookup, lineageReader, assertionReader), readById: mappingRevisionId => readById(client, mappingRevisionId, lineageReader, assertionReader) };
 }
 
 /** Shared transaction boundary for mapping creation and lineage validation. */
@@ -131,7 +141,7 @@ export function createAssetMappingSourceLineageUnitOfWork(client: Sql): AssetMap
     withTransaction: <T>(work: (repositories: { readonly sourceLineageRepository: ReturnType<typeof createSourceLineageRepository>; readonly providerAssetIdentityAssertionRepository: ReturnType<typeof createProviderAssetIdentityReadRepository>; readonly mappingRepository: AssetMappingRevisionRepository }) => Promise<T>) => client.begin(async transaction => {
       const sourceLineageRepository = createSourceLineageRepository(transaction);
       const providerAssetIdentityAssertionRepository = createProviderAssetIdentityReadRepository(transaction);
-      const mappingRepository = createAssetMappingRevisionRepository(transaction, sourceLineageRepository);
+      const mappingRepository = createAssetMappingRevisionRepository(transaction, sourceLineageRepository, providerAssetIdentityAssertionRepository);
       return work({ sourceLineageRepository, providerAssetIdentityAssertionRepository, mappingRepository });
     }) as unknown as Promise<T>,
   };
