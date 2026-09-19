@@ -1,0 +1,31 @@
+import { describe, expect, it } from "vitest";
+import { createProviderAssetIdentityAssertion, type ProviderAssetIdentityAssertionInput } from "@/domain/intelligence/provider-asset-identity-assertion";
+import { parseProviderAssetIdentityProjection } from "@/application/intelligence/provider-asset-identity-projection";
+import { createProviderAssetIdentityAssertionAuthority } from "@/application/intelligence/create-provider-asset-identity-assertion";
+import type { ProviderAssetIdentityAssertionRepositories, ProviderAssetIdentityAssertionUnitOfWork } from "@/application/intelligence/provider-asset-identity-repository";
+import { createSourceArtifact, createSourceEnvelope } from "@/domain/intelligence/ingestion-provenance";
+
+const t0 = "2026-01-01T00:00:00.000Z";
+const input = (overrides: Record<string, unknown> = {}) => ({ providerId: "provider", datasetId: "dataset", datasetVersion: "v1", providerSourceNamespace: "fixture", providerAssetId: "asset", identityType: "EVM_CONTRACT_ADDRESS", identityNamespace: "eip155:1", identityValue: "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01", sourceArtifactId: "artifact", sourceEnvelopeId: "envelope", parserVersion: "parser/v1", envelopeSchemaVersion: "schema/v1", sourcePayloadFingerprint: "a".repeat(64), recordedAt: t0, ...overrides } as ProviderAssetIdentityAssertionInput);
+const projection = (overrides: Record<string, unknown> = {}) => parseProviderAssetIdentityProjection({ projectionVersion: "m5-provider-asset-identity-projection/v1", sourceArtifactId: "artifact", sourceEnvelopeId: "envelope", parserVersion: "parser/v1", envelopeSchemaVersion: "schema/v1", identity: { type: "EVM_CONTRACT_ADDRESS", namespace: "eip155:1", value: "0xabcdef0123456789abcdef0123456789abcdef01" }, ...overrides });
+
+describe("M5 provider asset identity foundation", () => {
+  it("normalizes EVM addresses, binds parser/schema in ID, excludes recordedAt, and freezes output", () => {
+    const first = createProviderAssetIdentityAssertion(input()); const replay = createProviderAssetIdentityAssertion(input({ recordedAt: "2026-01-02T00:00:00.000Z" }));
+    expect(first.identityValue).toBe("0xabcdef0123456789abcdef0123456789abcdef01"); expect(first.providerAssetIdentityAssertionId).toBe(replay.providerAssetIdentityAssertionId); expect(first.fingerprint).toBe(replay.fingerprint); expect(createProviderAssetIdentityAssertion(input({ parserVersion: "parser/v2" })).providerAssetIdentityAssertionId).not.toBe(first.providerAssetIdentityAssertionId); expect(Object.isFrozen(first)).toBe(true);
+  });
+  it("rejects non-canonical namespaces, invalid addresses/types and forged ID/fingerprint", () => {
+    for (const identityNamespace of ["eip155:0", "eip155:01", "eip155:+1", " eip155:1", "eip155:1.0", "caip:1"]) expect(() => createProviderAssetIdentityAssertion(input({ identityNamespace }))).toThrow("M5_PROVIDER_ASSET_IDENTITY_NAMESPACE_INVALID");
+    expect(() => createProviderAssetIdentityAssertion(input({ identityValue: "0x123" }))).toThrow("M5_PROVIDER_ASSET_IDENTITY_VALUE_INVALID"); expect(() => createProviderAssetIdentityAssertion(input({ identityType: "TICKER" }))).toThrow("M5_PROVIDER_ASSET_IDENTITY_TYPE_INVALID"); expect(() => createProviderAssetIdentityAssertion(input({ providerAssetIdentityAssertionId: "forged" }))).toThrow("M5_PROVIDER_ASSET_IDENTITY_ID_MISMATCH"); expect(() => createProviderAssetIdentityAssertion(input({ fingerprint: "b".repeat(64) }))).toThrow("M5_PROVIDER_ASSET_IDENTITY_FINGERPRINT_MISMATCH");
+  });
+  it("parses only strict secret-safe identity projections deterministically", () => {
+    expect(projection().identity.value).toBe("0xabcdef0123456789abcdef0123456789abcdef01"); expect(() => projection({ token: "do-not-leak" })).toThrow("M5_PROVIDER_ASSET_IDENTITY_PROJECTION_UNKNOWN_FIELD"); expect(() => parseProviderAssetIdentityProjection({ projectionVersion: "m5-provider-asset-identity-projection/v1", sourceArtifactId: "a", sourceEnvelopeId: "e", parserVersion: "p", envelopeSchemaVersion: "s", identity: { type: "EVM_CONTRACT_ADDRESS", namespace: "eip155:1", value: "0xabc", password: "x" } })).toThrow("M5_PROVIDER_ASSET_IDENTITY_PROJECTION_IDENTITY_UNKNOWN_FIELD");
+  });
+  it("uses authoritative resolved provenance parents rather than caller copies", async () => {
+    const artifact = createSourceArtifact({ providerId: "provider", datasetId: "dataset", datasetVersion: "v1", providerSourceNamespace: "fixture", providerExternalRecordId: "asset", payloadFingerprint: "a".repeat(64), recordedAt: t0 });
+    const envelope = createSourceEnvelope({ sourceArtifactId: artifact.sourceArtifactId, parserContractVersion: "parser/v1", envelopeSchemaVersion: "schema/v1", normalizedEnvelope: {}, selectedAuditableFields: {}, payloadFingerprint: artifact.payloadFingerprint, observedAt: t0, temporalQualityStatus: "RESOLVED", temporalDiagnosticCodes: [], recordedAt: t0 });
+    const values = new Map<string, ReturnType<typeof createProviderAssetIdentityAssertion>>(); const parents: ProviderAssetIdentityAssertionRepositories = { artifacts: { readById: async () => artifact }, envelopes: { readById: async () => envelope }, assertions: { save: async (value: ReturnType<typeof createProviderAssetIdentityAssertion>) => { const prior = values.get(value.providerAssetIdentityAssertionId); if (prior && prior.fingerprint !== value.fingerprint) throw new Error("M5_PROVIDER_ASSET_IDENTITY_ASSERTION_CONFLICT"); values.set(value.providerAssetIdentityAssertionId, value); return value; }, readById: async (id: string) => values.get(id) } }; const unitOfWork: ProviderAssetIdentityAssertionUnitOfWork = { withTransaction: async <T>(work: (repos: ProviderAssetIdentityAssertionRepositories) => Promise<T>) => work(parents) };
+    const saved = await createProviderAssetIdentityAssertionAuthority({ unitOfWork, projection: projection({ sourceArtifactId: artifact.sourceArtifactId, sourceEnvelopeId: envelope.sourceEnvelopeId }), recordedAt: t0 }); expect(saved.providerId).toBe("provider");
+    await expect(createProviderAssetIdentityAssertionAuthority({ unitOfWork, projection: projection({ sourceArtifactId: artifact.sourceArtifactId, sourceEnvelopeId: envelope.sourceEnvelopeId, parserVersion: "other" }), recordedAt: t0 })).rejects.toThrow("M5_PROVIDER_ASSET_IDENTITY_PARSER_MISMATCH");
+  });
+});

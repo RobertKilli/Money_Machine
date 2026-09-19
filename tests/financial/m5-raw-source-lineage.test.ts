@@ -7,7 +7,7 @@ const t = "2026-01-01T00:00:00.000Z";
 const a = "2026-01-01T00:01:00.000Z";
 const lineageData = { sourceLineageId: "lineage-1", providerId: "p", datasetId: "d", datasetVersion: "v1", sourceArtifactIds: ["artifact-a", "artifact-b"], ingestionAttemptIds: ["attempt-a"], observedAt: t, effectiveAvailableAt: a, fingerprint: "f".repeat(64) };
 const lineage = lineageData as never;
-const mapping = createAssetMappingRevision({ mappingRevisionVersion: "mapping/v1", providerId: "p", datasetId: "d", datasetVersion: "v1", sourceLineageId: "lineage-1", providerAssetNamespace: "FIXTURE", providerAssetId: "external", canonicalAssetId: "asset-1", canonicalIdentifier: "asset:1", assetClass: "CRYPTO", validFrom: "2025-01-01T00:00:00.000Z", observedAt: t, availableAt: a, sourceRecordIds: ["artifact-a", "artifact-b"], payloadFingerprint: lineageData.fingerprint, recordedAt: a });
+const mapping = createAssetMappingRevision({ mappingRevisionVersion: "mapping/v1", providerAssetIdentityAssertionId: "m5-provider-asset-identity:test", providerId: "p", datasetId: "d", datasetVersion: "v1", sourceLineageId: "lineage-1", providerAssetNamespace: "FIXTURE", providerAssetId: "external", canonicalAssetId: "asset-1", canonicalIdentifier: "asset:1", assetClass: "CRYPTO", validFrom: "2025-01-01T00:00:00.000Z", observedAt: t, availableAt: a, sourceRecordIds: ["artifact-a", "artifact-b"], payloadFingerprint: lineageData.fingerprint, recordedAt: a });
 
 const input = (overrides: Record<string, unknown> = {}) => ({ evidenceId: "evidence-1", mappingRevisionId: mapping.mappingRevisionId, candidateId: "candidate-1", family: "VENUE" as const, payload: { venueId: "venue-1", eligibilityState: "ELIGIBLE" as const }, ...overrides });
 

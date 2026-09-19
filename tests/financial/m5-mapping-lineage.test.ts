@@ -10,6 +10,7 @@ const base = (overrides: Record<string, unknown> = {}) => ({
   datasetId: "dataset-1",
   datasetVersion: "dataset-v1",
   sourceLineageId: "lineage-1",
+  providerAssetIdentityAssertionId: "m5-provider-asset-identity:test",
   providerAssetNamespace: "CHAIN:ETHEREUM",
   providerAssetId: "0xabc",
   canonicalAssetId: "asset-1",
@@ -26,7 +27,7 @@ const base = (overrides: Record<string, unknown> = {}) => ({
 const mapping = (overrides: Record<string, unknown> = {}) => createAssetMappingRevision(base(overrides) as never);
 const lookup = (overrides: Record<string, unknown> = {}) => ({ providerId: "provider-1", datasetId: "dataset-1", datasetVersion: "dataset-v1", providerAssetNamespace: "CHAIN:ETHEREUM", providerAssetId: "0xabc", asOf: "2026-02-01T00:00:00.000Z", ...overrides });
 const readOnly = (readCandidatesAt: AssetMappingRevisionRepository["readCandidatesAt"]): AssetMappingRevisionRepository => ({ save: async mapping => mapping, readCandidatesAt });
-const row = (value: AssetMappingRevision) => ({ mapping_revision_id: value.mappingRevisionId, mapping_revision_version: value.mappingRevisionVersion, provider_id: value.providerId, dataset_id: value.datasetId, dataset_version: value.datasetVersion, source_lineage_id: value.sourceLineageId, provider_asset_namespace: value.providerAssetNamespace, provider_asset_id: value.providerAssetId, canonical_asset_id: value.canonicalAssetId, canonical_identifier: value.canonicalIdentifier, asset_class: value.assetClass, valid_from: value.validFrom, valid_to: value.validTo ?? null, observed_at: value.observedAt, available_at: value.availableAt, source_record_ids: value.sourceRecordIds, payload_fingerprint: value.payloadFingerprint, fingerprint: value.fingerprint, recorded_at: value.recordedAt });
+const row = (value: AssetMappingRevision) => ({ mapping_revision_id: value.mappingRevisionId, mapping_revision_version: value.mappingRevisionVersion, provider_id: value.providerId, dataset_id: value.datasetId, dataset_version: value.datasetVersion, source_lineage_id: value.sourceLineageId, provider_asset_identity_assertion_id: value.providerAssetIdentityAssertionId, provider_asset_namespace: value.providerAssetNamespace, provider_asset_id: value.providerAssetId, canonical_asset_id: value.canonicalAssetId, canonical_identifier: value.canonicalIdentifier, asset_class: value.assetClass, valid_from: value.validFrom, valid_to: value.validTo ?? null, observed_at: value.observedAt, available_at: value.availableAt, source_record_ids: value.sourceRecordIds, payload_fingerprint: value.payloadFingerprint, fingerprint: value.fingerprint, recorded_at: value.recordedAt });
 
 describe("M5 revision-specific asset mapping", () => {
   it("creates deterministic IDs and fingerprints independent of source ordering or recorded time", () => {

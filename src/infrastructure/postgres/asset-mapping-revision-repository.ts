@@ -4,6 +4,7 @@ import { assertAssetMappingRevision, createAssetMappingRevision, type AssetMappi
 import type { AssetMappingRevisionLookup, AssetMappingRevisionRepository, MappingSourceLineageReader } from "@/application/intelligence/asset-mapping-revision-repository";
 import type { AssetMappingSourceLineageUnitOfWork } from "@/application/intelligence/create-asset-mapping-revision-from-source-lineage";
 import { createSourceLineageRepository } from "@/infrastructure/postgres/source-lineage-repository";
+import { createProviderAssetIdentityReadRepository } from "@/infrastructure/postgres/provider-asset-identity-repository";
 
 type DbClient = Sql | TransactionSql;
 type RawRow = Record<string, unknown>;
@@ -26,6 +27,7 @@ export function mapAssetMappingRevisionRow(row: RawRow): AssetMappingRevision {
     datasetId: text(row.dataset_id, "M5_MAPPING_ROW_DATASET_INVALID"),
     datasetVersion: text(row.dataset_version, "M5_MAPPING_ROW_DATASET_VERSION_INVALID"),
     sourceLineageId: text(row.source_lineage_id, "M5_MAPPING_ROW_SOURCE_LINEAGE_INVALID"),
+    providerAssetIdentityAssertionId: text(row.provider_asset_identity_assertion_id, "M5_MAPPING_ROW_PROVIDER_ASSET_IDENTITY_ASSERTION_INVALID"),
     providerAssetNamespace: text(row.provider_asset_namespace, "M5_MAPPING_ROW_NAMESPACE_INVALID"),
     providerAssetId: text(row.provider_asset_id, "M5_MAPPING_ROW_PROVIDER_ASSET_INVALID"),
     canonicalAssetId: text(row.canonical_asset_id, "M5_MAPPING_ROW_CANONICAL_ASSET_INVALID"),
@@ -69,9 +71,9 @@ async function save(client: DbClient, mapping: AssetMappingRevision, lineageRead
   if (conflicts.length) throw new Error("M5_MAPPING_INTERVAL_CONFLICT");
   const inserted = await client`
     insert into public.intelligence_asset_mapping_revisions
-      (mapping_revision_id,mapping_revision_version,provider_id,dataset_id,dataset_version,source_lineage_id,provider_asset_namespace,provider_asset_id,canonical_asset_id,canonical_identifier,asset_class,valid_from,valid_to,observed_at,available_at,source_record_ids,payload_fingerprint,fingerprint,recorded_at)
+      (mapping_revision_id,mapping_revision_version,provider_id,dataset_id,dataset_version,source_lineage_id,provider_asset_identity_assertion_id,provider_asset_namespace,provider_asset_id,canonical_asset_id,canonical_identifier,asset_class,valid_from,valid_to,observed_at,available_at,source_record_ids,payload_fingerprint,fingerprint,recorded_at)
     values
-      (${mapping.mappingRevisionId},${mapping.mappingRevisionVersion},${mapping.providerId},${mapping.datasetId},${mapping.datasetVersion},${mapping.sourceLineageId},${mapping.providerAssetNamespace},${mapping.providerAssetId},${mapping.canonicalAssetId},${mapping.canonicalIdentifier},${mapping.assetClass},${mapping.validFrom},${mapping.validTo ?? null},${mapping.observedAt},${mapping.availableAt},${json(mapping.sourceRecordIds)}::jsonb,${mapping.payloadFingerprint},${mapping.fingerprint},${mapping.recordedAt})
+      (${mapping.mappingRevisionId},${mapping.mappingRevisionVersion},${mapping.providerId},${mapping.datasetId},${mapping.datasetVersion},${mapping.sourceLineageId},${mapping.providerAssetIdentityAssertionId},${mapping.providerAssetNamespace},${mapping.providerAssetId},${mapping.canonicalAssetId},${mapping.canonicalIdentifier},${mapping.assetClass},${mapping.validFrom},${mapping.validTo ?? null},${mapping.observedAt},${mapping.availableAt},${json(mapping.sourceRecordIds)}::jsonb,${mapping.payloadFingerprint},${mapping.fingerprint},${mapping.recordedAt})
     on conflict (mapping_revision_id) do nothing returning mapping_revision_id
   `;
   if (inserted.length) {
@@ -126,10 +128,11 @@ export function createAssetMappingRevisionRepository(client: DbClient, lineageRe
 /** Shared transaction boundary for mapping creation and lineage validation. */
 export function createAssetMappingSourceLineageUnitOfWork(client: Sql): AssetMappingSourceLineageUnitOfWork {
   return {
-    withTransaction: <T>(work: (repositories: { readonly sourceLineageRepository: ReturnType<typeof createSourceLineageRepository>; readonly mappingRepository: AssetMappingRevisionRepository }) => Promise<T>) => client.begin(async transaction => {
+    withTransaction: <T>(work: (repositories: { readonly sourceLineageRepository: ReturnType<typeof createSourceLineageRepository>; readonly providerAssetIdentityAssertionRepository: ReturnType<typeof createProviderAssetIdentityReadRepository>; readonly mappingRepository: AssetMappingRevisionRepository }) => Promise<T>) => client.begin(async transaction => {
       const sourceLineageRepository = createSourceLineageRepository(transaction);
+      const providerAssetIdentityAssertionRepository = createProviderAssetIdentityReadRepository(transaction);
       const mappingRepository = createAssetMappingRevisionRepository(transaction, sourceLineageRepository);
-      return work({ sourceLineageRepository, mappingRepository });
+      return work({ sourceLineageRepository, providerAssetIdentityAssertionRepository, mappingRepository });
     }) as unknown as Promise<T>,
   };
 }

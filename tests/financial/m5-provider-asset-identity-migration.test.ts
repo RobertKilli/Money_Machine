@@ -1,0 +1,9 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+const sql = readFileSync("supabase/migrations/20260918234933_m5_provider_asset_identity.sql", "utf8");
+describe("M5 provider asset identity migration", () => {
+  it("creates the append-only assertion authority table with structural protections", () => {
+    expect(sql).toContain("create table public.intelligence_provider_asset_identity_assertions"); expect(sql).toContain("identity_type text not null check (identity_type = 'EVM_CONTRACT_ADDRESS')"); expect(sql).toContain("'^eip155:[1-9][0-9]*$'"); expect(sql).toContain("'^0x[0-9a-f]{40}$'"); expect(sql.match(/\^\[a-f0-9\]\{64\}\$/g)?.length).toBeGreaterThanOrEqual(2); expect(sql).toContain("intelligence_source_artifacts_identity_parent_key"); expect(sql).toContain("intelligence_source_envelopes_identity_parent_key"); expect(sql).toContain("enable row level security"); expect(sql).toContain("revoke all privileges"); expect(sql).toContain("before update or delete"); expect(sql).not.toContain("security definer"); expect(sql).not.toContain("create policy");
+  });
+  it("binds an empty mapping table to the assertion authority without application DML", () => { expect(sql).not.toMatch(/\binsert\s+into\s+public\./i); expect(sql).not.toMatch(/\bupdate\s+public\./i); expect(sql).not.toMatch(/\bdelete\s+from\s+public\./i); expect(sql).not.toContain("DEL 2 PENDING"); expect(sql).toContain("M5_PROVIDER_ASSET_IDENTITY_REQUIRES_EMPTY_MAPPING_TABLE"); expect(sql).toContain("provider_asset_identity_assertion_id text not null"); expect(sql).toContain("intelligence_asset_mapping_identity_assertion_nonblank"); expect(sql).toContain("intelligence_asset_mapping_identity_assertion_fk"); expect(sql).toContain("intelligence_asset_mapping_identity_assertion_idx"); });
+});
