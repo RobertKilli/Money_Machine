@@ -9,6 +9,7 @@ export interface AssetMappingRevision {
   readonly datasetId: string;
   readonly datasetVersion: string;
   readonly sourceLineageId: string;
+  readonly providerAssetIdentityAssertionId: string;
   readonly providerAssetNamespace: string;
   readonly providerAssetId: string;
   readonly canonicalAssetId: string;
@@ -31,6 +32,7 @@ export type AssetMappingRevisionInput = Omit<AssetMappingRevision, "mappingRevis
 
 const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const forbiddenNamespaces = new Set(["TICKER", "SYMBOL"]);
+const PROVIDER_ASSERTION_ID = /^m5-provider-asset-identity:[a-f0-9]{64}$/;
 
 function nonBlank(value: unknown, code: string): string {
   if (typeof value !== "string" || value.trim() === "") throw new Error(code);
@@ -77,6 +79,7 @@ function material(input: AssetMappingRevisionInput): Omit<AssetMappingRevision, 
     datasetId: nonBlank(input.datasetId, "M5_MAPPING_DATASET_INVALID"),
     datasetVersion: nonBlank(input.datasetVersion, "M5_MAPPING_DATASET_VERSION_INVALID"),
     sourceLineageId: nonBlank(input.sourceLineageId, "M5_MAPPING_SOURCE_LINEAGE_ID_INVALID"),
+    providerAssetIdentityAssertionId: (() => { const value = nonBlank(input.providerAssetIdentityAssertionId, "M5_MAPPING_PROVIDER_ASSET_IDENTITY_ASSERTION_ID_INVALID"); if (!PROVIDER_ASSERTION_ID.test(value)) throw new Error("M5_MAPPING_PROVIDER_ASSET_IDENTITY_ASSERTION_ID_INVALID"); return value; })(),
     providerAssetNamespace,
     providerAssetId: nonBlank(input.providerAssetId, "M5_MAPPING_PROVIDER_ASSET_ID_INVALID"),
     canonicalAssetId: nonBlank(input.canonicalAssetId, "M5_MAPPING_CANONICAL_ASSET_INVALID"),

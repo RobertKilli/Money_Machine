@@ -1,5 +1,6 @@
 import type { AssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
 import type { SourceLineage } from "@/domain/intelligence/source-lineage";
+import type { ProviderAssetIdentityAssertion } from "@/domain/intelligence/provider-asset-identity-assertion";
 
 export interface AssetMappingRevisionLookup {
   readonly providerId: string;
@@ -19,3 +20,4 @@ export interface AssetMappingRevisionRepository {
 export interface MappingSourceLineageReader {
   readonly readById: (sourceLineageId: string) => Promise<SourceLineage | undefined>;
 }
+export interface MappingProviderAssetIdentityReader { readonly readById: (assertionId: string) => Promise<ProviderAssetIdentityAssertion | undefined>; }

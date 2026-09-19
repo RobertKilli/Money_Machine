@@ -138,3 +138,17 @@ The extended database foreign key proves mapping revision, source lineage,
 provider/dataset scope, and canonical identity together. Assembly continues
 to select exact manifest evidence IDs and never selects a lineage.
 Provider import and real-data population remain unimplemented.
+
+## 9. M5 provider asset identity authority
+
+`ProviderAssetIdentityAssertion` is immutable parser/provider-side identity
+authority. Version 1 supports only a typed EVM contract address: a canonical
+`eip155:<chainId>` namespace plus a lower-case 20-byte address. Ticker, symbol,
+name, and free text are not identities. An assertion never claims canonical
+identity; `AssetMappingRevision` remains the sole provider-to-canonical mapping
+authority. A mapping requires both an assertion and sealed, COMPLETED
+`SourceLineage`; the assertion's exact artifact/envelope pair must be a member
+of that lineage. Assertion, lineage, and mapping are validated in one server
+transaction. Provider adapters/APIs, legal approval, and real data import stay
+out of scope. History-span, volatility, and suspicious clean/no-findings remain
+blockers for M5 production authority.
