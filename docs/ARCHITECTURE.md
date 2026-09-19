@@ -152,3 +152,30 @@ of that lineage. Assertion, lineage, and mapping are validated in one server
 transaction. Provider adapters/APIs, legal approval, and real data import stay
 out of scope. History-span, volatility, and suspicious clean/no-findings remain
 blockers for M5 production authority.
+
+## 10. M5 crypto history and volatility derivations
+
+The deterministic daily-close derivations are pure domain material, not raw
+evidence and not provider authority. They consume an immutable normalized
+series of observation IDs, canonical UTC timestamps, positive fixed-point
+close values, one price scale, and one quote unit. `crypto-daily/v1` sorts by
+`observedAt` and then `observationId`, rejects duplicate timestamps or IDs,
+requires at least 15 observations and 14 returns, and allows a maximum elapsed
+gap of exactly 48 hours. Coverage is elapsed UTC time; crypto has no trading-
+day calendar.
+
+`history-span/crypto-daily/v1` computes
+`floor((latestObservedAt - earliestObservedAt) / 86_400_000)` in the existing
+day unit. `volatility/crypto-daily/v1` computes arithmetic basis-point returns
+with mathematical floor rounding and population standard deviation. Both use
+integer-only `bigint` arithmetic, deterministic integer square root, scale 0,
+and no annualization. The evaluator still owns all eligibility thresholds.
+
+READY material is fingerprinted from the complete normalized series,
+availability timestamps, policy/derivation/rounding versions, as-of, units,
+scale, and ordered observation IDs. INCOMPLETE and INVALID results carry only
+bounded stable diagnostics. The material remains non-authoritative until a
+future adapter binds it to a validated provider assertion, sealed source
+lineage, mapping revision, and persisted raw evidence. Provider adapters,
+legal approval, real-data import, and suspicious-evidence semantics remain
+separate scope.
