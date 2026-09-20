@@ -4,6 +4,22 @@ import { describe, expect, it } from "vitest";
 const sql = readFileSync("supabase/migrations/20260920161300_m5_suspicious_assessment_authority.sql", "utf8");
 
 describe("M5 suspicious assessment migration contract", () => {
+  it("guards absent assessment tables without SQLSTATE 42P01 pre-CREATE binding", () => {
+    const createPosition = sql.toLowerCase().indexOf("create table public.eligibility_suspicious_assessments");
+    expect(createPosition).toBeGreaterThan(0);
+    const beforeCreate = sql.slice(0, createPosition);
+    const executable = beforeCreate
+      .replace(/--[^\r\n]*/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/'(?:''|[^'])*'/g, "''");
+    expect(executable).not.toMatch(/\bfrom\s+public\.eligibility_suspicious_assessments\b/i);
+    expect(executable).not.toMatch(/\bfrom\s+public\.eligibility_suspicious_assessment_findings\b/i);
+    expect(beforeCreate).toContain("relation_name := to_regclass('public.eligibility_suspicious_assessments')");
+    expect(beforeCreate).toContain("execute 'select count(*) from public.eligibility_suspicious_assessments' into row_count");
+    expect(beforeCreate).toContain("execute 'select count(*) from public.eligibility_suspicious_assessment_findings' into row_count");
+    expect((beforeCreate.match(/if relation_name is not null/g) ?? []).length).toBe(2);
+  });
+
   it("defines immutable parent and exact membership tables", () => {
     expect(sql).toContain("create table public.eligibility_suspicious_assessments");
     expect(sql).toContain("create table public.eligibility_suspicious_assessment_findings");
@@ -24,6 +40,8 @@ describe("M5 suspicious assessment migration contract", () => {
     expect(sql).toContain("foreign key (evidence_id, evidence_fingerprint)");
     expect(sql).toContain("references public.eligibility_suspicious_evidence(evidence_id, fingerprint)");
     expect(sql).toContain("eligibility_suspicious_evidence_identity_key");
+    expect(sql).toContain("intelligence_asset_mapping_assessment_authority_key");
+    expect(sql).toContain("unique (mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class)");
   });
 
   it("is server-only append-only DDL without application data writes", () => {
