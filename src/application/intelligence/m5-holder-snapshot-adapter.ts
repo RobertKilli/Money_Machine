@@ -270,6 +270,14 @@ export function projectM5HolderPageSetToNormalizedPackage(input: Readonly<{ page
   return parseM5NormalizedSourcePackage({ contractVersion: M5_NORMALIZED_SOURCE_PACKAGE_VERSION, idempotencyKey: input.idempotencyKey, providerId: input.pageSet.request.providerId, datasetId: input.pageSet.request.datasetId, datasetVersion: input.pageSet.request.datasetVersion, providerSourceNamespace: input.pageSet.request.providerSourceNamespace, adapterContractVersion: M5_HOLDER_SNAPSHOT_ADAPTER_VERSION, adapterVersion: M5_HOLDER_SNAPSHOT_ADAPTER_VERSION, parserContractVersion: M5_HOLDER_PAGE_FIXTURE_VERSION, parserVersion: M5_HOLDER_PAGE_FIXTURE_VERSION, envelopeSchemaVersion: "m5-holder-snapshot-envelope/v1", attemptNumber: 1, requestedAt: input.requestedAt, startedAt: input.startedAt, recordedAt: input.recordedAt, requestScope: { chainId: M5_ETHEREUM_CHAIN_ID, contractAddress: input.pageSet.request.contractAddress, supplyBasis: "TOTAL_SUPPLY", addressPolicy: "INCLUDE_ALL" }, provenance: { system: "m5-holder-snapshot-fixture", reviewReference: M5_HOLDER_FINALITY_POLICY_VERSION }, executionInput: { execution: "FIXTURE_ONLY", requestedBlockStrategy: "PINNED_SNAPSHOT_BLOCK", pageSize: input.pageSet.request.pageSize, availabilityPolicy: "m5-provider-availability-policy/v1", finalityPolicy: M5_HOLDER_FINALITY_POLICY_VERSION }, records });
 }
 
+/** Validates that a package was projected from this exact, already-validated page set. */
+export function validateM5HolderPageSetPackageBinding(input: Readonly<{ pageSet: Extract<M5HolderPageSetResult, { status: "COMPLETE" }>; package: ManualNormalizedSourcePackage }>): ManualNormalizedSourcePackage {
+  const value = input.package;
+  const expected = projectM5HolderPageSetToNormalizedPackage({ pageSet: input.pageSet, idempotencyKey: value.idempotencyKey, requestedAt: value.requestedAt, startedAt: value.startedAt, recordedAt: value.recordedAt });
+  if (canonicalSha256(value) !== canonicalSha256(expected)) throw new Error("M5_HOLDER_ADAPTER_PACKAGE_BINDING_INVALID");
+  return value;
+}
+
 export function projectM5HolderPageSetToSnapshot(input: Readonly<{ pageSet: Extract<M5HolderPageSetResult, { status: "COMPLETE" }>; asOf: string; recordedAt: string }>): M5HolderSnapshotAdapterResult {
   try {
     const pageSet = input.pageSet;
