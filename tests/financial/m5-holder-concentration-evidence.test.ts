@@ -23,6 +23,14 @@ describe("M5 holder concentration evidence binding", () => {
     const result = await persistM5HolderConcentrationEvidence({ mappingRevisionId: "mapping-1", snapshotId: "missing", candidateId: "candidate-1", unitOfWork: { withTransaction: async work => work({ mapping: { readById: async () => mapping }, lineage: { readById: async () => lineage, validateForRawEvidenceCreation: async () => lineage }, assertion: { readById: async () => assertion }, snapshots: { readById: async () => undefined }, evidence: { save } }) } });
     expect(result.status).toBe("INCOMPLETE"); expect(save).not.toHaveBeenCalled();
   });
+  it("propagates a second-write conflict so the transaction can roll back the first write", async () => {
+    if (concentration.status !== "READY") throw new Error("fixture");
+    const save = vi.fn()
+      .mockResolvedValueOnce({ evidenceKind: "QUANTITATIVE", metricKind: "SINGLE_CONCENTRATION", holderDerivationFingerprint: concentration.single.fingerprint } as RawEligibilityEvidence)
+      .mockRejectedValueOnce(new Error("M5_RAW_EVIDENCE_CONFLICT"));
+    await expect(persistM5HolderConcentrationEvidence({ mappingRevisionId: "mapping-1", snapshotId: snapshot.snapshotId, candidateId: "candidate-1", unitOfWork: { withTransaction: async work => work({ mapping: { readById: async () => mapping }, lineage: { readById: async () => lineage, validateForRawEvidenceCreation: async () => lineage }, assertion: { readById: async () => assertion }, snapshots: { readById: async () => ({ snapshot, concentration, finalityProof: { referenceBlockNumber: 112n, referenceBlockHash: `0x${"b".repeat(64)}`, observedAt: snapshot.availableAt, receivedAt: snapshot.availableAt } }) }, evidence: { save } }) } })).rejects.toThrow("M5_RAW_EVIDENCE_CONFLICT");
+    expect(save).toHaveBeenCalledTimes(2);
+  });
   it("rejects concentration records without holder authority fields", async () => {
     const { createQuantitativeEligibilityEvidence } = await import("@/domain/intelligence/eligibility-evidence");
     expect(() => createQuantitativeEligibilityEvidence({ evidenceId: "e", candidateId: "c", assetId: "a", canonicalIdentifier: "id", assetClass: "CRYPTO", providerId: "p", datasetId: "d", datasetVersion: "v1", mappingRevisionId: "m", sourceLineageId: "l", observedAt: snapshot.observedAt, availableAt: snapshot.availableAt, provenance: { sourceType: "M5_SOURCE_LINEAGE", sourceRecordIds: ["r"], payloadFingerprint: "a".repeat(64) }, metricKind: "SINGLE_CONCENTRATION", valueAtoms: 1n, scale: 0, unit: "BPS", semanticsVersion: "m5-holder-concentration-evidence/v1" } as never)).toThrow("M5_RAW_HOLDER_SNAPSHOT_ID_REQUIRED");

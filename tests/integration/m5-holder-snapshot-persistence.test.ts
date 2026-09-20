@@ -10,7 +10,7 @@ import { createProviderAssetIdentityAssertionAuthority } from "@/application/int
 import { createProviderAssetIdentityAssertionUnitOfWork } from "@/infrastructure/postgres/provider-asset-identity-repository";
 import { createAssetMappingRevisionFromSourceLineage } from "@/application/intelligence/create-asset-mapping-revision-from-source-lineage";
 import { createAssetMappingSourceLineageUnitOfWork } from "@/infrastructure/postgres/asset-mapping-revision-repository";
-import { persistM5HolderConcentrationEvidence } from "@/application/intelligence/m5-holder-concentration-evidence";
+import { persistM5HolderConcentrationEvidence, type M5HolderConcentrationEvidenceRepositories, type M5HolderConcentrationEvidenceUnitOfWork } from "@/application/intelligence/m5-holder-concentration-evidence";
 import { createM5HolderConcentrationEvidenceUnitOfWork } from "@/infrastructure/postgres/m5-holder-concentration-evidence-uow";
 
 const url = process.env.DATABASE_URL;
@@ -54,14 +54,31 @@ describe.skipIf(!enabled)("M5 holder snapshot persistence PostgreSQL integration
       const sourceRecord = plan.records[0]!;
       const assertion = await createProviderAssetIdentityAssertionAuthority({ unitOfWork: createProviderAssetIdentityAssertionUnitOfWork(sql), projection: { projectionVersion: "m5-provider-asset-identity-projection/v1", sourceArtifactId: sourceRecord.artifact.sourceArtifactId, sourceEnvelopeId: sourceRecord.envelope.sourceEnvelopeId, parserVersion: sourceRecord.envelope.parserContractVersion, envelopeSchemaVersion: sourceRecord.envelope.envelopeSchemaVersion, identity: { type: "EVM_CONTRACT_ADDRESS", namespace: "eip155:1", value: request.contractAddress }, diagnostics: [] }, recordedAt: "2026-02-01T00:09:00.000Z" });
       const mapping = await createAssetMappingRevisionFromSourceLineage({ unitOfWork: createAssetMappingSourceLineageUnitOfWork(sql), value: { sourceLineageId: ingestion.sourceLineageId, providerAssetIdentityAssertionId: assertion.providerAssetIdentityAssertionId, canonicalAssetId: "canonical:synthetic-asset", canonicalIdentifier: "asset:synthetic-asset", assetClass: "CRYPTO", mappingRevisionVersion: "m5-asset-mapping-revision/v1", validFrom: ingestion.observedAt, recordedAt: "2026-02-01T00:09:00.000Z" } });
-      const evidence = await persistM5HolderConcentrationEvidence({ unitOfWork: createM5HolderConcentrationEvidenceUnitOfWork(sql), mappingRevisionId: mapping.mappingRevisionId, snapshotId: first.aggregate.snapshot.snapshotId, candidateId: "candidate:synthetic" });
+      const evidenceUow = createM5HolderConcentrationEvidenceUnitOfWork(sql);
+      let attemptedEvidenceWrites = 0;
+      const rollbackEvidenceUow: M5HolderConcentrationEvidenceUnitOfWork = {
+        withTransaction: <T>(work: (repositories: M5HolderConcentrationEvidenceRepositories) => Promise<T>) => evidenceUow.withTransaction(repositories => work({
+          ...repositories,
+          evidence: {
+            save: async (record: Parameters<typeof repositories.evidence.save>[0]) => {
+              const saved = await repositories.evidence.save(record);
+              attemptedEvidenceWrites += 1;
+              if (attemptedEvidenceWrites === 1) throw new Error("M5_TEST_EVIDENCE_ROLLBACK_SENTINEL");
+              return saved;
+            },
+          },
+        })),
+      };
+      await expect(persistM5HolderConcentrationEvidence({ unitOfWork: rollbackEvidenceUow, mappingRevisionId: mapping.mappingRevisionId, snapshotId: first.aggregate.snapshot.snapshotId, candidateId: "candidate:synthetic" })).rejects.toThrow("M5_TEST_EVIDENCE_ROLLBACK_SENTINEL");
+      expect((await sql`select count(*)::int as count from public.eligibility_quantitative_evidence where holder_snapshot_id=${first.aggregate.snapshot.snapshotId}`)[0]!.count).toBe(0);
+      const evidence = await persistM5HolderConcentrationEvidence({ unitOfWork: evidenceUow, mappingRevisionId: mapping.mappingRevisionId, snapshotId: first.aggregate.snapshot.snapshotId, candidateId: "candidate:synthetic" });
       expect(evidence.status).toBe("PERSISTED");
       const evidenceRows = await sql`select metric_kind,value_atoms,unit,scale,holder_snapshot_id,holder_snapshot_fingerprint,holder_derivation_fingerprint,as_of from public.eligibility_quantitative_evidence where holder_snapshot_id=${first.aggregate.snapshot.snapshotId} order by metric_kind`;
       expect(evidenceRows).toHaveLength(2);
       const ceilBps = (numerator: bigint) => (numerator * 10_000n + maxUint256 - 1n) / maxUint256;
       expect(evidenceRows.map(row => [String(row.metric_kind), BigInt(String(row.value_atoms)), String(row.unit), Number(row.scale)])).toEqual([["SINGLE_CONCENTRATION", ceilBps(maxUint256 - 1000n), "BPS", 0], ["TOP10_CONCENTRATION", ceilBps(maxUint256 - 100n), "BPS", 0]]);
       expect(evidenceRows.every(row => String(row.holder_snapshot_fingerprint) === first.aggregate.snapshot.fingerprint && String(row.holder_derivation_fingerprint).length === 64 && row.as_of != null)).toBe(true);
-      const evidenceReplay = await persistM5HolderConcentrationEvidence({ unitOfWork: createM5HolderConcentrationEvidenceUnitOfWork(sql), mappingRevisionId: mapping.mappingRevisionId, snapshotId: first.aggregate.snapshot.snapshotId, candidateId: "candidate:synthetic" });
+      const evidenceReplay = await persistM5HolderConcentrationEvidence({ unitOfWork: evidenceUow, mappingRevisionId: mapping.mappingRevisionId, snapshotId: first.aggregate.snapshot.snapshotId, candidateId: "candidate:synthetic" });
       expect(evidenceReplay.status).toBe("PERSISTED");
       expect((await sql`select count(*)::int as count from public.eligibility_quantitative_evidence where holder_snapshot_id=${first.aggregate.snapshot.snapshotId}`)[0]!.count).toBe(2);
       const counts = async () => (await sql`select (select count(*) from public.intelligence_m5_holder_snapshots)::int as snapshots,(select count(*) from public.intelligence_m5_holder_snapshot_pages)::int as pages,(select count(*) from public.intelligence_m5_holder_snapshot_holders)::int as holders,(select count(*) from public.intelligence_m5_holder_concentration_derivations)::int as derivations`)[0];

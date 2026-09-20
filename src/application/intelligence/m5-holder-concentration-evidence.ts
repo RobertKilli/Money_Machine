@@ -52,18 +52,21 @@ export async function persistM5HolderConcentrationEvidence(input: Readonly<{ uni
     if (!assertion) return fail("INCOMPLETE", "M5_HOLDER_CONCENTRATION_ASSERTION_MISSING");
     const aggregate = await repositories.snapshots.readById(input.snapshotId);
     if (!aggregate) return fail("INCOMPLETE", "M5_HOLDER_CONCENTRATION_SNAPSHOT_MISSING");
+    let single: QuantitativeEligibilityEvidence;
+    let top10: QuantitativeEligibilityEvidence;
     try {
       validateCrossAuthority(aggregate, mapping, assertion, lineage);
       if (aggregate.concentration.snapshot !== aggregate.snapshot || aggregate.concentration.single.metricKind !== "SINGLE_CONCENTRATION" || aggregate.concentration.top10.metricKind !== "TOP10_CONCENTRATION" || aggregate.concentration.single.snapshotId !== aggregate.snapshot.snapshotId || aggregate.concentration.top10.snapshotId !== aggregate.snapshot.snapshotId || aggregate.concentration.single.asOf !== aggregate.concentration.top10.asOf || aggregate.concentration.single.orderedMaterialSourceRecordIds.join("\u0000") !== aggregate.concentration.top10.orderedMaterialSourceRecordIds.join("\u0000") || aggregate.concentration.single.valueAtoms > aggregate.concentration.top10.valueAtoms || aggregate.concentration.top10.valueAtoms > 10000n) throw new Error("M5_HOLDER_CONCENTRATION_DERIVATION_PAIR_INVALID");
       const common = { candidateId: input.candidateId, assetId: mapping.canonicalAssetId, canonicalIdentifier: mapping.canonicalIdentifier, assetClass: mapping.assetClass, providerId: mapping.providerId, datasetId: mapping.datasetId, datasetVersion: mapping.datasetVersion, mappingRevisionId: mapping.mappingRevisionId, sourceLineageId: lineage.sourceLineageId, observedAt: aggregate.snapshot.observedAt, availableAt: aggregate.snapshot.availableAt, provenance: { sourceType: "M5_SOURCE_LINEAGE" as const, sourceRecordIds: lineage.sourceArtifactIds, payloadFingerprint: lineage.fingerprint }, unit: "BPS", scale: 0, semanticsVersion: "m5-holder-concentration-evidence/v1", holderSnapshotId: aggregate.snapshot.snapshotId, holderSnapshotFingerprint: aggregate.snapshot.fingerprint, asOf: aggregate.concentration.single.asOf };
-      const single = createQuantitativeEligibilityEvidence({ ...common, evidenceId: evidenceIdFor(aggregate.snapshot.snapshotId, "SINGLE_CONCENTRATION"), metricKind: "SINGLE_CONCENTRATION", valueAtoms: aggregate.concentration.single.valueAtoms, holderDerivationFingerprint: aggregate.concentration.single.fingerprint });
-      const top10 = createQuantitativeEligibilityEvidence({ ...common, evidenceId: evidenceIdFor(aggregate.snapshot.snapshotId, "TOP10_CONCENTRATION"), metricKind: "TOP10_CONCENTRATION", valueAtoms: aggregate.concentration.top10.valueAtoms, holderDerivationFingerprint: aggregate.concentration.top10.fingerprint });
-      const savedSingle = await repositories.evidence.save(single); const savedTop10 = await repositories.evidence.save(top10);
-      if (savedSingle.evidenceKind !== "QUANTITATIVE" || savedTop10.evidenceKind !== "QUANTITATIVE" || savedSingle.holderDerivationFingerprint !== aggregate.concentration.single.fingerprint || savedTop10.holderDerivationFingerprint !== aggregate.concentration.top10.fingerprint) throw new Error("M5_HOLDER_CONCENTRATION_EVIDENCE_REREAD_INVALID");
-      return freeze({ status: "PERSISTED", evidence: [savedSingle, savedTop10] as const, snapshotId: aggregate.snapshot.snapshotId, snapshotFingerprint: aggregate.snapshot.fingerprint, derivationFingerprints: [aggregate.concentration.single.fingerprint, aggregate.concentration.top10.fingerprint] as const });
+      single = createQuantitativeEligibilityEvidence({ ...common, evidenceId: evidenceIdFor(aggregate.snapshot.snapshotId, "SINGLE_CONCENTRATION"), metricKind: "SINGLE_CONCENTRATION", valueAtoms: aggregate.concentration.single.valueAtoms, holderDerivationFingerprint: aggregate.concentration.single.fingerprint });
+      top10 = createQuantitativeEligibilityEvidence({ ...common, evidenceId: evidenceIdFor(aggregate.snapshot.snapshotId, "TOP10_CONCENTRATION"), metricKind: "TOP10_CONCENTRATION", valueAtoms: aggregate.concentration.top10.valueAtoms, holderDerivationFingerprint: aggregate.concentration.top10.fingerprint });
     } catch (error) {
       const code = error instanceof Error ? error.message : "M5_HOLDER_CONCENTRATION_AUTHORITY_INVALID";
       return fail(code.includes("MISSING") ? "INCOMPLETE" : "INVALID", code.startsWith("M5_") ? code : "M5_HOLDER_CONCENTRATION_AUTHORITY_INVALID");
     }
+    const savedSingle = await repositories.evidence.save(single);
+    const savedTop10 = await repositories.evidence.save(top10);
+    if (savedSingle.evidenceKind !== "QUANTITATIVE" || savedTop10.evidenceKind !== "QUANTITATIVE" || savedSingle.holderDerivationFingerprint !== aggregate.concentration.single.fingerprint || savedTop10.holderDerivationFingerprint !== aggregate.concentration.top10.fingerprint) throw new Error("M5_HOLDER_CONCENTRATION_EVIDENCE_REREAD_INVALID");
+    return freeze({ status: "PERSISTED", evidence: [savedSingle, savedTop10] as const, snapshotId: aggregate.snapshot.snapshotId, snapshotFingerprint: aggregate.snapshot.fingerprint, derivationFingerprints: [aggregate.concentration.single.fingerprint, aggregate.concentration.top10.fingerprint] as const });
   });
 }
