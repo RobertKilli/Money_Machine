@@ -85,6 +85,13 @@ function repositories(client: TransactionSql, ruleSets: M5SuspiciousRuleSetAutho
       return stored;
     },
   };
+  const readSealedById = async (assessmentId: string) => {
+    const assessment = await assessments.readById(assessmentId);
+    if (!assessment) return undefined;
+    const members = await memberships.readByAssessmentId(assessmentId);
+    if (JSON.stringify(members) !== JSON.stringify(assessment.findingReferences)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MEMBER_SET_INVALID");
+    return Object.freeze({ assessment, members });
+  };
   const findings = { readExact: async (scope: Parameters<M5SuspiciousAssessmentRepositories["findings"]["readExact"]>[0]) => {
     const rows = await client`select * from public.eligibility_suspicious_evidence where provider_id=${scope.providerId} and dataset_id=${scope.datasetId} and dataset_version=${scope.datasetVersion} and candidate_id=${scope.candidateId} and asset_id=${scope.assetId} and canonical_identifier=${scope.canonicalIdentifier} and asset_class=${scope.assetClass} and mapping_revision_id=${scope.mappingRevisionId} and source_lineage_id=${scope.sourceLineageId} and observed_at<=${scope.asOf} and available_at<=${scope.asOf} order by evidence_id asc`;
     const seen = new Set<string>();
@@ -93,7 +100,7 @@ function repositories(client: TransactionSql, ruleSets: M5SuspiciousRuleSetAutho
   const lineageRepository = createSourceLineageRepository(client);
   const assertionRepository = createProviderAssetIdentityReadRepository(client);
   const mappingRepository = createAssetMappingRevisionRepository(client, lineageRepository, assertionRepository);
-  return Object.freeze({ assessments, memberships, findings, mappings: { readById: async (id: string) => { if (!mappingRepository.readById) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MAPPING_READER_INVALID"); return mappingRepository.readById(id); } }, lineages: { validateForRawEvidenceCreation: async (id: string) => { if (!lineageRepository.validateForRawEvidenceCreation) throw new Error("M5_SUSPICIOUS_ASSESSMENT_LINEAGE_READER_INVALID"); return lineageRepository.validateForRawEvidenceCreation(id); }, readMembers: lineageRepository.readMembers }, ruleSets });
+  return Object.freeze({ assessments: { ...assessments, readSealedById }, memberships, findings, mappings: { readById: async (id: string) => { if (!mappingRepository.readById) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MAPPING_READER_INVALID"); return mappingRepository.readById(id); } }, lineages: { validateForRawEvidenceCreation: async (id: string) => { if (!lineageRepository.validateForRawEvidenceCreation) throw new Error("M5_SUSPICIOUS_ASSESSMENT_LINEAGE_READER_INVALID"); return lineageRepository.validateForRawEvidenceCreation(id); }, readMembers: lineageRepository.readMembers }, ruleSets });
 }
 
 export function createM5SuspiciousAssessmentUnitOfWork(client: Sql, ruleSets: M5SuspiciousRuleSetAuthorityResolver): M5SuspiciousAssessmentUnitOfWork {
@@ -102,7 +109,20 @@ export function createM5SuspiciousAssessmentUnitOfWork(client: Sql, ruleSets: M5
 
 export function createM5SuspiciousAssessmentReadRepository(client: TransactionSql, ruleSets: M5SuspiciousRuleSetAuthorityResolver) {
   const value = repositories(client, ruleSets);
-  return Object.freeze({ readById: value.assessments.readById, readMembers: value.memberships.readByAssessmentId });
+  return Object.freeze({ readById: value.assessments.readById, readSealedById: value.assessments.readSealedById, readMembers: value.memberships.readByAssessmentId });
+}
+
+/** Autocommit factory intentionally exposes reads only; no assessment writer is returned. */
+export function createM5SuspiciousAssessmentAutocommitReadRepository(client: Sql) {
+  const read = async (assessmentId: string) => {
+    const rows = await client`select * from public.eligibility_suspicious_assessments where suspicious_assessment_id=${assessmentId}`;
+    return rows.length === 0 ? undefined : mapM5SuspiciousAssessmentRow(rows[0] as RawRow);
+  };
+  const readMembers = async (assessmentId: string) => {
+    const rows = await client`select evidence_id,evidence_fingerprint,member_ordinal from public.eligibility_suspicious_assessment_findings where suspicious_assessment_id=${assessmentId} order by member_ordinal asc`;
+    return Object.freeze(rows.map((value, index) => { const row = value as RawRow; if (Number(row.member_ordinal) !== index) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MEMBER_ORDINAL_INVALID"); const fingerprint = text(row.evidence_fingerprint, "M5_SUSPICIOUS_ASSESSMENT_MEMBER_FINGERPRINT_INVALID"); if (!SHA.test(fingerprint)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MEMBER_FINGERPRINT_INVALID"); return Object.freeze({ evidenceId: text(row.evidence_id, "M5_SUSPICIOUS_ASSESSMENT_MEMBER_ID_INVALID"), fingerprint }); }));
+  };
+  return Object.freeze({ readById: read, readMembers, readSealedById: async (assessmentId: string) => { const assessment = await read(assessmentId); if (!assessment) return undefined; const members = await readMembers(assessmentId); if (JSON.stringify(members) !== JSON.stringify(assessment.findingReferences)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MEMBER_SET_INVALID"); return Object.freeze({ assessment, members }); } });
 }
 
 export const createM5SuspiciousAssessmentSql = (url: string): Sql => postgres(url, { max: 1, prepare: true, ssl: "require" });

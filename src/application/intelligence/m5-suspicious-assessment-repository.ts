@@ -7,6 +7,11 @@ import type { M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence
 export interface M5SuspiciousAssessmentRepository {
   readonly save: (assessment: M5SuspiciousAssessment) => Promise<M5SuspiciousAssessment>;
   readonly readById: (assessmentId: string) => Promise<M5SuspiciousAssessment | undefined>;
+  readonly readSealedById: (assessmentId: string) => Promise<Readonly<{ assessment: M5SuspiciousAssessment; members: readonly M5SuspiciousFindingReference[] }> | undefined>;
+}
+export interface M5SuspiciousAssessmentReadCapability {
+  readonly readById: (assessmentId: string) => Promise<M5SuspiciousAssessment | undefined>;
+  readonly readSealedById: (assessmentId: string) => Promise<Readonly<{ assessment: M5SuspiciousAssessment; members: readonly M5SuspiciousFindingReference[] }> | undefined>;
 }
 
 export interface M5SuspiciousAssessmentMembershipRepository {

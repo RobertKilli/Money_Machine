@@ -3,6 +3,9 @@ import { produceCanonicalM5, type M5ProducerDependencies, type ProduceCanonicalM
 import { M5_EVIDENCE_MANIFEST_VERSION, type M5EvidenceManifest, type M5EvidenceSemanticCompatibility } from "@/application/intelligence/assemble-m5-evidence";
 import { createAgeReferenceEligibilityEvidence, createQuantitativeEligibilityEvidence, createVenueEligibilityEvidence, type RawEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
 import { mapQuantitativeEligibilityEvidenceRow, mapReferenceEligibilityEvidenceRow, mapVenueEligibilityEvidenceRow, mapSuspiciousEligibilityEvidenceRow } from "@/infrastructure/postgres/eligibility-evidence-repository";
+import { createM5SuspiciousAssessment } from "@/domain/intelligence/m5-suspicious-assessment";
+import { createM5SuspiciousRuleSetAuthority } from "@/domain/intelligence/m5-suspicious-rule-set";
+import { encodeM5DatasetPin } from "@/domain/intelligence/m5-dataset-pin";
 
 const asOf = "2026-09-13T00:00:00.000Z";
 const base = (overrides: Record<string, unknown> = {}) => ({ evidenceId: "e", candidateId: "candidate", assetId: "asset", canonicalIdentifier: "asset:one", assetClass: "CRYPTO", providerId: "provider", datasetId: "dataset", datasetVersion: "v1", mappingRevisionId: "mapping-1", sourceLineageId: "lineage-1", observedAt: "2026-09-10T00:00:00.000Z", availableAt: "2026-09-12T00:00:00.000Z", provenance: { sourceType: "M5_SOURCE_LINEAGE", sourceRecordIds: ["source"], payloadFingerprint: "a".repeat(64) }, ...overrides });
@@ -23,11 +26,12 @@ const complete = (overrides: { readonly liquidity?: bigint } = {}) => {
   const venueA = createVenueEligibilityEvidence(base({ evidenceId: "venue-a", venueId: "venue-a", eligibilityState: "ELIGIBLE" }) as never);
   const venueB = createVenueEligibilityEvidence(base({ evidenceId: "venue-b", venueId: "venue-b", eligibilityState: "ELIGIBLE" }) as never);
   const raw = [age, history, liquidity, volume, marketCap, top10, single, volatility, venueA, venueB] as const;
-  const manifest: M5EvidenceManifest = { version: M5_EVIDENCE_MANIFEST_VERSION, age: ref(age), historySpan: ref(history), liquidity: ref(liquidity), volume: ref(volume), marketCap: ref(marketCap), top10HolderConcentration: ref(top10), singleHolderConcentration: ref(single), volatility: ref(volatility), venues: [ref(venueA), ref(venueB)], suspicious: [] };
-  return { raw, manifest };
+  const assessment = createM5SuspiciousAssessment({ contractVersion: "m5-suspicious-assessment/v1", providerId: "provider", datasetId: "dataset", datasetVersion: "v1", candidateId: "candidate", assetId: "asset", canonicalIdentifier: "asset:one", assetClass: "CRYPTO", mappingRevisionId: "mapping-1", sourceLineageId: "lineage-1", ruleSetVersion: "rules/v1", ruleSetFingerprint: "b".repeat(64), detectorVersion: "detector/v1", coveredRuleIds: ["RULE_A"], result: "NO_FINDINGS", findingReferences: [], asOf, observedAt: "2026-09-10T00:00:00.000Z", availableAt: "2026-09-12T00:00:00.000Z", sourceRecordIds: ["source"], payloadFingerprint: "a".repeat(64), datasetPins: [encodeM5DatasetPin(pin)], recordedAt: asOf });
+  const manifest: M5EvidenceManifest = { version: M5_EVIDENCE_MANIFEST_VERSION, age: ref(age), historySpan: ref(history), liquidity: ref(liquidity), volume: ref(volume), marketCap: ref(marketCap), top10HolderConcentration: ref(top10), singleHolderConcentration: ref(single), volatility: ref(volatility), venues: [ref(venueA), ref(venueB)], suspiciousAssessment: { assessmentId: assessment.suspiciousAssessmentId, fingerprint: assessment.fingerprint } };
+  return { raw, manifest, assessment };
 };
 const input = (manifest: M5EvidenceManifest): ProduceCanonicalM5Input => ({ sourceContext: sourceContext(), manifest, compatibility: compatibility(), allowedDatasetPins: [pin] });
-const dependencies = (rawEvidence: readonly RawEligibilityEvidence[], persisted: (value: unknown) => void = () => undefined): M5ProducerDependencies => ({ rawEvidenceRepository: { readAt: vi.fn(async () => rawEvidence) }, persistCanonicalM5: vi.fn(async value => persisted(value)) });
+const dependencies = (rawEvidence: readonly RawEligibilityEvidence[], persisted: (value: unknown) => void = () => undefined): M5ProducerDependencies => { const fixture = complete(); const assessment = fixture.assessment; const ruleSet = createM5SuspiciousRuleSetAuthority({ contractVersion: "m5-suspicious-rule-set/v1", ruleSetVersion: "rules/v1", providerId: "provider", datasetId: "dataset", datasetVersion: "v1", detectorVersion: "detector/v1", requiredRuleIds: ["RULE_A"] }); return { rawEvidenceRepository: { readAt: vi.fn(async () => rawEvidence) }, suspiciousAssessmentRepository: { readById: vi.fn(async () => assessment), readSealedById: vi.fn(async () => ({ assessment, members: assessment.findingReferences })) }, suspiciousRuleSetResolver: { resolve: vi.fn(async () => ({ ...ruleSet, fingerprint: assessment.ruleSetFingerprint })) }, persistCanonicalM5: vi.fn(async value => persisted(value)) }; };
 
 describe("M5 producer orchestration", () => {
   it("persists COMPLETE + ELIGIBLE exactly once", async () => {
@@ -51,7 +55,7 @@ describe("M5 producer orchestration", () => {
   });
 
   it.each(["candidateId", "assetId", "canonicalIdentifier", "assetClass", "asOf"] as const)("fails closed on source identity field %s", async field => {
-    const fixture = complete(); const changed = { ...sourceContext(), [field]: field === "asOf" ? "2026-09-14T00:00:00.000Z" : "other" }; const deps = field === "asOf" ? { rawEvidenceRepository: { readAt: vi.fn(async (scope: { readonly asOf: string }) => scope.asOf === asOf ? fixture.raw : []) }, persistCanonicalM5: vi.fn(async () => undefined) } : dependencies(fixture.raw); const result = await produceCanonicalM5({ ...input(fixture.manifest), sourceContext: changed }, deps);
+    const fixture = complete(); const changed = { ...sourceContext(), [field]: field === "asOf" ? "2026-09-14T00:00:00.000Z" : "other" }; const deps = field === "asOf" ? { ...dependencies(fixture.raw), rawEvidenceRepository: { readAt: vi.fn(async (scope: { readonly asOf: string }) => scope.asOf === asOf ? fixture.raw : []) } } : dependencies(fixture.raw); const result = await produceCanonicalM5({ ...input(fixture.manifest), sourceContext: changed }, deps);
     expect(["INVALID_ASSEMBLY", "INCOMPLETE"]).toContain(result.status); expect(deps.persistCanonicalM5).not.toHaveBeenCalled();
   });
 
@@ -65,7 +69,7 @@ describe("M5 producer orchestration", () => {
   });
 
   it("propagates persistence failures and does not report PERSISTED", async () => {
-    const fixture = complete(); const error = new Error("CANONICAL_WRITE_FAILED"); const deps: M5ProducerDependencies = { rawEvidenceRepository: { readAt: vi.fn(async () => fixture.raw) }, persistCanonicalM5: vi.fn(async () => { throw error; }) }; await expect(produceCanonicalM5(input(fixture.manifest), deps)).rejects.toBe(error);
+    const fixture = complete(); const error = new Error("CANONICAL_WRITE_FAILED"); const deps = { ...dependencies(fixture.raw), persistCanonicalM5: vi.fn(async () => { throw error; }) }; await expect(produceCanonicalM5(input(fixture.manifest), deps)).rejects.toBe(error);
   });
 
   it("supports replay through the injected idempotent persistence contract", async () => {

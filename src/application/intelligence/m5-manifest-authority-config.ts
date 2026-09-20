@@ -84,9 +84,18 @@ function parseEvidenceRef(value: unknown): { evidenceId: string; fingerprint: st
   };
 }
 
+function parseSuspiciousAssessmentRef(value: unknown): { assessmentId: string; fingerprint: string } {
+  const item = record(value, "M5_CONFIG_SUSPICIOUS_ASSESSMENT_INVALID");
+  exactKeys(item, ["assessmentId", "fingerprint"], "M5_CONFIG_SUSPICIOUS_ASSESSMENT_UNKNOWN_FIELD");
+  const assessmentId = requiredString(item.assessmentId, "M5_CONFIG_SUSPICIOUS_ASSESSMENT_ID_INVALID");
+  const fingerprint = requiredString(item.fingerprint, "M5_CONFIG_SUSPICIOUS_ASSESSMENT_FINGERPRINT_INVALID");
+  if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("M5_CONFIG_SUSPICIOUS_ASSESSMENT_FINGERPRINT_INVALID");
+  return { assessmentId, fingerprint };
+}
+
 function parseManifest(value: unknown): M5EvidenceManifest {
   const item = record(value, "M5_CONFIG_MANIFEST_INVALID");
-  const keys = ["version", "age", "historySpan", "liquidity", "volume", "marketCap", "top10HolderConcentration", "singleHolderConcentration", "volatility", "contractVerification", "venues", "suspicious"] as const;
+  const keys = ["version", "age", "historySpan", "liquidity", "volume", "marketCap", "top10HolderConcentration", "singleHolderConcentration", "volatility", "contractVerification", "venues", "suspiciousAssessment"] as const;
   exactKeys(item, keys, "M5_CONFIG_MANIFEST_UNKNOWN_FIELD");
   const scalar = (key: (typeof keys)[number]) => item[key] === undefined ? undefined : parseEvidenceRef(item[key]);
   return {
@@ -101,7 +110,7 @@ function parseManifest(value: unknown): M5EvidenceManifest {
     volatility: scalar("volatility"),
     contractVerification: scalar("contractVerification"),
     venues: requiredArray(item.venues, "M5_CONFIG_MANIFEST_VENUES_INVALID").map(parseEvidenceRef),
-    suspicious: requiredArray(item.suspicious, "M5_CONFIG_MANIFEST_SUSPICIOUS_INVALID").map(parseEvidenceRef),
+    suspiciousAssessment: parseSuspiciousAssessmentRef(item.suspiciousAssessment),
   };
 }
 

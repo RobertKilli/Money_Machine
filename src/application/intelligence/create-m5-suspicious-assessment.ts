@@ -57,10 +57,8 @@ export async function createM5SuspiciousAssessmentAuthority(input: Readonly<{ un
     });
     const stored = await repositories.assessments.save(assessment);
     await repositories.memberships.save(stored, references);
-    const reread = await repositories.assessments.readById(stored.suspiciousAssessmentId);
+    const reread = await repositories.assessments.readSealedById(stored.suspiciousAssessmentId);
     if (!reread) throw new Error("M5_SUSPICIOUS_ASSESSMENT_REREAD_NOT_FOUND");
-    const memberSet = await repositories.memberships.readByAssessmentId(reread.suspiciousAssessmentId);
-    if (JSON.stringify(memberSet) !== JSON.stringify(reread.findingReferences)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MEMBER_SET_INVALID");
-    return reread;
+    return reread.assessment;
   });
 }

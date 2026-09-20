@@ -180,7 +180,7 @@ lineage, mapping revision, and persisted raw evidence. Provider adapters,
 legal approval, real-data import, and suspicious-evidence semantics remain
 separate scope.
 
-## 11. M5 suspicious assessment authority (Slice 1)
+## 11. M5 suspicious assessment authority and manifest binding
 
 An empty suspicious-evidence list is not evidence of a clean assessment. The
 immutable `M5SuspiciousAssessment` authority explicitly represents either
@@ -196,8 +196,14 @@ dataset pins. `recordedAt` is excluded. Assessments and membership rows are
 append-only, immutable, transaction-scoped, and never repaired or selected by
 newest-wins logic.
 
-This slice intentionally does not change the existing manifest, assembly,
-evaluator, canonical handoff, or producer. Until the next manifest-v2 and
-assembly/handoff binding slice is complete, the legacy empty
-`manifest.suspicious` flow remains unsafe and must not be used for production
-or deployment.
+The authoritative manifest is `m5-evidence-manifest/v2` and contains one exact
+`suspiciousAssessment` reference (ID plus fingerprint); it cannot contain a
+legacy suspicious list. Producer reads that exact assessment and its sealed
+finding membership, and assembly validates scope, rule coverage, timestamps,
+pins, and exact membership before returning `COMPLETE`. Missing assessment is
+`INCOMPLETE`; corrupt or contradictory authority is invalid. The evaluator is
+called only for `COMPLETE` assemblies. `NO_FINDINGS` maps to CLEAN and
+`FINDINGS_PRESENT` maps to SUSPICIOUS; neither mapping can be inferred from an
+empty list. Canonical M5 stores the assessment ID, fingerprint, and result in
+its immutable material fingerprint. Manifest-v1 and the legacy empty-list flow
+fail closed and must not be used for production or deployment.
