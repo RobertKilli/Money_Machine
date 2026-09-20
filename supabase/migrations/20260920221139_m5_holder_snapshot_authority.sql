@@ -90,7 +90,8 @@ create table public.intelligence_m5_holder_concentration_derivations (
   check (observed_at <= available_at and available_at <= as_of)
 );
 
-create index intelligence_m5_holder_snapshot_pages_source_artifact_idx on public.intelligence_m5_holder_snapshot_pages(source_artifact_id);
+create index intelligence_m5_holder_snapshots_lineage_fk_idx on public.intelligence_m5_holder_snapshots(source_lineage_id, provider_id, dataset_id, dataset_version);
+create index intelligence_m5_holder_snapshot_pages_source_artifact_fk_idx on public.intelligence_m5_holder_snapshot_pages(source_artifact_id, provider_id, dataset_id, dataset_version);
 create index intelligence_m5_holder_snapshot_holders_page_idx on public.intelligence_m5_holder_snapshot_holders(snapshot_id, source_page_ordinal);
 create index intelligence_m5_holder_snapshot_holders_artifact_idx on public.intelligence_m5_holder_snapshot_holders(source_artifact_id);
 create index intelligence_m5_holder_concentration_derivations_snapshot_idx on public.intelligence_m5_holder_concentration_derivations(snapshot_id);

@@ -13,6 +13,8 @@ describe("M5 holder snapshot authority migration", () => {
     expect(sql).toContain("primary key (snapshot_id, metric_kind)");
     expect(sql).toContain("references public.intelligence_source_lineages");
     expect(sql).toContain("references public.intelligence_source_artifacts");
+    expect(sql).toContain("intelligence_m5_holder_snapshots_lineage_fk_idx");
+    expect(sql).toContain("intelligence_m5_holder_snapshot_pages_source_artifact_fk_idx");
   });
 
   it("is server-only append-only schema without application DML", () => {
