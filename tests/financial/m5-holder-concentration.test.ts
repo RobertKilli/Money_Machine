@@ -123,6 +123,8 @@ describe("M5 holder concentration authority", () => {
     expect(Object.isFrozen(result.snapshot.holders)).toBe(true);
     expect(result.single.scale).toBe(0);
     expect(result.single.unit).toBe("BPS");
+    expect(result.single.asOf).toBe(asOf);
+    expect(result.single.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect("eligibility" in result).toBe(false);
   });
 
@@ -146,7 +148,8 @@ describe("M5 holder concentration authority", () => {
   it.each([
     ["duplicate holder", { holders: [...material().holders.slice(0, 11), { ...material().holders[0] }] }, "M5_HOLDER_DUPLICATE"],
     ["count mismatch", { declaredHolderCount: 11 }, "M5_HOLDER_COUNT_MISMATCH"],
-    ["supply mismatch", { denominatorAtoms: 999n }, "M5_HOLDER_SUPPLY_RECONCILIATION_INVALID"],
+    ["supply below holder sum", { denominatorAtoms: 999n }, "M5_HOLDER_SUPPLY_RECONCILIATION_INVALID"],
+    ["supply above holder sum", { denominatorAtoms: 10_000n }, "M5_HOLDER_SUPPLY_RECONCILIATION_INVALID"],
     ["negative balance", { holders: material().holders.map((holder, index) => index === 0 ? { ...holder, balanceAtoms: -1n } : holder) }, "M5_HOLDER_RANGE_INVALID"],
     ["circulating supply", { supplyBasis: "CIRCULATING_SUPPLY" }, "M5_HOLDER_SUPPLY_BASIS_UNSUPPORTED"],
     ["explicit exclusion", { addressPolicy: "EXPLICIT_EXCLUSIONS" }, "M5_HOLDER_EXCLUSIONS_UNSUPPORTED"],
@@ -157,6 +160,8 @@ describe("M5 holder concentration authority", () => {
   it("requires finality and rejects future availability", () => {
     const lowFinality = parseM5HolderSnapshotFixture(fixture(snapshot(), { finality: { status: "CONFIRMED", depth: 1 } }));
     expect(lowFinality.status).toBe("INCOMPLETE");
+    const falselyFinalized = parseM5HolderSnapshotFixture(fixture(snapshot(), { finality: { status: "FINALIZED", depth: 1 } }));
+    expect(falselyFinalized.status).toBe("INCOMPLETE");
     const future = deriveM5HolderConcentration(snapshot({ availableAt: "2026-02-02T00:00:00.000Z" }), asOf);
     expect(future.status).toBe("INVALID");
   });
@@ -216,7 +221,7 @@ describe("M5 holder concentration authority", () => {
   });
 
   it("preserves bigint precision for large atom values", () => {
-    const large = 9_007_199_254_740_993n;
+    const large = (1n << 64n) + 123n;
     const value = snapshot({
       holders: [{ ...material().holders[0], balanceAtoms: large, address: "0x0000000000000000000000000000000000000001", sourcePageOrdinal: 0, sourceItemOrdinal: 0, ordinal: 0 }],
       declaredHolderCount: 1,

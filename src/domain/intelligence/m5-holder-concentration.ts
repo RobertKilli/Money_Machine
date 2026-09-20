@@ -9,6 +9,7 @@ export const M5_HOLDER_SUPPLY_BASIS = "TOTAL_SUPPLY" as const;
 export const M5_HOLDER_ADDRESS_POLICY = "INCLUDE_ALL" as const;
 export const M5_CONCENTRATION_SCALE = 0 as const;
 export const M5_CONCENTRATION_UNIT = "BPS" as const;
+export const M5_HOLDER_FINALITY_POLICY_VERSION = "m5-holder-finality/12-confirmed-depth/v1" as const;
 export const M5_MIN_FINALITY_DEPTH = 12;
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -17,7 +18,8 @@ const BLOCK_HASH = /^0x[0-9a-fA-F]{64}$/;
 const CHAIN = /^eip155:[1-9][0-9]*$/;
 const ATOM = /^(?:0|[1-9][0-9]*)$/;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const INT64_MAX = (1n << 63n) - 1n;
+const UINT64_MAX = (1n << 64n) - 1n;
+const UINT256_MAX = (1n << 256n) - 1n;
 const UINT32_MAX = 4_294_967_295;
 
 type Obj = Record<string, unknown>;
@@ -44,6 +46,12 @@ const exact = (value: Obj, keys: readonly string[], code: string): void => {
   })) throw new Error(code);
 };
 
+const safeIdentifier = (value: unknown, code: string): string => {
+  const result = text(value, code);
+  if (/:\/\/|[?#]/.test(result)) throw new Error("M5_HOLDER_SECRET_FIELD_REJECTED");
+  return result;
+};
+
 const text = (value: unknown, code: string, max = 512): string => {
   if (typeof value !== "string" || value.trim() !== value || value.length === 0 || value.length > max) throw new Error(code);
   return value;
@@ -67,10 +75,16 @@ const safeInteger = (value: unknown, code: string, minimum = 0): number => {
 };
 
 const atom = (value: unknown, code: string): bigint => {
-  const result = text(value, code, 64);
+  const result = text(value, code, 78);
   if (!ATOM.test(result)) throw new Error(code);
   const parsed = BigInt(result);
-  if (parsed > INT64_MAX) throw new Error(code);
+  if (parsed > UINT256_MAX) throw new Error(code);
+  return parsed;
+};
+
+const blockNumber = (value: unknown, code: string): bigint => {
+  const parsed = atom(value, code);
+  if (parsed > UINT64_MAX) throw new Error(code);
   return parsed;
 };
 
@@ -168,6 +182,8 @@ export type M5ConcentrationMaterial = Readonly<{
   snapshotId: string;
   snapshotFingerprint: string;
   orderedMaterialSourceRecordIds: readonly string[];
+  asOf: string;
+  fingerprint: string;
 }>;
 
 export type M5HolderConcentrationResult =
@@ -217,27 +233,26 @@ function material(input: SnapshotMaterial | (SnapshotMaterial & Readonly<{ snaps
 }
 
 export function m5HolderSnapshotIdFor(input: SnapshotMaterial): string {
-  return `m5-holder-snapshot:${canonicalSha256({ contractVersion: M5_HOLDER_SNAPSHOT_CONTRACT_VERSION, policyVersion: M5_CONCENTRATION_POLICY_VERSION, ...input })}`;
+  return `m5-holder-snapshot:${canonicalSha256({ contractVersion: M5_HOLDER_SNAPSHOT_CONTRACT_VERSION, policyVersion: M5_CONCENTRATION_POLICY_VERSION, finalityPolicyVersion: M5_HOLDER_FINALITY_POLICY_VERSION, ...input })}`;
 }
 
 export function m5HolderSnapshotFingerprint(input: SnapshotMaterial): string {
   const normalized = material(input);
-  return canonicalSha256({ contractVersion: M5_HOLDER_SNAPSHOT_CONTRACT_VERSION, policyVersion: M5_CONCENTRATION_POLICY_VERSION, snapshotId: m5HolderSnapshotIdFor(normalized), ...normalized });
+  return canonicalSha256({ contractVersion: M5_HOLDER_SNAPSHOT_CONTRACT_VERSION, policyVersion: M5_CONCENTRATION_POLICY_VERSION, finalityPolicyVersion: M5_HOLDER_FINALITY_POLICY_VERSION, snapshotId: m5HolderSnapshotIdFor(normalized), ...normalized });
 }
 
 function validateSnapshotInput(input: SnapshotMaterial): SnapshotMaterial {
   if (input.chainId !== M5_ETHEREUM_CHAIN_ID || !ADDRESS.test(input.contractAddress) || input.contractAddress !== input.contractAddress.toLowerCase()) throw new Error("M5_HOLDER_IDENTITY_INVALID");
   if (!input.providerId || !input.datasetId || !input.datasetVersion || !input.sourceLineageId) throw new Error("M5_HOLDER_SCHEMA_INVALID");
-  if (!BLOCK_HASH.test(input.blockHash) || input.blockHash !== input.blockHash.toLowerCase() || input.blockNumber < 0n || input.blockNumber > INT64_MAX) throw new Error("M5_HOLDER_BLOCK_MISMATCH");
+  if (!BLOCK_HASH.test(input.blockHash) || input.blockHash !== input.blockHash.toLowerCase() || input.blockNumber <= 0n || input.blockNumber > UINT64_MAX) throw new Error("M5_HOLDER_BLOCK_MISMATCH");
   time(input.blockTimestamp, "M5_HOLDER_TIME_INVALID");
   time(input.observedAt, "M5_HOLDER_TIME_INVALID");
   time(input.availableAt, "M5_HOLDER_TIME_INVALID");
   if (input.tokenDecimals < 0 || input.tokenDecimals > 36 || !Number.isSafeInteger(input.tokenDecimals)) throw new Error("M5_HOLDER_RANGE_INVALID");
-  if ((input.finalityStatus !== "CONFIRMED" && input.finalityStatus !== "FINALIZED") || !Number.isSafeInteger(input.finalityDepth) || input.finalityDepth < 0) throw new Error("M5_HOLDER_FINALITY_INSUFFICIENT");
-  if (input.finalityStatus !== "FINALIZED" && input.finalityDepth < M5_MIN_FINALITY_DEPTH) throw new Error("M5_HOLDER_FINALITY_INSUFFICIENT");
+  if ((input.finalityStatus !== "CONFIRMED" && input.finalityStatus !== "FINALIZED") || !Number.isSafeInteger(input.finalityDepth) || input.finalityDepth < M5_MIN_FINALITY_DEPTH) throw new Error("M5_HOLDER_FINALITY_INSUFFICIENT");
   if (input.supplyBasis !== M5_HOLDER_SUPPLY_BASIS) throw new Error("M5_HOLDER_SUPPLY_BASIS_UNSUPPORTED");
   if (input.addressPolicy !== M5_HOLDER_ADDRESS_POLICY) throw new Error("M5_HOLDER_EXCLUSIONS_UNSUPPORTED");
-  if (input.denominatorAtoms <= 0n || input.denominatorAtoms > INT64_MAX) throw new Error("M5_HOLDER_RANGE_INVALID");
+  if (input.denominatorAtoms <= 0n || input.denominatorAtoms > UINT256_MAX) throw new Error("M5_HOLDER_RANGE_INVALID");
   if (input.declaredHolderCount !== input.holders.length) throw new Error("M5_HOLDER_COUNT_MISMATCH");
   if (input.blockTimestamp > input.observedAt || input.observedAt > input.availableAt) throw new Error("M5_HOLDER_TIME_INVALID");
   if (input.materialSourceRecordIds.length === 0 || input.payloadFingerprints.length === 0) throw new Error("M5_HOLDER_FINGERPRINT_INVALID");
@@ -246,19 +261,19 @@ function validateSnapshotInput(input: SnapshotMaterial): SnapshotMaterial {
   if (pages.length === 0 || input.fullPaginationProof.pageCount !== pages.length || input.fullPaginationProof.finalPageOrdinal !== pages.length - 1 || pages.some((page, index) => page.pageOrdinal !== index) || pages.filter(page => page.isFinal).length !== 1 || !pages[pages.length - 1]!.isFinal) throw new Error("M5_HOLDER_PAGINATION_INCOMPLETE");
   const pageSourceIds = pages.flatMap(page => page.sourceRecordIds);
   if (new Set(pageSourceIds).size !== pageSourceIds.length || JSON.stringify([...pageSourceIds].sort()) !== JSON.stringify([...input.materialSourceRecordIds].sort())) throw new Error("M5_HOLDER_FINGERPRINT_INVALID");
-  if (input.materialSourceRecordIds.some(id => typeof id !== "string" || id.trim() !== id || id.length === 0) || input.payloadFingerprints.some(value => !SHA256.test(value)) || new Set(input.materialSourceRecordIds).size !== input.materialSourceRecordIds.length || new Set(input.payloadFingerprints).size !== input.payloadFingerprints.length) throw new Error("M5_HOLDER_FINGERPRINT_INVALID");
+  if (input.materialSourceRecordIds.some(id => !safeIdentifier(id, "M5_HOLDER_FINGERPRINT_INVALID")) || input.payloadFingerprints.some(value => !SHA256.test(value)) || new Set(input.materialSourceRecordIds).size !== input.materialSourceRecordIds.length || new Set(input.payloadFingerprints).size !== input.payloadFingerprints.length) throw new Error("M5_HOLDER_FINGERPRINT_INVALID");
   if (JSON.stringify(pages.map(page => page.payloadFingerprint).sort()) !== JSON.stringify([...input.payloadFingerprints].sort())) throw new Error("M5_HOLDER_FINGERPRINT_INVALID");
   const itemKeys = new Set<string>();
   const pageCounts = new Map<number, number>();
   const total = input.holders.reduce((sum, holder) => {
-    if (!ADDRESS.test(holder.address) || holder.address !== holder.address.toLowerCase() || !holder.sourceRecordId.trim() || !Number.isSafeInteger(holder.sourcePageOrdinal) || !Number.isSafeInteger(holder.sourceItemOrdinal) || !Number.isSafeInteger(holder.ordinal)) throw new Error("M5_HOLDER_SCHEMA_INVALID");
+    if (!ADDRESS.test(holder.address) || holder.address !== holder.address.toLowerCase() || !safeIdentifier(holder.sourceRecordId, "M5_HOLDER_FINGERPRINT_INVALID") || !Number.isSafeInteger(holder.sourcePageOrdinal) || !Number.isSafeInteger(holder.sourceItemOrdinal) || !Number.isSafeInteger(holder.ordinal)) throw new Error("M5_HOLDER_SCHEMA_INVALID");
     const page = pages[holder.sourcePageOrdinal];
     if (!page || holder.sourceItemOrdinal >= page.itemCount || !page.sourceRecordIds.includes(holder.sourceRecordId)) throw new Error("M5_HOLDER_FINGERPRINT_INVALID");
     const itemKey = `${holder.sourcePageOrdinal}:${holder.sourceItemOrdinal}`;
     if (itemKeys.has(itemKey)) throw new Error("M5_HOLDER_DUPLICATE");
     itemKeys.add(itemKey);
     pageCounts.set(holder.sourcePageOrdinal, (pageCounts.get(holder.sourcePageOrdinal) ?? 0) + 1);
-    if (holder.inclusionState !== "INCLUDED" || holder.balanceAtoms < 0n || holder.balanceAtoms > INT64_MAX) throw new Error(holder.inclusionState === "EXPLICITLY_EXCLUDED" ? "M5_HOLDER_EXCLUSIONS_UNSUPPORTED" : "M5_HOLDER_RANGE_INVALID");
+    if (holder.inclusionState !== "INCLUDED" || holder.balanceAtoms < 0n || holder.balanceAtoms > UINT256_MAX) throw new Error(holder.inclusionState === "EXPLICITLY_EXCLUDED" ? "M5_HOLDER_EXCLUSIONS_UNSUPPORTED" : "M5_HOLDER_RANGE_INVALID");
     return sum + holder.balanceAtoms;
   }, 0n);
   if (new Set(input.holders.map(holder => holder.address)).size !== input.holders.length) throw new Error("M5_HOLDER_DUPLICATE");
@@ -299,13 +314,17 @@ function deriveSnapshot(snapshot: M5HolderSnapshot, asOfInput: string): M5Holder
   try {
     const asOf = time(asOfInput, "M5_HOLDER_TIME_INVALID");
     if (snapshot.availableAt > asOf) return freeze({ status: "INVALID", diagnostics: diagnostics(["M5_HOLDER_TIME_INVALID"]) });
-    if (snapshot.finalityStatus !== "FINALIZED" && snapshot.finalityDepth < M5_MIN_FINALITY_DEPTH) return freeze({ status: "INCOMPLETE", diagnostics: diagnostics(["M5_HOLDER_FINALITY_INSUFFICIENT"]) });
+    if (snapshot.finalityDepth < M5_MIN_FINALITY_DEPTH) return freeze({ status: "INCOMPLETE", diagnostics: diagnostics(["M5_HOLDER_FINALITY_INSUFFICIENT"]) });
     const balances = snapshot.holders.filter(holder => holder.inclusionState === "INCLUDED").sort((a, b) => a.balanceAtoms > b.balanceAtoms ? -1 : a.balanceAtoms < b.balanceAtoms ? 1 : a.address.localeCompare(b.address));
-    const single = concentrationBps(balances[0]?.balanceAtoms ?? 0n, snapshot.denominatorAtoms);
-    const top10 = concentrationBps(balances.slice(0, 10).reduce((sum, holder) => sum + holder.balanceAtoms, 0n), snapshot.denominatorAtoms);
+    const singleValue = concentrationBps(balances[0]?.balanceAtoms ?? 0n, snapshot.denominatorAtoms);
+    const top10Value = concentrationBps(balances.slice(0, 10).reduce((sum, holder) => sum + holder.balanceAtoms, 0n), snapshot.denominatorAtoms);
     const sourceIds = freeze([...snapshot.materialSourceRecordIds]);
-    const base = { policyVersion: M5_CONCENTRATION_POLICY_VERSION, snapshotId: snapshot.snapshotId, snapshotFingerprint: snapshot.fingerprint, scale: 0 as const, unit: "BPS" as const, orderedMaterialSourceRecordIds: sourceIds };
-    return freeze({ status: "READY", snapshot, single: freeze({ ...base, metricKind: "SINGLE_CONCENTRATION", valueAtoms: single }), top10: freeze({ ...base, metricKind: "TOP10_CONCENTRATION", valueAtoms: top10 }), diagnostics: freeze([] as const) });
+    const base = { policyVersion: M5_CONCENTRATION_POLICY_VERSION, snapshotId: snapshot.snapshotId, snapshotFingerprint: snapshot.fingerprint, scale: 0 as const, unit: "BPS" as const, orderedMaterialSourceRecordIds: sourceIds, asOf };
+    const singleMaterial = { ...base, metricKind: "SINGLE_CONCENTRATION" as const, valueAtoms: singleValue };
+    const top10Material = { ...base, metricKind: "TOP10_CONCENTRATION" as const, valueAtoms: top10Value };
+    const single = freeze({ ...singleMaterial, fingerprint: canonicalSha256(singleMaterial) });
+    const top10 = freeze({ ...top10Material, fingerprint: canonicalSha256(top10Material) });
+    return freeze({ status: "READY", snapshot, single, top10, diagnostics: freeze([] as const) });
   } catch (error) {
     return freeze({ status: "INVALID", diagnostics: diagnostics([classify(error)]) });
   }
@@ -359,17 +378,17 @@ export function parseM5HolderSnapshotFixture(fixtureInput: unknown): M5HolderFix
     const payloadFingerprints = sortUnique(Array.isArray(root.payloadFingerprints) ? root.payloadFingerprints as string[] : [], "M5_HOLDER_FINGERPRINT_INVALID");
     const pagePayloadFingerprints = pages.map(page => page.payloadFingerprint).sort();
     if (JSON.stringify(pagePayloadFingerprints) !== JSON.stringify(payloadFingerprints)) throw new Error("M5_HOLDER_FINGERPRINT_INVALID");
-    const blockNumber = atom(root.blockNumber, "M5_HOLDER_BLOCK_MISMATCH"); const blockHashValue = blockHash(root.blockHash, "M5_HOLDER_BLOCK_MISMATCH"); const decimals = safeInteger(root.tokenDecimals, "M5_HOLDER_RANGE_INVALID");
-    if (pages.some(page => page.blockNumber !== blockNumber || page.blockHash !== blockHashValue)) throw new Error("M5_HOLDER_BLOCK_MISMATCH");
+    const blockNumberValue = blockNumber(root.blockNumber, "M5_HOLDER_BLOCK_MISMATCH"); const blockHashValue = blockHash(root.blockHash, "M5_HOLDER_BLOCK_MISMATCH"); const decimals = safeInteger(root.tokenDecimals, "M5_HOLDER_RANGE_INVALID");
+    if (pages.some(page => page.blockNumber !== blockNumberValue || page.blockHash !== blockHashValue)) throw new Error("M5_HOLDER_BLOCK_MISMATCH");
     if (pages.some(page => page.tokenDecimals !== decimals)) throw new Error("M5_HOLDER_DECIMALS_MISMATCH");
     if (sortedHolders.some(holder => !pages[holder.sourcePageOrdinal]!.sourceRecordIds.includes(holder.sourceRecordId))) throw new Error("M5_HOLDER_FINGERPRINT_INVALID");
     const blockTimestamp = time(root.blockTimestamp, "M5_HOLDER_TIME_INVALID");
     const observedAt = time(root.observedAt, "M5_HOLDER_TIME_INVALID");
     const availableAt = time(root.availableAt, "M5_HOLDER_TIME_INVALID");
     if (blockTimestamp > observedAt) throw new Error("M5_HOLDER_TIME_INVALID");
-    if (finalityStatus !== "FINALIZED" && finalityDepth < M5_MIN_FINALITY_DEPTH) throw new Error("M5_HOLDER_FINALITY_INSUFFICIENT");
+    if (finalityDepth < M5_MIN_FINALITY_DEPTH) throw new Error("M5_HOLDER_FINALITY_INSUFFICIENT");
     const sourceLineageBinding: "BOUND" | "UNBOUND_FIXTURE" = root.sourceLineageBinding === "BOUND" || root.sourceLineageBinding === "UNBOUND_FIXTURE" ? root.sourceLineageBinding : (() => { throw new Error("M5_HOLDER_SCHEMA_INVALID"); })();
-    const materialInput: SnapshotMaterial & Readonly<{ recordedAt: string }> = { providerId: text(root.providerId, "M5_HOLDER_SCHEMA_INVALID"), datasetId: text(root.datasetId, "M5_HOLDER_SCHEMA_INVALID"), datasetVersion: text(root.datasetVersion, "M5_HOLDER_SCHEMA_INVALID"), sourceLineageId: text(root.sourceLineageId, "M5_HOLDER_SCHEMA_INVALID"), sourceLineageBinding, chainId: chainId(root.chainId, "M5_HOLDER_IDENTITY_INVALID") as typeof M5_ETHEREUM_CHAIN_ID, contractAddress: address(root.contractAddress, "M5_HOLDER_IDENTITY_INVALID"), blockNumber, blockHash: blockHashValue, blockTimestamp, finalityStatus, finalityDepth, tokenDecimals: decimals, supplyBasis: root.supplyBasis === M5_HOLDER_SUPPLY_BASIS ? root.supplyBasis : (() => { throw new Error("M5_HOLDER_SUPPLY_BASIS_UNSUPPORTED"); })(), addressPolicy: root.addressPolicy === M5_HOLDER_ADDRESS_POLICY ? root.addressPolicy : (() => { throw new Error("M5_HOLDER_EXCLUSIONS_UNSUPPORTED"); })(), denominatorAtoms: atom(root.denominatorAtoms, "M5_HOLDER_RANGE_INVALID"), declaredHolderCount: safeInteger(root.declaredHolderCount, "M5_HOLDER_RANGE_INVALID"), fullPaginationProof: freeze({ pageCount: pages.length, finalPageOrdinal: pages.length - 1, pages }), holders: freeze(sortedHolders), materialSourceRecordIds: topSourceIds, payloadFingerprints, observedAt, availableAt, recordedAt: time(root.recordedAt, "M5_HOLDER_TIME_INVALID") };
+    const materialInput: SnapshotMaterial & Readonly<{ recordedAt: string }> = { providerId: text(root.providerId, "M5_HOLDER_SCHEMA_INVALID"), datasetId: text(root.datasetId, "M5_HOLDER_SCHEMA_INVALID"), datasetVersion: text(root.datasetVersion, "M5_HOLDER_SCHEMA_INVALID"), sourceLineageId: text(root.sourceLineageId, "M5_HOLDER_SCHEMA_INVALID"), sourceLineageBinding, chainId: chainId(root.chainId, "M5_HOLDER_IDENTITY_INVALID") as typeof M5_ETHEREUM_CHAIN_ID, contractAddress: address(root.contractAddress, "M5_HOLDER_IDENTITY_INVALID"), blockNumber: blockNumberValue, blockHash: blockHashValue, blockTimestamp, finalityStatus, finalityDepth, tokenDecimals: decimals, supplyBasis: root.supplyBasis === M5_HOLDER_SUPPLY_BASIS ? root.supplyBasis : (() => { throw new Error("M5_HOLDER_SUPPLY_BASIS_UNSUPPORTED"); })(), addressPolicy: root.addressPolicy === M5_HOLDER_ADDRESS_POLICY ? root.addressPolicy : (() => { throw new Error("M5_HOLDER_EXCLUSIONS_UNSUPPORTED"); })(), denominatorAtoms: atom(root.denominatorAtoms, "M5_HOLDER_RANGE_INVALID"), declaredHolderCount: safeInteger(root.declaredHolderCount, "M5_HOLDER_RANGE_INVALID"), fullPaginationProof: freeze({ pageCount: pages.length, finalPageOrdinal: pages.length - 1, pages }), holders: freeze(sortedHolders), materialSourceRecordIds: topSourceIds, payloadFingerprints, observedAt, availableAt, recordedAt: time(root.recordedAt, "M5_HOLDER_TIME_INVALID") };
     const snapshot = createM5HolderSnapshot({ ...materialInput, snapshotId: root.snapshotId === undefined ? undefined : text(root.snapshotId, "M5_HOLDER_FINGERPRINT_INVALID"), fingerprint: root.snapshotFingerprint === undefined ? undefined : sha(root.snapshotFingerprint, "M5_HOLDER_FINGERPRINT_INVALID"), recordedAt: materialInput.recordedAt });
     return freeze({ status: "READY", snapshot, diagnostics: freeze([] as const) });
   } catch (error) {

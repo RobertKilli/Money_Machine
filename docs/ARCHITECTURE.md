@@ -260,11 +260,13 @@ derived with integer-only arithmetic and mathematical ceiling rounding to BPS
 (scale 0): the largest holder for `SINGLE_CONCENTRATION`, and the ten largest
 (or all holders when fewer than ten exist) for `TOP10_CONCENTRATION`.
 
-Block number/hash, finality, canonical EVM addresses, UTC timestamps, and
-source IDs are part of the deterministic snapshot identity and fingerprint.
-Runtime/recording time is excluded. The pure result is only normalized
+Block number/hash, finality (versioned minimum depth), canonical EVM addresses,
+UTC timestamps, and source IDs are part of the deterministic snapshot identity
+and fingerprint. Runtime/recording time is excluded. Concentration materials
+also bind their explicit `asOf` and have their own fingerprint. The pure result is only normalized
 authority material; it is not raw eligibility evidence, mapping or lineage
 authority, a suspicious assessment, an evaluator result, canonical M5 input,
 or persistence input. Provider/legal completeness and future persistence may
 also require a NUMERIC-capable storage contract when token atom values exceed
-PostgreSQL `bigint`.
+PostgreSQL `bigint`; the domain accepts canonical uint256-range atom strings so
+that persistence does not silently narrow this authority material.
