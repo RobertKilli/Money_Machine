@@ -114,7 +114,9 @@ function bindSnapshot(snapshot: M5HolderSnapshot, lineage: SourceLineage, member
   });
   if (new Set(pages.flatMap(page => page.sourceRecordIds)).size !== pages.length || pages.some(page => !byArtifact.has(page.sourceRecordIds[0]!))) throw new Error("M5_HOLDER_PERSISTENCE_MATERIAL_MISMATCH");
   if (!proof) throw new Error("M5_HOLDER_PERSISTENCE_MATERIAL_MISMATCH");
-  return { snapshot: createM5HolderSnapshot({ ...snapshot, sourceLineageId: lineage.sourceLineageId, sourceLineageBinding: "BOUND", fullPaginationProof: { ...snapshot.fullPaginationProof, pages }, holders, materialSourceRecordIds: pages.flatMap(page => page.sourceRecordIds), recordedAt }), finalityProof: proof };
+  const { snapshotId: _snapshotId, fingerprint: _fingerprint, ...snapshotMaterial } = snapshot;
+  void _snapshotId; void _fingerprint;
+  return { snapshot: createM5HolderSnapshot({ ...snapshotMaterial, sourceLineageId: lineage.sourceLineageId, sourceLineageBinding: "BOUND", fullPaginationProof: { ...snapshot.fullPaginationProof, pages }, holders, materialSourceRecordIds: pages.flatMap(page => page.sourceRecordIds), recordedAt }), finalityProof: proof };
 }
 
 export async function persistM5HolderSnapshotFromSourceLineage(input: Readonly<{ snapshot: M5HolderSnapshot; sourceLineageId: string; asOf: string; recordedAt: string; unitOfWork: M5HolderSnapshotAuthorityUnitOfWork }>): Promise<PersistM5HolderSnapshotResult> {
