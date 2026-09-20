@@ -18,7 +18,7 @@ import {
   type SourceLineageMember,
   type SourceLineageMemberInput,
 } from "@/domain/intelligence/source-lineage";
-import type { SourceLineageRepository, SourceLineageUnitOfWork } from "@/application/intelligence/source-lineage-repository";
+import type { SourceLineageClaimAuthority, SourceLineageRepository, SourceLineageUnitOfWork } from "@/application/intelligence/source-lineage-repository";
 
 type RawRow = Record<string, unknown>;
 const row = (value: unknown): RawRow => value as RawRow;
@@ -162,6 +162,20 @@ function createRepository(client: TransactionSql): SourceLineageRepository {
     readMembers: async sourceLineageId => {
       const rows = await client`select * from public.intelligence_source_lineage_members where source_lineage_id=${sourceLineageId} order by member_ordinal asc`;
       return Object.freeze(rows.map(value => mapSourceLineageMemberRow(row(value))));
+    },
+    readMemberAuthorities: async sourceLineageId => {
+      const parentRows = await client`select * from public.intelligence_source_lineages where source_lineage_id=${sourceLineageId} for update`;
+      if (parentRows.length !== 1) throw new Error("M5_SOURCE_LINEAGE_NOT_FOUND");
+      const parent = mapSourceLineageRow(row(parentRows[0]));
+      const members = Object.freeze((await client`select * from public.intelligence_source_lineage_members where source_lineage_id=${sourceLineageId} order by member_ordinal asc`).map(value => mapSourceLineageMemberRow(row(value))));
+      validateMembers(parent, members);
+      const authorities: SourceLineageClaimAuthority[] = [];
+      for (const member of members) {
+        const value = await authority(client, member.availabilityClaimId);
+        if (value.claim.availabilityClaimId !== member.availabilityClaimId || value.artifact.sourceArtifactId !== member.sourceArtifactId || value.envelope.sourceEnvelopeId !== member.sourceEnvelopeId || value.observation.sourceObservationId !== member.sourceObservationId || value.attempt.ingestionAttemptId !== member.ingestionAttemptId || value.artifact.providerId !== parent.providerId || value.artifact.datasetId !== parent.datasetId || value.artifact.datasetVersion !== parent.datasetVersion) throw new Error("M5_SOURCE_LINEAGE_MEMBER_MISMATCH");
+        authorities.push(Object.freeze({ ...value, lifecycle: Object.freeze([]) }));
+      }
+      return Object.freeze(authorities);
     },
     validateForMappingCreation: async sourceLineageId => {
       const parent = await (async () => {

@@ -14,6 +14,8 @@ export interface SourceLineageRepository {
   readonly createFromClaims: (scope: Readonly<{ providerId: string; datasetId: string; datasetVersion: string }>, claimIds: readonly string[], recordedAt: string) => Promise<SourceLineage>;
   readonly readById: (sourceLineageId: string) => Promise<SourceLineage | undefined>;
   readonly readMembers: (sourceLineageId: string) => Promise<readonly SourceLineageMember[]>;
+  /** Full claim/artifact/envelope/observation authority for exact downstream binding. */
+  readonly readMemberAuthorities?: (sourceLineageId: string) => Promise<readonly SourceLineageClaimAuthority[]>;
   /** Mapping-specific authority check; requires every referenced attempt to be COMPLETED. */
   readonly validateForMappingCreation?: (sourceLineageId: string) => Promise<SourceLineage>;
   /** Raw-evidence authority check; this architecture is COMPLETED-only. */
