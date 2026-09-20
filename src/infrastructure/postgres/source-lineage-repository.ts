@@ -216,6 +216,11 @@ export function createSourceLineageRepository(client: TransactionSql): SourceLin
   return createRepository(client);
 }
 
+/** Narrow transaction-scoped factory for aggregate composition. */
+export function createTransactionSourceLineageRepository(client: TransactionSql): SourceLineageRepository {
+  return createRepository(client);
+}
+
 export function createSourceLineageUnitOfWork(client: Sql): SourceLineageUnitOfWork {
   return { withTransaction: <T>(work: (repository: SourceLineageRepository) => Promise<T>) => client.begin(async transaction => work(createRepository(transaction))) as unknown as Promise<T> };
 }

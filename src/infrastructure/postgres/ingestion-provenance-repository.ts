@@ -348,7 +348,8 @@ async function saveEvent(client: DbClient, input: LifecycleEvent): Promise<Lifec
   return mapLifecycleEventRow(row(authoritative[0]));
 }
 
-function createTransactionIngestionProvenanceRepositories(client: TransactionSql): AsyncIngestionProvenanceRepositories {
+/** Transaction-scoped capability factory. Callers that compose aggregates must share this client. */
+export function createTransactionIngestionProvenanceRepositories(client: TransactionSql): AsyncIngestionProvenanceRepositories {
   const requests: AsyncIngestionRequestRepository = { save: record => saveRequest(client, record), readById: async id => { const rows = await client`select * from public.intelligence_ingestion_requests where ingestion_request_id=${id}`; return rows.length === 0 ? undefined : mapIngestionRequestRow(row(rows[0])); } };
   const attempts: AsyncIngestionAttemptRepository = { save: record => saveAttempt(client, record), readById: async id => { const rows = await client`select * from public.intelligence_ingestion_attempts where ingestion_attempt_id=${id}`; return rows.length === 0 ? undefined : mapIngestionAttemptRow(row(rows[0])); } };
   const events: AsyncIngestionEventRepository = { save: record => saveEvent(client, record), readByAttempt: async id => { const rows = await client`select * from public.intelligence_ingestion_events where ingestion_attempt_id=${id} order by sequence asc, lifecycle_event_id asc`; return Object.freeze(rows.map(value => mapLifecycleEventRow(row(value)))); } };
