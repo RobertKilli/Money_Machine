@@ -26,6 +26,10 @@ $$;
 alter table public.eligibility_suspicious_evidence
   add constraint eligibility_suspicious_evidence_identity_key unique (evidence_id, fingerprint);
 
+alter table public.intelligence_asset_mapping_revisions
+  add constraint intelligence_asset_mapping_assessment_authority_key
+  unique (mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class);
+
 create table public.eligibility_suspicious_assessments (
   suspicious_assessment_id text primary key,
   contract_version text not null check (contract_version = 'm5-suspicious-assessment/v1'),

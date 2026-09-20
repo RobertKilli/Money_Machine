@@ -40,6 +40,8 @@ describe("M5 suspicious assessment migration contract", () => {
     expect(sql).toContain("foreign key (evidence_id, evidence_fingerprint)");
     expect(sql).toContain("references public.eligibility_suspicious_evidence(evidence_id, fingerprint)");
     expect(sql).toContain("eligibility_suspicious_evidence_identity_key");
+    expect(sql).toContain("intelligence_asset_mapping_assessment_authority_key");
+    expect(sql).toContain("unique (mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class)");
   });
 
   it("is server-only append-only DDL without application data writes", () => {
