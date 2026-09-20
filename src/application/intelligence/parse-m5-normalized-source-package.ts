@@ -22,7 +22,8 @@ function safeJson(value: unknown, code: string, depth = 0): JsonObject {
   return freeze(item) as JsonObject;
 }
 function metadata(value: unknown, ordinal: number): SafePaginationMetadata {
-  const item = object(value, "M5_MANUAL_METADATA_INVALID"); exact(item, ["cursorSafety", "cursor", "cursorHash", "responseHostPath", "correlationId"], "M5_MANUAL_METADATA_UNKNOWN_FIELD");
+  const item = object(value, "M5_MANUAL_METADATA_INVALID"); exact(item, ["pageOrdinal", "cursorSafety", "cursor", "cursorHash", "responseHostPath", "correlationId"], "M5_MANUAL_METADATA_UNKNOWN_FIELD");
+  if (item.pageOrdinal !== undefined && item.pageOrdinal !== ordinal) throw new Error("M5_MANUAL_METADATA_INVALID");
   const cursorSafety = item.cursorSafety;
   if (cursorSafety !== "NONE" && cursorSafety !== "HASHED") throw new Error("M5_MANUAL_CURSOR_UNSAFE");
   if (item.cursor !== undefined) throw new Error("M5_MANUAL_CURSOR_UNSAFE");

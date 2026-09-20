@@ -213,3 +213,31 @@ fail closed and must not be used for production or deployment.
 `m5-normalized-source-package/v1` is a strict, secret-safe manual input contract, not a raw provider payload or provider adapter. Its parser rejects unknown fields, secret-like keys, query-bearing URLs, unsafe cursors, non-canonical UTC timestamps, duplicate records/ordinals, and quarantined temporal material. File I/O and pure deterministic planning happen before any database connection. Planning derives every provenance ID/fingerprint and the only successful lifecycle: `STARTED`, one `SOURCE_OBSERVED` per observation, then `COMPLETED`.
 
 `npm run m5:ingest -- --package <path>` is dry-run by default; `--apply` requires server-only `DATABASE_URL`. Apply uses one PostgreSQL transaction and one shared `TransactionSql` for request, attempt, events, artifacts, envelopes, observations, availability claims, and COMPLETED-only sealed source-lineage membership. The package is synthetic/manual input and proves neither provider data nor legal/identity authority. Provider contracts, legal and availability decisions, identity assertions, mapping, raw evidence, manifests, canonical M5, scheduling, and notifications remain separate work.
+
+## 13. M5 typed provider adapter boundary
+
+The development-only Ethereum mainnet adapter contract is provider-neutral at
+the boundary and currently has deterministic CoinGecko and Etherscan V2
+fixture parsers. Request plans, raw fixture input, strict parsed records, and
+the projection into `m5-normalized-source-package/v1` are separate stages;
+fixture replay never performs network I/O or opens a database transaction.
+
+`m5-provider-availability-policy/v1` treats receipt time as the earliest
+provable availability unless a documented provider publication timestamp is
+available. Paginated material uses the maximum receipt timestamp, derived
+availability is the maximum of all material inputs, and `asOf` must be at
+least that value. Runtime timestamps are injected at the network boundary;
+recording time is persistence metadata and is not material fingerprint data.
+
+Provider output is strict, fixed-point and secret-safe: unknown or
+secret-like fields are rejected, decimal values become bigint plus explicit
+scale, and no raw payload is retained. CoinGecko pool ranking is not total
+liquidity authority and null market cap is never replaced by FDV. Etherscan
+verification is `VERIFIED`, explicitly `UNVERIFIED`, or `UNKNOWN`; empty or
+ambiguous responses do not become negative findings.
+
+This slice does not authorize concentration/holder denominators, complete
+suspicious-rule coverage, canonical identity or M5 persistence. Commercial
+storage and redistribution remain blocked pending legal approval. Provider
+network work must complete before any future database transaction; these
+fixtures only prove deterministic parser and projection behavior.
