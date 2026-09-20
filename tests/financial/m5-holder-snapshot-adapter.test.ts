@@ -114,12 +114,15 @@ describe("M5 holder snapshot adapter", () => {
     expect(normalized.records).toHaveLength(2);
     const dryRun = buildManualIngestionToLineagePlan(normalized);
     expect(dryRun.memberCount).toBe(2);
+    expect(normalized.records.every(record => record.retrievedAt === "2026-02-01T00:08:00.000Z")).toBe(true);
+    expect(normalized.records[0]?.normalizedEnvelope).toHaveProperty("finality");
     const projected = projectM5HolderPageSetToSnapshot({ pageSet, asOf: request.asOf, recordedAt: "2026-02-01T00:09:00.000Z" });
     expect(projected.status).toBe("COMPLETE");
     if (projected.status !== "COMPLETE") return;
     expect(projected.snapshot.denominatorAtoms).toBe(1_000n);
     expect(projected.concentration.status).toBe("READY");
     expect(projected.capabilities.canonicalM5).toBe("UNSUPPORTED");
+    if (projected.status === "COMPLETE") expect(projected.snapshot.materialSourceRecordIds).toEqual(normalized.records.map(record => record.providerExternalRecordId).sort());
   });
 
   it("does not open a database or UoW during parse, assembly or projection", () => {
@@ -129,7 +132,7 @@ describe("M5 holder snapshot adapter", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("uses receipt maximum and changes material identity when a page changes", () => {
+  it("separates payload identity from receipt availability", () => {
     const first = assembleM5HolderPageSet({ request, pages: pages() });
     const mutated = rawPage(1, true, { receipt: { receivedAt: "2026-02-01T00:07:00.000Z" } });
     const second = assembleM5HolderPageSet({ request, pages: [rawPage(0, false), mutated] });
@@ -137,6 +140,17 @@ describe("M5 holder snapshot adapter", () => {
     expect(second.status).toBe("COMPLETE");
     if (first.status !== "COMPLETE" || second.status !== "COMPLETE") return;
     expect(second.effectiveAvailableAt).toBe("2026-02-01T00:08:00.000Z");
-    expect(second.pages[1]!.payloadFingerprint).not.toBe(first.pages[1]!.payloadFingerprint);
+    expect(second.pages[1]!.payloadFingerprint).toBe(first.pages[1]!.payloadFingerprint);
+    const laterFinality = { referenceBlockNumber: 112n, referenceBlockHash: referenceHash, observedAt: "2026-02-01T00:07:00.000Z", receivedAt: "2026-02-01T00:11:00.000Z" };
+    const later = assembleM5HolderPageSet({ request, pages: [rawPage(0, false, { receipt: { receivedAt: "2026-02-01T00:10:00.000Z" }, finality: laterFinality }), rawPage(1, true, { receipt: { receivedAt: "2026-02-01T00:10:00.000Z" }, finality: laterFinality })] });
+    expect(later.status).toBe("COMPLETE");
+    if (later.status === "COMPLETE") {
+      const firstSnapshot = projectM5HolderPageSetToSnapshot({ pageSet: first, asOf: request.asOf, recordedAt: "2026-02-01T00:12:00.000Z" });
+      const laterSnapshot = projectM5HolderPageSetToSnapshot({ pageSet: later, asOf: request.asOf, recordedAt: "2026-02-01T00:12:00.000Z" });
+      expect(later.effectiveAvailableAt).toBe("2026-02-01T00:11:00.000Z");
+      expect(firstSnapshot.status).toBe("COMPLETE");
+      expect(laterSnapshot.status).toBe("COMPLETE");
+      if (firstSnapshot.status === "COMPLETE" && laterSnapshot.status === "COMPLETE") expect(laterSnapshot.snapshot.fingerprint).not.toBe(firstSnapshot.snapshot.fingerprint);
+    }
   });
 });

@@ -291,3 +291,11 @@ the manual-ingestion dry-run without opening a UoW. Network I/O must remain
 outside any later persistence transaction. Provider completeness, legal
 retention, commercial redistribution and production readiness remain explicit
 external blockers.
+
+The adapter separates payload identity from receipt identity: page payload
+fingerprints bind response content and exclude page/finality receipt times,
+while normalized-package observations use the maximum material receipt and
+retain both page and finality receipt timestamps in the envelope/auditable
+fields. Thus a replay of unchanged content has the same payload identity but a
+later snapshot availability/fingerprint, and the finality proof survives the
+package-to-provenance boundary.
