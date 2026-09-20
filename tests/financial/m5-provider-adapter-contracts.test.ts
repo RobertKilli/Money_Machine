@@ -8,8 +8,10 @@ import {
   parseEtherscanFixture,
   projectCoinGeckoToNormalizedPackage,
   projectEtherscanToNormalizedPackage,
+  validateM5ProviderNormalizedPackage,
 } from "@/application/intelligence/m5-provider-adapter-contracts";
 import { buildManualIngestionToLineagePlan, executeManualIngestionToLineage } from "@/application/intelligence/manual-ingestion-to-lineage";
+import { parseM5NormalizedSourcePackage } from "@/application/intelligence/parse-m5-normalized-source-package";
 
 const address = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01";
 const receipt = "2026-02-01T00:00:00.000Z";
@@ -82,7 +84,10 @@ describe("M5 typed provider adapter contracts", () => {
     expect(Object.isFrozen(parsed)).toBe(true);
     expect(Object.isFrozen(parsed.daily)).toBe(true);
     expect(() => parseCoinGeckoFixture({ ...coinGeckoFixture(), prices: dailyRows("prices").map((row, index) => index === 2 ? { ...row, price: "0.00" } : row) })).toThrow("M5_COINGECKO_PRICE_INVALID");
+    expect(() => parseCoinGeckoFixture({ ...coinGeckoFixture(), prices: dailyRows("prices").map((row, index) => index === 1 ? { ...row, timestamp: dailyRows("prices")[0]!.timestamp } : row) })).toThrow("M5_PROVIDER_DAILY_DUPLICATE_TIMESTAMP");
     expect(() => parseCoinGeckoFixture({ ...coinGeckoFixture(), prices: [{ ...dailyRows("prices")[0], price: "1e3" }, ...dailyRows("prices").slice(1)] })).toThrow("M5_COINGECKO_DAILY_INVALID");
+    expect(() => parseCoinGeckoFixture({ ...coinGeckoFixture(), prices: dailyRows("prices").map((row, index) => index === 1 ? { ...row, price: "9223372036854775808" } : row) })).toThrow("M5_COINGECKO_DAILY_INVALID");
+    expect(() => parseCoinGeckoFixture({ ...coinGeckoFixture(), pools: [{ poolId: "pool-1", dexId: "synthetic-dex", reserveUsd: "-1", volume24hUsd: "1" }] })).toThrow("M5_COINGECKO_POOL_INVALID");
     expect(() => parseCoinGeckoFixture({ ...coinGeckoFixture(), datasetId: "other-dataset" })).toThrow("M5_COINGECKO_SCOPE_INVALID");
     expect(() => parseCoinGeckoFixture({ ...coinGeckoFixture(), contractAddress: "0x1234" })).toThrow("M5_COINGECKO_ADDRESS_INVALID");
   });
@@ -97,6 +102,8 @@ describe("M5 typed provider adapter contracts", () => {
     expect(changed.identityFingerprint).not.toBe(original.identityFingerprint);
     const changedPrice = parseCoinGeckoFixture({ ...coinGeckoFixture(), prices: dailyRows("prices").map((row, index) => index === 3 ? { ...row, price: "777.01" } : row) });
     expect(changedPrice.payloadFingerprint).not.toBe(original.payloadFingerprint);
+    const changedVersion = parseCoinGeckoFixture({ ...coinGeckoFixture(), datasetVersion: "coingecko-market-chart/v2" });
+    expect(changedVersion.payloadFingerprint).not.toBe(original.payloadFingerprint);
   });
 
   it("enforces availability policy including multi-page maximum and future publication rejection", () => {
@@ -104,6 +111,7 @@ describe("M5 typed provider adapter contracts", () => {
     const pkg = projectCoinGeckoToNormalizedPackage({ fixture: parsed, idempotencyKey: "fixture-replay", requestedAt: receipt, startedAt: receipt, recordedAt });
     expect(pkg.records.every(record => record.retrievedAt === "2026-02-01T00:00:03.000Z")).toBe(true);
     expect(pkg.provenance.reviewReference).toBe(M5_PROVIDER_AVAILABILITY_POLICY_VERSION);
+    expect(parseCoinGeckoFixture({ ...coinGeckoFixture(), receipt: { receivedAt: receipt, providerPublishedAt: receipt } }).receipt.providerPublishedAt).toBe(receipt);
     expect(() => parseCoinGeckoFixture({ ...coinGeckoFixture(), receipt: { receivedAt: receipt, providerPublishedAt: "2026-02-02T00:00:00.000Z" } })).toThrow("M5_PROVIDER_AVAILABILITY_INVALID");
   });
 
@@ -112,11 +120,14 @@ describe("M5 typed provider adapter contracts", () => {
     expect(parsed.chainNamespace).toBe("eip155:1");
     expect(parsed.creation.blockNumber).toBe(19000000n);
     expect(parsed.verification.state).toBe("VERIFIED");
+    expect(parseEtherscanFixture({ ...etherscanFixture(), sourceCode: { status: "UNVERIFIED" } }).verification.state).toBe("UNVERIFIED");
     expect(parseEtherscanFixture({ ...etherscanFixture(), apiStatus: "0", apiMessage: "No data found", sourceCode: null }).verification.state).toBe("UNKNOWN");
+    expect(parseEtherscanFixture({ ...etherscanFixture(), apiStatus: "0", apiMessage: "No data found", sourceCode: undefined }).verification.state).toBe("UNKNOWN");
     expect(parseEtherscanFixture({ ...etherscanFixture(), sourceCode: { status: "UNKNOWN" } }).verification.state).toBe("UNKNOWN");
     expect(parseEtherscanFixture({ ...etherscanFixture(), sourceCode: { status: "VERIFIED", proxy: true } }).verification.state).toBe("UNKNOWN");
     expect(() => parseEtherscanFixture({ ...etherscanFixture(), chainid: "137" })).toThrow("M5_ETHERSCAN_CHAIN_INVALID");
     expect(() => parseEtherscanFixture({ ...etherscanFixture(), datasetId: "other-dataset" })).toThrow("M5_ETHERSCAN_SCOPE_INVALID");
+    expect(() => parseEtherscanFixture({ ...etherscanFixture(), creation: { ...etherscanFixture().creation, blockNumber: "9223372036854775808" } })).toThrow("M5_ETHERSCAN_BLOCK_INVALID");
   });
 
   it("projects both providers to the existing normalized package contract", () => {
@@ -144,6 +155,20 @@ describe("M5 typed provider adapter contracts", () => {
     const uow = { withTransaction: vi.fn() };
     await executeManualIngestionToLineage(packageValue, { apply: false, unitOfWork: uow as never });
     expect(uow.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it("keeps canonical package metadata strict and rejects tampering", () => {
+    const packageValue = projectCoinGeckoToNormalizedPackage({ fixture: parseCoinGeckoFixture(coinGeckoFixture()), idempotencyKey: "canonical-round-trip", requestedAt: receipt, startedAt: receipt, recordedAt });
+    expect(parseM5NormalizedSourcePackage(packageValue).records).toHaveLength(15);
+    const first = packageValue.records[0]!;
+    expect(() => parseM5NormalizedSourcePackage({ ...packageValue, records: [{ ...first, metadata: { ...first.metadata, unexpected: true } }, ...packageValue.records.slice(1)] })).toThrow("M5_MANUAL_METADATA_UNKNOWN_FIELD");
+    expect(() => parseM5NormalizedSourcePackage({ ...packageValue, records: [{ ...first, metadata: { ...first.metadata, pageOrdinal: first.pageOrdinal + 1 } }, ...packageValue.records.slice(1)] })).toThrow("M5_MANUAL_METADATA_INVALID");
+    expect(() => parseM5NormalizedSourcePackage({ ...packageValue, records: [{ ...first, normalizedEnvelope: { ...first.normalizedEnvelope, apiKey: "secret" } }, ...packageValue.records.slice(1)] })).toThrow("M5_MANUAL_SECRET_LIKE_FIELD_REJECTED");
+    const changedExternalId = parseM5NormalizedSourcePackage({ ...packageValue, records: [{ ...first, providerExternalRecordId: "tampered-record" }, ...packageValue.records.slice(1)] });
+    expect(() => validateM5ProviderNormalizedPackage(changedExternalId)).toThrow("M5_PROVIDER_PACKAGE_ID_INVALID");
+    const changedFingerprint = parseM5NormalizedSourcePackage({ ...packageValue, records: [{ ...first, payloadFingerprint: "b".repeat(64) }, ...packageValue.records.slice(1)] });
+    expect(() => validateM5ProviderNormalizedPackage(changedFingerprint)).toThrow("M5_PROVIDER_PACKAGE_FINGERPRINT_INVALID");
+    expect(() => validateM5ProviderNormalizedPackage({ ...packageValue, providerSourceNamespace: "wrong:namespace" })).toThrow("M5_PROVIDER_PACKAGE_SCOPE_INVALID");
   });
 
   it("feeds 15 CoinGecko closes into the existing history/volatility derivations", () => {
