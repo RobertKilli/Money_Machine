@@ -179,3 +179,25 @@ future adapter binds it to a validated provider assertion, sealed source
 lineage, mapping revision, and persisted raw evidence. Provider adapters,
 legal approval, real-data import, and suspicious-evidence semantics remain
 separate scope.
+
+## 11. M5 suspicious assessment authority (Slice 1)
+
+An empty suspicious-evidence list is not evidence of a clean assessment. The
+immutable `M5SuspiciousAssessment` authority explicitly represents either
+`NO_FINDINGS` or `FINDINGS_PRESENT`; the latter owns an exact, fingerprinted
+membership set of existing suspicious finding rows. `NO_FINDINGS` is valid only
+when the trusted server-side rule-set authority proves exact rule coverage and
+the source/mapping lifecycle is sealed and `COMPLETED`.
+
+Assessment IDs bind the logical scope, rule-set and detector versions, mapping,
+lineage, and `asOf`. Assessment fingerprints additionally bind the result,
+covered rules, exact finding IDs/fingerprints, timestamps, source material and
+dataset pins. `recordedAt` is excluded. Assessments and membership rows are
+append-only, immutable, transaction-scoped, and never repaired or selected by
+newest-wins logic.
+
+This slice intentionally does not change the existing manifest, assembly,
+evaluator, canonical handoff, or producer. Until the next manifest-v2 and
+assembly/handoff binding slice is complete, the legacy empty
+`manifest.suspicious` flow remains unsafe and must not be used for production
+or deployment.
