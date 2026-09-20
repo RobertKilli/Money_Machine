@@ -2,14 +2,23 @@
 -- This migration is intentionally not connected to manifest, assembly, evaluator or producer.
 -- No seed, backfill, application DML or fabricated NO_FINDINGS rows are allowed.
 do $$
+declare
+  relation_name regclass;
+  row_count bigint;
 begin
-  if to_regclass('public.eligibility_suspicious_assessments') is not null
-    and (select count(*) from public.eligibility_suspicious_assessments) > 0 then
-    raise exception 'M5_SUSPICIOUS_ASSESSMENT_REQUIRES_EMPTY_TABLES';
+  relation_name := to_regclass('public.eligibility_suspicious_assessments');
+  if relation_name is not null then
+    execute 'select count(*) from public.eligibility_suspicious_assessments' into row_count;
+    if row_count > 0 then
+      raise exception 'M5_SUSPICIOUS_ASSESSMENT_REQUIRES_EMPTY_TABLES';
+    end if;
   end if;
-  if to_regclass('public.eligibility_suspicious_assessment_findings') is not null
-    and (select count(*) from public.eligibility_suspicious_assessment_findings) > 0 then
-    raise exception 'M5_SUSPICIOUS_ASSESSMENT_REQUIRES_EMPTY_TABLES';
+  relation_name := to_regclass('public.eligibility_suspicious_assessment_findings');
+  if relation_name is not null then
+    execute 'select count(*) from public.eligibility_suspicious_assessment_findings' into row_count;
+    if row_count > 0 then
+      raise exception 'M5_SUSPICIOUS_ASSESSMENT_REQUIRES_EMPTY_TABLES';
+    end if;
   end if;
 end;
 $$;
