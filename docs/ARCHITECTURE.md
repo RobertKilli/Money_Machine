@@ -270,3 +270,32 @@ or persistence input. Provider/legal completeness and future persistence may
 also require a NUMERIC-capable storage contract when token atom values exceed
 PostgreSQL `bigint`; the domain accepts canonical uint256-range atom strings so
 that persistence does not silently narrow this authority material.
+
+## 15. M5 holder snapshot adapter boundary
+
+`m5-holder-snapshot-adapter/v1` is a fixture-only, provider-neutral boundary
+for turning a strict synthetic page set into two pure projections: the existing
+`m5-normalized-source-package/v1` (one auditable source record per page) and
+the existing `m5-holder-snapshot/v1` domain material. It proves neither that a
+real provider can enumerate every holder nor that a top-holder endpoint is a
+complete universe. Missing pages, contradictory block/supply material and
+insufficient finality remain incomplete or invalid and never produce partial
+concentration values.
+
+Page fingerprints, source IDs, receipt timestamps and the explicit finality
+reference are reconstructed and validated. Effective availability is the
+maximum receipt time across all material pages and finality evidence; it is not
+backdated to the first page or block timestamp. Parsing, assembly and both
+projections are deterministic, immutable and database-free, and can be fed to
+the manual-ingestion dry-run without opening a UoW. Network I/O must remain
+outside any later persistence transaction. Provider completeness, legal
+retention, commercial redistribution and production readiness remain explicit
+external blockers.
+
+The adapter separates payload identity from receipt identity: page payload
+fingerprints bind response content and exclude page/finality receipt times,
+while normalized-package observations use the maximum material receipt and
+retain both page and finality receipt timestamps in the envelope/auditable
+fields. Thus a replay of unchanged content has the same payload identity but a
+later snapshot availability/fingerprint, and the finality proof survives the
+package-to-provenance boundary.
