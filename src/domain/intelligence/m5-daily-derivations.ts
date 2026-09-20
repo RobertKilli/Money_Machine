@@ -316,14 +316,18 @@ export function deriveVolatility(input: readonly DailyCloseObservationInput[], a
     for (let index = 1; index < series.series.length; index += 1) {
       const previous = series.series[index - 1]!.closeValue;
       const current = series.series[index]!.closeValue;
+      if (previous <= 0n) return freeze({ status: "INVALID", diagnostics: ["M5_DAILY_SERIES_PRICE_INVALID"] as const });
       const numerator = (current - previous) * 10_000n;
       if (!checkedIntermediate(numerator)) return freeze({ status: "INVALID", diagnostics: ["M5_DAILY_SERIES_RANGE_INVALID"] as const });
-      const value = floorDivision(numerator, previous);
+      const denominator = previous < 0n ? -previous : previous;
+      const value = floorDivision(numerator, denominator);
       sum += value;
       sumSquares += value * value;
       if (!checkedIntermediate(sum) || !checkedIntermediate(sumSquares)) return freeze({ status: "INVALID", diagnostics: ["M5_DAILY_SERIES_RANGE_INVALID"] as const });
     }
     const count = BigInt(series.returnCount);
+    // Population variance is (Σ(r - mean)^2) = (n·Σr² - (Σr)²) / n.
+    // Therefore floor(sqrt(n·Σr² - (Σr)²) / n) is the required integer result.
     const varianceNumerator = count * sumSquares - sum * sum;
     if (varianceNumerator < 0n || !checkedIntermediate(varianceNumerator)) return freeze({ status: "INVALID", diagnostics: ["M5_DAILY_SERIES_RANGE_INVALID"] as const });
     const volatility = floorDivision(integerSquareRoot(varianceNumerator), count);

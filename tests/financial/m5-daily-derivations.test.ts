@@ -102,15 +102,47 @@ describe("M5 crypto daily derivations", () => {
     expect(result.material.unit).toBe("BPS");
     expect(result.material.scale).toBe(0);
     expect(result.material.returnCount).toBe(14);
+    // Independent hand vector: returns are [1000, -910, 0 × 12].
+    // sum = 90, sumSquares = 1_828_100, variance numerator =
+    // 14 × 1_828_100 − 90² = 25_585_300, floor(sqrt(...)/14) = 361.
+    expect([1000n, -910n, ...Array.from({ length: 12 }, () => 0n)]).toHaveLength(14);
+    expect(14n * 1_828_100n - 90n * 90n).toBe(25_585_300n);
+    expect(result.material.value).toBe(361n);
   });
 
-  it("supports constant prices, negative floor division and deterministic integer sqrt", () => {
+  it("supports constant prices, signed floor division and deterministic integer sqrt", () => {
     const constant = deriveVolatility(series(), asOf);
     expect(constant.status).toBe("READY");
     if (constant.status === "READY") expect(constant.material.value).toBe(0n);
+    expect(floorDivision(0n, 3n)).toBe(0n);
+    expect(floorDivision(4n, 3n)).toBe(1n);
+    expect(floorDivision(-1n, 3n)).toBe(-1n);
+    expect(floorDivision(-4n, 3n)).toBe(-2n);
+    expect(floorDivision(-3n, 3n)).toBe(-1n);
+    expect(() => floorDivision(1n, 0n)).toThrow("Divisor must be positive");
     expect(integerSquareRoot(25n)).toBe(5n);
     expect(integerSquareRoot(26n)).toBe(5n);
-    expect(floorDivision(-1n, 3n)).toBe(-1n);
+    expect(integerSquareRoot(0n)).toBe(0n);
+    expect(integerSquareRoot(1n)).toBe(1n);
+    expect(integerSquareRoot(24n)).toBe(4n);
+    expect(integerSquareRoot(26n)).toBe(5n);
+    expect(integerSquareRoot(10n ** 30n)).toBe(10n ** 15n);
+    expect(() => integerSquareRoot(-1n)).toThrow("M5_DAILY_SERIES_RANGE_INVALID");
+    for (const value of [0n, 1n, 2n, 3n, 24n, 25n, 26n, 10n ** 30n]) {
+      const root = integerSquareRoot(value);
+      expect(root * root <= value).toBe(true);
+      expect(value < (root + 1n) * (root + 1n)).toBe(true);
+    }
+  });
+
+  it("accepts the database bigint upper boundary and freezes material output", () => {
+    const result = deriveM5CryptoDailyMetrics(series(Array.from({ length: 15 }, () => (1n << 63n) - 1n)), asOf);
+    expect(result.status).toBe("READY");
+    if (result.status !== "READY") return;
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.historySpan)).toBe(true);
+    expect(Object.isFrozen(result.historySpan.orderedObservationIds)).toBe(true);
+    expect(result.historySpan.value).toBe(14n);
   });
 
   it("is permutation invariant and changes fingerprint for every material mutation", () => {
@@ -133,5 +165,10 @@ describe("M5 crypto daily derivations", () => {
     expect(changedUnit.status).toBe("READY");
     if (changedScale.status === "READY") expect(changedScale.material.fingerprint).not.toBe(a.historySpan.fingerprint);
     if (changedUnit.status === "READY") expect(changedUnit.material.fingerprint).not.toBe(a.historySpan.fingerprint);
+    expect(a.historySpan.derivationVersion).not.toBe(a.volatility.derivationVersion);
+    expect(a.historySpan.fingerprint).not.toBe(a.volatility.fingerprint);
+    expect(a.historySpan).not.toHaveProperty("evidenceId");
+    expect(a.historySpan).not.toHaveProperty("mappingRevisionId");
+    expect(a.historySpan).not.toHaveProperty("sourceLineageId");
   });
 });
