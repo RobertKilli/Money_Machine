@@ -9,6 +9,14 @@ describe("M5 manual ingestion-to-lineage", () => {
     expect(first.sourceLineageId).toBe(second.sourceLineageId); expect(first.events.map(event => event.sequence)).toEqual([1, 2, 3]); expect(first.events.map(event => event.eventType)).toEqual(["STARTED", "SOURCE_OBSERVED", "COMPLETED"]);
     await expect(executeManualIngestionToLineage(pkg(), { apply: false })).resolves.toMatchObject({ status: "DRY_RUN_READY" });
   });
+  it("keeps dry-run database-free and returns the same planned IDs", async () => {
+    let invoked = false;
+    const unitOfWork = { withTransaction: async () => { invoked = true; throw new Error("M5_TEST_UOW_MUST_NOT_RUN"); } } as never;
+    const result = await executeManualIngestionToLineage(pkg(), { apply: false, unitOfWork });
+    expect(result.status).toBe("DRY_RUN_READY");
+    if (result.status === "DRY_RUN_READY") expect(result.plan.sourceLineageId).toBe(buildManualIngestionToLineagePlan(pkg()).sourceLineageId);
+    expect(invoked).toBe(false);
+  });
   it("rejects empty, unsafe, duplicate, and quarantined input", () => {
     expect(() => buildManualIngestionToLineagePlan(pkg([]))).toThrow("M5_MANUAL_EMPTY_PACKAGE");
     expect(() => buildManualIngestionToLineagePlan({ ...pkg(), token: "no" })).toThrow("M5_MANUAL_SECRET_LIKE_FIELD_REJECTED");
