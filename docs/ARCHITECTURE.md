@@ -241,3 +241,32 @@ suspicious-rule coverage, canonical identity or M5 persistence. Commercial
 storage and redistribution remain blocked pending legal approval. Provider
 network work must complete before any future database transaction; these
 fixtures only prove deterministic parser and projection behavior.
+
+## 14. M5 holder concentration authority foundation
+
+`m5-holder-snapshot/v1` is a provider-neutral, immutable authority material
+for a complete Ethereum mainnet holder snapshot. A snapshot is READY only when
+all pages and holders are present, page ordinals are contiguous with an
+explicit final page, the declared holder count and TOTAL_SUPPLY denominator
+reconcile exactly, and every page is bound to the same block, token decimals,
+source records and payload fingerprints. A top-holder endpoint without a
+complete pagination proof is therefore INCOMPLETE, never a concentration value.
+
+The first policy is deliberately conservative: `TOTAL_SUPPLY` and
+`INCLUDE_ALL` only. No burn, treasury, bridge, pool, exchange or contract
+address is heuristically excluded. Explicit-exclusion material is unsupported
+until a separate immutable classification authority exists. Concentration is
+derived with integer-only arithmetic and mathematical ceiling rounding to BPS
+(scale 0): the largest holder for `SINGLE_CONCENTRATION`, and the ten largest
+(or all holders when fewer than ten exist) for `TOP10_CONCENTRATION`.
+
+Block number/hash, finality (versioned minimum depth), canonical EVM addresses,
+UTC timestamps, and source IDs are part of the deterministic snapshot identity
+and fingerprint. Runtime/recording time is excluded. Concentration materials
+also bind their explicit `asOf` and have their own fingerprint. The pure result is only normalized
+authority material; it is not raw eligibility evidence, mapping or lineage
+authority, a suspicious assessment, an evaluator result, canonical M5 input,
+or persistence input. Provider/legal completeness and future persistence may
+also require a NUMERIC-capable storage contract when token atom values exceed
+PostgreSQL `bigint`; the domain accepts canonical uint256-range atom strings so
+that persistence does not silently narrow this authority material.
