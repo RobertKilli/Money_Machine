@@ -1,5 +1,5 @@
 import "server-only";
-import postgres, { type Sql, type TransactionSql } from "postgres";
+import postgres, { type Parameter, type Sql, type TransactionSql } from "postgres";
 import { assertAssetMappingRevision, createAssetMappingRevision, type AssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
 import type { AssetMappingRevisionLookup, AssetMappingRevisionRepository, MappingSourceLineageReader, MappingProviderAssetIdentityReader } from "@/application/intelligence/asset-mapping-revision-repository";
 import type { AssetMappingSourceLineageUnitOfWork } from "@/application/intelligence/create-asset-mapping-revision-from-source-lineage";
@@ -18,7 +18,7 @@ const connection = () => {
 const text = (value: unknown, code: string): string => { if (typeof value !== "string" || !value.trim()) throw new Error(code); return value.trim(); };
 const timestamp = (value: unknown, code: string): string => { const result = value instanceof Date ? value.toISOString() : text(value, code); if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(result) || Number.isNaN(Date.parse(result)) || new Date(result).toISOString() !== result) throw new Error(code); return result; };
 const strings = (value: unknown): readonly string[] => { if (!Array.isArray(value)) throw new Error("M5_MAPPING_ROW_SOURCE_RECORDS_INVALID"); return value.map(item => text(item, "M5_MAPPING_ROW_SOURCE_RECORDS_INVALID")); };
-const json = (value: unknown): string => JSON.stringify(value);
+const jsonParameter = (client: DbClient, value: unknown): Parameter => { const candidate = client as unknown as { readonly json?: (input: unknown) => unknown }; return (typeof candidate.json === "function" ? candidate.json(value) : JSON.stringify(value)) as Parameter; };
 
 export function mapAssetMappingRevisionRow(row: RawRow): AssetMappingRevision {
   return createAssetMappingRevision({
@@ -82,7 +82,7 @@ async function save(client: DbClient, mapping: AssetMappingRevision, lineageRead
     insert into public.intelligence_asset_mapping_revisions
       (mapping_revision_id,mapping_revision_version,provider_id,dataset_id,dataset_version,source_lineage_id,provider_asset_identity_assertion_id,provider_asset_namespace,provider_asset_id,canonical_asset_id,canonical_identifier,asset_class,valid_from,valid_to,observed_at,available_at,source_record_ids,payload_fingerprint,fingerprint,recorded_at)
     values
-      (${mapping.mappingRevisionId},${mapping.mappingRevisionVersion},${mapping.providerId},${mapping.datasetId},${mapping.datasetVersion},${mapping.sourceLineageId},${mapping.providerAssetIdentityAssertionId},${mapping.providerAssetNamespace},${mapping.providerAssetId},${mapping.canonicalAssetId},${mapping.canonicalIdentifier},${mapping.assetClass},${mapping.validFrom},${mapping.validTo ?? null},${mapping.observedAt},${mapping.availableAt},${json(mapping.sourceRecordIds)}::jsonb,${mapping.payloadFingerprint},${mapping.fingerprint},${mapping.recordedAt})
+      (${mapping.mappingRevisionId},${mapping.mappingRevisionVersion},${mapping.providerId},${mapping.datasetId},${mapping.datasetVersion},${mapping.sourceLineageId},${mapping.providerAssetIdentityAssertionId},${mapping.providerAssetNamespace},${mapping.providerAssetId},${mapping.canonicalAssetId},${mapping.canonicalIdentifier},${mapping.assetClass},${mapping.validFrom},${mapping.validTo ?? null},${mapping.observedAt},${mapping.availableAt},${jsonParameter(client, mapping.sourceRecordIds)},${mapping.payloadFingerprint},${mapping.fingerprint},${mapping.recordedAt})
     on conflict (mapping_revision_id) do nothing returning mapping_revision_id
   `;
   if (inserted.length) {
