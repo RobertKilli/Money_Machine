@@ -118,6 +118,12 @@ describe("M5 holder snapshot adapter", () => {
   it("accepts exact finality boundary and rejects malformed item/timestamp material", () => {
     const depth13 = assembleM5HolderPageSet({ request, pages: [rawPage(0, false, { finality: { ...rawPage(0, false).finality, referenceBlockNumber: "113" } }), rawPage(1, true, { finality: { ...rawPage(1, true).finality, referenceBlockNumber: "113" } })] });
     expect(depth13.status).toBe("COMPLETE");
+    const depth0 = assembleM5HolderPageSet({ request, pages: [rawPage(0, false, { finality: { ...rawPage(0, false).finality, referenceBlockNumber: "100" } }), rawPage(1, true, { finality: { ...rawPage(1, true).finality, referenceBlockNumber: "100" } })] });
+    expect(depth0.status).toBe("INCOMPLETE");
+    const exactAsOfRequest = buildM5HolderSnapshotRequestPlan({ providerId: request.providerId, datasetId: request.datasetId, datasetVersion: request.datasetVersion, providerSourceNamespace: request.providerSourceNamespace, contractAddress, pageSize: request.pageSize, asOf: "2026-02-01T00:08:00.000Z" });
+    expect(assembleM5HolderPageSet({ request: exactAsOfRequest, pages: pages() }).status).toBe("COMPLETE");
+    const futureReference = { referenceBlockNumber: 112n, referenceBlockHash: referenceHash, observedAt: "2026-02-01T00:21:00.000Z", receivedAt: "2026-02-01T00:22:00.000Z" };
+    expect(assembleM5HolderPageSet({ request, pages: [rawPage(0, false, { finality: futureReference }), rawPage(1, true, { finality: futureReference })] }).status).toBe("INVALID");
     expect(() => parseM5HolderPageFixture({ ...rawPage(0, false), holders: [{ itemOrdinal: 0, address: "0x0000000000000000000000000000000000000011", balanceAtoms: "600" }, { itemOrdinal: 0, address: "0x0000000000000000000000000000000000000012", balanceAtoms: "300" }] })).toThrow();
     expect(() => parseM5HolderPageFixture({ ...rawPage(0, false), snapshotBlockTimestamp: "2026-02-01T00:06:00.000Z" })).toThrow("M5_HOLDER_ADAPTER_TIME_INVALID");
   });
