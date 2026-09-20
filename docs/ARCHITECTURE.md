@@ -282,6 +282,25 @@ complete universe. Missing pages, contradictory block/supply material and
 insufficient finality remain incomplete or invalid and never produce partial
 concentration values.
 
+## 16. M5 holder snapshot authority persistence
+
+The holder persistence boundary accepts only a validated adapter page set that
+has already passed through manual ingestion and a sealed, `COMPLETED`
+`SourceLineage`. The snapshot parent, normalized page membership, holder
+membership, and the two BPS derivations are written in one transaction-scoped
+unit of work. The service locks and rereads lineage authorities before writing,
+requires exact artifact/envelope/observation/claim equality, and returns the
+authoritative reread. `PARTIAL`, `FAILED`, `CANCELLED`, open, missing, corrupt,
+or mismatched lineage material cannot write.
+
+The persistence schema is append-only and server-only: RLS is enabled, client
+roles have no privileges, there are no policies or `SECURITY DEFINER` paths,
+and the existing immutable mutation trigger rejects updates and deletes.
+Holder atom values use `NUMERIC(78,0)` with explicit uint256 bounds so no
+JavaScript number conversion can lose precision. This slice creates no raw
+eligibility evidence or canonical M5 record, and the migration remains
+unapplied to hosted environments until a separate deployment decision.
+
 Page fingerprints, source IDs, receipt timestamps and the explicit finality
 reference are reconstructed and validated. Effective availability is the
 maximum receipt time across all material pages and finality evidence; it is not
