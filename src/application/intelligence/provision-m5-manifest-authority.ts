@@ -4,12 +4,16 @@ import { createM5ManifestAuthority, type M5ManifestAuthorityRecord } from "./m5-
 import type { M5ManifestAuthorityConfig } from "./m5-manifest-authority-config";
 import type { M5ManifestAuthorityRepository } from "./m5-manifest-authority-repository";
 import type { RawEligibilityEvidenceRepository } from "@/infrastructure/postgres/eligibility-evidence-repository";
+import type { M5SuspiciousAssessmentReadCapability } from "./m5-suspicious-assessment-repository";
+import type { M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
 
 export type M5ManifestAuthorityProvisioningMode = "DRY_RUN" | "APPLY";
 
 export interface M5ManifestAuthorityProvisioningDependencies {
   readonly rawEvidenceRepository: Pick<RawEligibilityEvidenceRepository, "readAt">;
   readonly authorityRepository: Pick<M5ManifestAuthorityRepository, "save">;
+  readonly suspiciousAssessmentRepository?: M5SuspiciousAssessmentReadCapability;
+  readonly suspiciousRuleSetResolver?: M5SuspiciousRuleSetAuthorityResolver;
 }
 
 export interface M5ManifestAuthorityPreview {
@@ -79,8 +83,13 @@ export async function provisionM5ManifestAuthority(config: M5ManifestAuthorityCo
     return Object.freeze({ status: "DRY_RUN_INVALID", errors: Object.freeze([invalidDiagnostic(error)]), diagnosticEvidenceIds: Object.freeze([]) });
   }
   const base = contextPreview(sourceContext, authorityVersion);
+  if (!dependencies.suspiciousAssessmentRepository || !dependencies.suspiciousRuleSetResolver) return Object.freeze({ status: "DRY_RUN_INCOMPLETE", preview: base, missingRequirements: Object.freeze([{ code: "M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_CAPABILITY_MISSING", scope: "ASSEMBLY" as const, assemblyTarget: "SUSPICIOUS" as const, evidenceIds: Object.freeze([]) }]), ambiguityDiagnostics: Object.freeze([]), diagnosticEvidenceIds: Object.freeze([]) });
+  const sealed = await dependencies.suspiciousAssessmentRepository.readSealedById(manifest.suspiciousAssessment.assessmentId);
+  if (!sealed) return Object.freeze({ status: "DRY_RUN_INCOMPLETE", preview: base, missingRequirements: Object.freeze([{ code: "M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_MISSING", scope: "ASSEMBLY" as const, assemblyTarget: "SUSPICIOUS" as const, evidenceIds: Object.freeze([]) }]), ambiguityDiagnostics: Object.freeze([]), diagnosticEvidenceIds: Object.freeze([]) });
+  const ruleSet = await dependencies.suspiciousRuleSetResolver.resolve({ providerId: sealed.assessment.providerId, datasetId: sealed.assessment.datasetId, datasetVersion: sealed.assessment.datasetVersion, ruleSetVersion: sealed.assessment.ruleSetVersion, detectorVersion: sealed.assessment.detectorVersion });
+  if (!ruleSet || ruleSet.fingerprint !== sealed.assessment.ruleSetFingerprint) return Object.freeze({ status: "DRY_RUN_INVALID", preview: base, errors: Object.freeze([{ code: "M5_ASSEMBLY_SUSPICIOUS_RULE_SET_INVALID", scope: "ASSEMBLY" as const, assemblyTarget: "SUSPICIOUS" as const, evidenceIds: Object.freeze([]) }]), diagnosticEvidenceIds: Object.freeze([]) });
   const rawEvidence = await dependencies.rawEvidenceRepository.readAt({ candidateId: sourceContext.candidateId, assetId: sourceContext.assetId, canonicalIdentifier: sourceContext.canonicalIdentifier, assetClass: sourceContext.assetClass, asOf: sourceContext.asOf, pins: allowedDatasetPins });
-  const assembly = assembleM5Evidence({ context: normalizeM5AssemblyContext({ candidateId: sourceContext.candidateId, assetId: sourceContext.assetId, canonicalIdentifier: sourceContext.canonicalIdentifier, assetClass: sourceContext.assetClass, asOf: sourceContext.asOf, allowedPins: allowedDatasetPins }), manifest, compatibility, rawEvidence });
+  const assembly = assembleM5Evidence({ context: normalizeM5AssemblyContext({ candidateId: sourceContext.candidateId, assetId: sourceContext.assetId, canonicalIdentifier: sourceContext.canonicalIdentifier, assetClass: sourceContext.assetClass, asOf: sourceContext.asOf, allowedPins: allowedDatasetPins }), manifest, compatibility, rawEvidence, suspiciousAssessment: sealed.assessment, suspiciousFindings: rawEvidence.filter(value => value.evidenceKind === "SUSPICIOUS"), requiredRuleIds: ruleSet.requiredRuleIds });
   if (assembly.status === "INVALID_MANIFEST") return Object.freeze({ status: "DRY_RUN_INVALID", preview: base, errors: assembly.errors.map(assemblyDiagnostic), diagnosticEvidenceIds: assembly.diagnosticEvidenceIds });
   if (assembly.status === "INCOMPLETE") return Object.freeze({ status: "DRY_RUN_INCOMPLETE", preview: base, missingRequirements: assembly.missingRequirements.map(assemblyDiagnostic), ambiguityDiagnostics: assembly.ambiguityDiagnostics.map(assemblyDiagnostic), diagnosticEvidenceIds: assembly.diagnosticEvidenceIds });
   let record: M5ManifestAuthorityRecord;

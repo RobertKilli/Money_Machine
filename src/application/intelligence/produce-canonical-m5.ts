@@ -5,6 +5,8 @@ import { assembleM5Evidence, normalizeM5AssemblyContext, normalizeM5EvidenceMani
 import { canonicalM5HandoffFromAssembly, type CanonicalM5HandoffResult, type CanonicalM5Input } from "./m5-canonical-handoff";
 import { persistCanonicalM5Eligibility } from "./persist-canonical-evidence";
 import { normalizeProducerDatasetPins, validateCanonicalProducerSourceContext, type CanonicalProducerSourceContext } from "./canonical-producer-context";
+import type { M5SuspiciousAssessmentReadCapability } from "./m5-suspicious-assessment-repository";
+import { assertM5SuspiciousRuleSetAuthority, type M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
 
 export interface ProduceCanonicalM5Input {
   readonly sourceContext: CanonicalProducerSourceContext;
@@ -15,6 +17,8 @@ export interface ProduceCanonicalM5Input {
 
 export interface M5ProducerDependencies {
   readonly rawEvidenceRepository: Pick<RawEligibilityEvidenceRepository, "readAt">;
+  readonly suspiciousAssessmentRepository: M5SuspiciousAssessmentReadCapability;
+  readonly suspiciousRuleSetResolver: M5SuspiciousRuleSetAuthorityResolver;
   readonly persistCanonicalM5: (input: { readonly canonicalInput: CanonicalM5Input; readonly sourceContext: CanonicalProducerSourceContext }) => Promise<void>;
 }
 
@@ -27,7 +31,6 @@ export type CanonicalM5ProducerResult =
     }
   | {
       readonly status: "INCOMPLETE";
-      readonly evaluatorResult: EligibilityEvaluation;
       readonly missingRequirements: readonly M5AssemblyDiagnostic[];
       readonly ambiguityDiagnostics: readonly M5AssemblyDiagnostic[];
       readonly diagnosticEvidenceIds: readonly string[];
@@ -82,13 +85,14 @@ function validateInput(input: ProduceCanonicalM5Input): { readonly sourceContext
 function incomplete(result: Extract<CanonicalM5HandoffResult, { status: "INCOMPLETE" }>): CanonicalM5ProducerResult {
   return Object.freeze({
     status: "INCOMPLETE",
-    evaluatorResult: result.evaluatorResult,
     missingRequirements: result.missingRequirements,
     ambiguityDiagnostics: result.ambiguityDiagnostics,
     diagnosticEvidenceIds: result.diagnosticEvidenceIds,
     assemblyFingerprint: result.assemblyFingerprint,
   });
 }
+
+const assessmentIncomplete = (code: string): CanonicalM5ProducerResult => Object.freeze({ status: "INCOMPLETE", missingRequirements: Object.freeze([{ code, target: "SUSPICIOUS" as const, evidenceIds: Object.freeze([]) }]), ambiguityDiagnostics: Object.freeze([]), diagnosticEvidenceIds: Object.freeze([]), assemblyFingerprint: "" });
 
 function invalidAssembly(result: Extract<CanonicalM5HandoffResult, { status: "INVALID_ASSEMBLY" }>): CanonicalM5ProducerResult {
   return Object.freeze({ status: "INVALID_ASSEMBLY", errors: result.errors, diagnosticEvidenceIds: result.diagnosticEvidenceIds });
@@ -108,6 +112,16 @@ export async function produceCanonicalM5(input: ProduceCanonicalM5Input, depende
   }
 
   const { sourceContext, allowedPins } = validated;
+  let sealed: Awaited<ReturnType<M5SuspiciousAssessmentReadCapability["readSealedById"]>>;
+  try { sealed = await dependencies.suspiciousAssessmentRepository.readSealedById(input.manifest.suspiciousAssessment.assessmentId); }
+  catch (error) { if (error instanceof Error && error.message.startsWith("M5_SUSPICIOUS_ASSESSMENT_")) return invalid(error); throw error; }
+  if (!sealed) return assessmentIncomplete("M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_MISSING");
+  const assessment = sealed.assessment;
+  if (assessment.suspiciousAssessmentId !== input.manifest.suspiciousAssessment.assessmentId || assessment.fingerprint !== input.manifest.suspiciousAssessment.fingerprint || assessment.candidateId !== sourceContext.candidateId || assessment.assetId !== sourceContext.assetId || assessment.canonicalIdentifier !== sourceContext.canonicalIdentifier || assessment.assetClass !== sourceContext.assetClass || assessment.asOf !== sourceContext.asOf || !allowedPins.some(pin => pin.providerId === assessment.providerId && pin.datasetId === assessment.datasetId && pin.datasetVersion === assessment.datasetVersion)) return invalid(new Error("M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_SCOPE_MISMATCH"));
+  let ruleSet;
+  try { ruleSet = await dependencies.suspiciousRuleSetResolver.resolve({ providerId: assessment.providerId, datasetId: assessment.datasetId, datasetVersion: assessment.datasetVersion, ruleSetVersion: assessment.ruleSetVersion, detectorVersion: assessment.detectorVersion }); } catch (error) { return invalid(error); }
+  try { if (!ruleSet) return invalid(new Error("M5_ASSEMBLY_SUSPICIOUS_RULE_SET_INVALID")); assertM5SuspiciousRuleSetAuthority(ruleSet); } catch (error) { return invalid(error); }
+  if (ruleSet.providerId !== assessment.providerId || ruleSet.datasetId !== assessment.datasetId || ruleSet.datasetVersion !== assessment.datasetVersion || ruleSet.ruleSetVersion !== assessment.ruleSetVersion || ruleSet.detectorVersion !== assessment.detectorVersion || ruleSet.fingerprint !== assessment.ruleSetFingerprint) return invalid(new Error("M5_ASSEMBLY_SUSPICIOUS_RULE_SET_SCOPE_MISMATCH"));
   const rawEvidence = await dependencies.rawEvidenceRepository.readAt({
     candidateId: sourceContext.candidateId,
     assetId: sourceContext.assetId,
@@ -129,6 +143,9 @@ export async function produceCanonicalM5(input: ProduceCanonicalM5Input, depende
     manifest: input.manifest,
     compatibility: input.compatibility,
     rawEvidence,
+    suspiciousAssessment: assessment,
+    suspiciousFindings: rawEvidence.filter(value => value.evidenceKind === "SUSPICIOUS"),
+    requiredRuleIds: ruleSet.requiredRuleIds,
   });
   const handoff = canonicalM5HandoffFromAssembly({ assembly, sourceContext });
   if (handoff.status === "INVALID_ASSEMBLY") return invalidAssembly(handoff);
@@ -142,6 +159,8 @@ export async function produceCanonicalM5(input: ProduceCanonicalM5Input, depende
 export function createCanonicalM5Producer(dependencies: Omit<M5ProducerDependencies, "persistCanonicalM5"> & Partial<Pick<M5ProducerDependencies, "persistCanonicalM5">>): (input: ProduceCanonicalM5Input) => Promise<CanonicalM5ProducerResult> {
   return input => produceCanonicalM5(input, {
     rawEvidenceRepository: dependencies.rawEvidenceRepository,
+    suspiciousAssessmentRepository: dependencies.suspiciousAssessmentRepository,
+    suspiciousRuleSetResolver: dependencies.suspiciousRuleSetResolver,
     persistCanonicalM5: dependencies.persistCanonicalM5 ?? persistCanonicalM5Eligibility,
   });
 }

@@ -13,12 +13,15 @@ export interface CanonicalM5Input {
   readonly datasetPins: readonly string[];
   readonly suspiciousFlags: readonly string[];
   readonly suspiciousEvidenceStatus: "CLEAN" | "SUSPICIOUS";
+  readonly suspiciousAssessmentId: string;
+  readonly suspiciousAssessmentFingerprint: string;
+  readonly suspiciousAssessmentResult: "NO_FINDINGS" | "FINDINGS_PRESENT";
   readonly assemblyFingerprint: string;
 }
 
 export type CanonicalM5HandoffResult =
   | { readonly status: "READY"; readonly evaluatorResult: EligibilityEvaluation; readonly canonicalInput: CanonicalM5Input; readonly assemblyFingerprint: string; readonly normalizedPins: readonly string[] }
-  | { readonly status: "INCOMPLETE"; readonly evaluatorResult: EligibilityEvaluation; readonly missingRequirements: readonly M5AssemblyDiagnostic[]; readonly ambiguityDiagnostics: readonly M5AssemblyDiagnostic[]; readonly diagnosticEvidenceIds: readonly string[]; readonly assemblyFingerprint: string }
+  | { readonly status: "INCOMPLETE"; readonly missingRequirements: readonly M5AssemblyDiagnostic[]; readonly ambiguityDiagnostics: readonly M5AssemblyDiagnostic[]; readonly diagnosticEvidenceIds: readonly string[]; readonly assemblyFingerprint: string }
   | { readonly status: "INVALID_ASSEMBLY"; readonly errors: readonly M5AssemblyDiagnostic[]; readonly diagnosticEvidenceIds: readonly string[] };
 
 type ValidAssembly = Exclude<M5EvidenceAssemblyResult, { status: "INVALID_MANIFEST" }>;
@@ -49,17 +52,21 @@ const assertAssemblyContext = (assembly: ValidAssembly, source: CanonicalProduce
 const normalizedPins = (assembly: ValidAssembly): readonly string[] => normalizeM5DatasetPins(normalizeM5DatasetPinValues(assembly.materialDatasetPins).map(encodeM5DatasetPin));
 
 /** Pure assembly-to-canonical adapter. Persistence is deliberately a separate boundary. */
-export function canonicalM5HandoffFromAssembly(input: { readonly assembly: M5EvidenceAssemblyResult; readonly sourceContext: CanonicalProducerSourceContext }): CanonicalM5HandoffResult {
+export function canonicalM5HandoffFromAssembly(input: { readonly assembly: M5EvidenceAssemblyResult; readonly sourceContext: CanonicalProducerSourceContext; readonly evaluate?: typeof evaluateAssetEligibility }): CanonicalM5HandoffResult {
   if (input.assembly.status === "INVALID_MANIFEST") return Object.freeze({ status: "INVALID_ASSEMBLY", errors: input.assembly.errors, diagnosticEvidenceIds: input.assembly.diagnosticEvidenceIds });
+  if (input.assembly.status === "INCOMPLETE") return Object.freeze({ status: "INCOMPLETE", missingRequirements: input.assembly.missingRequirements, ambiguityDiagnostics: input.assembly.ambiguityDiagnostics, diagnosticEvidenceIds: input.assembly.diagnosticEvidenceIds, assemblyFingerprint: input.assembly.assemblyFingerprint });
   if (!input.assembly.assemblyFingerprint.trim()) throw new Error("CANONICAL_M5_ASSEMBLY_FINGERPRINT_INVALID");
   const sourceContext = assertAssemblyContext(input.assembly, input.sourceContext);
   const evidenceIds = assertExactMaterialEvidenceIds(input.assembly);
-  const evaluation = evaluateAssetEligibility(input.assembly.evidence, new Date(sourceContext.asOf));
-  if (input.assembly.status === "INCOMPLETE" || evaluation.status === "INCOMPLETE") return Object.freeze({ status: "INCOMPLETE", evaluatorResult: evaluation, missingRequirements: input.assembly.status === "INCOMPLETE" ? input.assembly.missingRequirements : Object.freeze([]), ambiguityDiagnostics: input.assembly.status === "INCOMPLETE" ? input.assembly.ambiguityDiagnostics : Object.freeze([]), diagnosticEvidenceIds: input.assembly.status === "INCOMPLETE" ? input.assembly.diagnosticEvidenceIds : Object.freeze([]), assemblyFingerprint: input.assembly.assemblyFingerprint });
+  const evaluation = (input.evaluate ?? evaluateAssetEligibility)(input.assembly.evidence, new Date(sourceContext.asOf));
+  if (evaluation.status === "INCOMPLETE") return Object.freeze({ status: "INCOMPLETE", missingRequirements: Object.freeze([{ code: "M5_EVALUATION_INCOMPLETE", target: "SUSPICIOUS" as const, evidenceIds: Object.freeze([]) }]), ambiguityDiagnostics: Object.freeze([]), diagnosticEvidenceIds: Object.freeze([]), assemblyFingerprint: input.assembly.assemblyFingerprint });
   if (!input.assembly.materialAvailableAt) throw new Error("CANONICAL_M5_MATERIAL_AVAILABLE_AT_MISSING");
   const availableAt = new Date(input.assembly.materialAvailableAt);
   if (!Number.isFinite(availableAt.getTime()) || availableAt > new Date(sourceContext.asOf)) throw new Error("CANONICAL_M5_MATERIAL_AVAILABLE_AT_INVALID");
   const pins = normalizedPins(input.assembly);
-  const canonicalInput: CanonicalM5Input = Object.freeze({ evaluation, canonicalIdentifier: sourceContext.canonicalIdentifier, assetClass: sourceContext.assetClass, canonicalContextId: canonicalContextIdForProducerContext(sourceContext), availableAt, evidenceIds, datasetPins: pins, suspiciousFlags: Object.freeze([...(input.assembly.evidence.suspiciousFlags ?? [])].sort()), suspiciousEvidenceStatus: input.assembly.evidence.suspiciousFlags?.length ? "SUSPICIOUS" : "CLEAN", assemblyFingerprint: input.assembly.assemblyFingerprint });
+  const suspiciousFlags = Object.freeze([...(input.assembly.evidence.suspiciousFlags ?? [])].sort());
+  const suspiciousEvidenceStatus = input.assembly.suspiciousAssessmentResult === "NO_FINDINGS" ? "CLEAN" : "SUSPICIOUS";
+  if ((suspiciousEvidenceStatus === "CLEAN" && suspiciousFlags.length !== 0) || (suspiciousEvidenceStatus === "SUSPICIOUS" && suspiciousFlags.length === 0)) throw new Error("CANONICAL_M5_SUSPICIOUS_BINDING_INVALID");
+  const canonicalInput: CanonicalM5Input = Object.freeze({ evaluation, canonicalIdentifier: sourceContext.canonicalIdentifier, assetClass: sourceContext.assetClass, canonicalContextId: canonicalContextIdForProducerContext(sourceContext), availableAt, evidenceIds, datasetPins: pins, suspiciousFlags, suspiciousEvidenceStatus, suspiciousAssessmentId: input.assembly.suspiciousAssessmentId, suspiciousAssessmentFingerprint: input.assembly.suspiciousAssessmentFingerprint, suspiciousAssessmentResult: input.assembly.suspiciousAssessmentResult, assemblyFingerprint: input.assembly.assemblyFingerprint });
   return Object.freeze({ status: "READY", evaluatorResult: evaluation, canonicalInput, assemblyFingerprint: input.assembly.assemblyFingerprint, normalizedPins: pins });
 }

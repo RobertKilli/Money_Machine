@@ -8,9 +8,11 @@ import {
   type RawEligibilityEvidence,
   type VenueEligibilityEvidence,
 } from "@/domain/intelligence/eligibility-evidence";
+import type { SuspiciousEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
+import type { M5SuspiciousAssessment } from "@/domain/intelligence/m5-suspicious-assessment";
 
 export const M5_EVIDENCE_ASSEMBLY_VERSION = "m5-evidence-assembly/v1";
-export const M5_EVIDENCE_MANIFEST_VERSION = "m5-evidence-manifest/v1";
+export const M5_EVIDENCE_MANIFEST_VERSION = "m5-evidence-manifest/v2";
 
 export interface M5DatasetPin {
   readonly providerId: string;
@@ -32,6 +34,11 @@ export interface M5EvidenceAuthorityRef {
   readonly fingerprint: string;
 }
 
+export interface M5SuspiciousAssessmentRef {
+  readonly assessmentId: string;
+  readonly fingerprint: string;
+}
+
 export interface M5EvidenceManifest {
   readonly version: typeof M5_EVIDENCE_MANIFEST_VERSION;
   readonly age?: M5EvidenceAuthorityRef;
@@ -44,7 +51,7 @@ export interface M5EvidenceManifest {
   readonly volatility?: M5EvidenceAuthorityRef;
   readonly contractVerification?: M5EvidenceAuthorityRef;
   readonly venues: readonly M5EvidenceAuthorityRef[];
-  readonly suspicious: readonly M5EvidenceAuthorityRef[];
+  readonly suspiciousAssessment: M5SuspiciousAssessmentRef;
 }
 
 export interface M5EvidenceSemanticCompatibility {
@@ -91,6 +98,9 @@ type CompleteAssembly = {
   readonly materialAvailableAt: string;
   readonly assemblyFingerprint: string;
   readonly assemblyVersion: typeof M5_EVIDENCE_ASSEMBLY_VERSION;
+  readonly suspiciousAssessmentId: string;
+  readonly suspiciousAssessmentFingerprint: string;
+  readonly suspiciousAssessmentResult: M5SuspiciousAssessment["result"];
 };
 
 type IncompleteAssembly = {
@@ -105,6 +115,9 @@ type IncompleteAssembly = {
   readonly materialAvailableAt: string | null;
   readonly assemblyFingerprint: string;
   readonly assemblyVersion: typeof M5_EVIDENCE_ASSEMBLY_VERSION;
+  readonly suspiciousAssessmentId?: string;
+  readonly suspiciousAssessmentFingerprint?: string;
+  readonly suspiciousAssessmentResult?: M5SuspiciousAssessment["result"];
 };
 
 type InvalidManifestAssembly = {
@@ -131,6 +144,7 @@ const timestamp = (value: string, code: string): string => {
 };
 const normalizedStrings = (values: readonly string[], code: string): readonly string[] => frozenArray([...new Set(values.map(value => nonBlank(value, code)))].sort((a, b) => a.localeCompare(b)));
 const digest = (value: unknown): string => createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
+const incompleteWithoutAssessment = (context: M5AssemblyContext, manifest: M5EvidenceManifest, compatibility: M5EvidenceSemanticCompatibility): IncompleteAssembly => freeze({ status: "INCOMPLETE", context, evidence: freeze({ candidateId: context.candidateId, assetClass: context.assetClass, evidenceIds: frozenArray([]), suspiciousFlags: frozenArray([]) }), missingRequirements: frozenArray([diagnostic("M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_MISSING", "SUSPICIOUS")]), ambiguityDiagnostics: frozenArray([]), materialEvidenceIds: frozenArray([]), diagnosticEvidenceIds: frozenArray([]), materialDatasetPins: frozenArray([]), materialAvailableAt: null, assemblyFingerprint: digest({ version: M5_EVIDENCE_ASSEMBLY_VERSION, context, manifest, compatibility, missing: "suspicious-assessment" }), assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
 function canonical(value: unknown): unknown {
   if (typeof value === "bigint") return value.toString();
   if (Array.isArray(value)) return value.map(canonical);
@@ -178,10 +192,21 @@ function normalizeRefSet(values: readonly M5EvidenceAuthorityRef[], code: string
   return frozenArray([...byId.values()].sort((a, b) => refKey(a).localeCompare(refKey(b))));
 }
 
+function normalizeAssessmentRef(value: M5SuspiciousAssessmentRef): M5SuspiciousAssessmentRef {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_REF_INVALID");
+  if (Object.keys(value).some(key => key !== "assessmentId" && key !== "fingerprint")) throw new Error("M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_REF_UNKNOWN_FIELD");
+  const assessmentId = nonBlank(value.assessmentId, "M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_ID_INVALID");
+  const fingerprint = nonBlank(value.fingerprint, "M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_FINGERPRINT_INVALID");
+  if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_FINGERPRINT_INVALID");
+  return freeze({ assessmentId, fingerprint });
+}
+
 export function normalizeM5EvidenceManifest(input: M5EvidenceManifest): M5EvidenceManifest {
+  const allowed = new Set(["version", "age", "historySpan", "liquidity", "volume", "marketCap", "top10HolderConcentration", "singleHolderConcentration", "volatility", "contractVerification", "venues", "suspiciousAssessment"]);
+  if (!input || typeof input !== "object" || Object.keys(input).some(key => !allowed.has(key))) throw new Error("M5_ASSEMBLY_MANIFEST_UNKNOWN_FIELD");
   if (input.version !== M5_EVIDENCE_MANIFEST_VERSION) throw new Error("M5_ASSEMBLY_MANIFEST_VERSION_INVALID");
   const scalar = <T extends keyof Pick<M5EvidenceManifest, "age" | "historySpan" | "liquidity" | "volume" | "marketCap" | "top10HolderConcentration" | "singleHolderConcentration" | "volatility" | "contractVerification">>(key: T): M5EvidenceAuthorityRef | undefined => input[key] ? normalizeRef(input[key]!) : undefined;
-  return freeze({ version: M5_EVIDENCE_MANIFEST_VERSION, age: scalar("age"), historySpan: scalar("historySpan"), liquidity: scalar("liquidity"), volume: scalar("volume"), marketCap: scalar("marketCap"), top10HolderConcentration: scalar("top10HolderConcentration"), singleHolderConcentration: scalar("singleHolderConcentration"), volatility: scalar("volatility"), contractVerification: scalar("contractVerification"), venues: normalizeRefSet(input.venues, "M5_ASSEMBLY_MANIFEST_VENUES_INVALID"), suspicious: normalizeRefSet(input.suspicious, "M5_ASSEMBLY_MANIFEST_SUSPICIOUS_INVALID") });
+  return freeze({ version: M5_EVIDENCE_MANIFEST_VERSION, age: scalar("age"), historySpan: scalar("historySpan"), liquidity: scalar("liquidity"), volume: scalar("volume"), marketCap: scalar("marketCap"), top10HolderConcentration: scalar("top10HolderConcentration"), singleHolderConcentration: scalar("singleHolderConcentration"), volatility: scalar("volatility"), contractVerification: scalar("contractVerification"), venues: normalizeRefSet(input.venues, "M5_ASSEMBLY_MANIFEST_VENUES_INVALID"), suspiciousAssessment: normalizeAssessmentRef(input.suspiciousAssessment) });
 }
 
 export function normalizeM5EvidenceSemanticCompatibility(input: M5EvidenceSemanticCompatibility): M5EvidenceSemanticCompatibility {
@@ -193,11 +218,11 @@ export function normalizeM5EvidenceSemanticCompatibility(input: M5EvidenceSemant
 
 type Resolution = { readonly evidence?: RawEligibilityEvidence; readonly error?: M5AssemblyDiagnostic };
 
-function assemblyFingerprint(context: M5AssemblyContext, manifest: M5EvidenceManifest, compatibility: M5EvidenceSemanticCompatibility, material: readonly RawEligibilityEvidence[], diagnostics: readonly M5AssemblyDiagnostic[]): string {
-  return digest({ version: M5_EVIDENCE_ASSEMBLY_VERSION, context, manifest, compatibility, materialFingerprints: material.map(value => value.fingerprint).sort((a, b) => a.localeCompare(b)), diagnostics });
+function assemblyFingerprint(context: M5AssemblyContext, manifest: M5EvidenceManifest, compatibility: M5EvidenceSemanticCompatibility, material: readonly RawEligibilityEvidence[], diagnostics: readonly M5AssemblyDiagnostic[], assessment: M5SuspiciousAssessment): string {
+  return digest({ version: M5_EVIDENCE_ASSEMBLY_VERSION, context, manifest, compatibility, suspiciousAssessmentId: assessment.suspiciousAssessmentId, suspiciousAssessmentFingerprint: assessment.fingerprint, suspiciousAssessmentResult: assessment.result, materialFingerprints: material.map(value => value.fingerprint).sort((a, b) => a.localeCompare(b)), diagnostics });
 }
 
-export function assembleM5Evidence(input: { readonly context: M5AssemblyContext; readonly manifest: M5EvidenceManifest; readonly compatibility: M5EvidenceSemanticCompatibility; readonly rawEvidence: readonly RawEligibilityEvidence[] }): M5EvidenceAssemblyResult {
+export function assembleM5Evidence(input: { readonly context: M5AssemblyContext; readonly manifest: M5EvidenceManifest; readonly compatibility: M5EvidenceSemanticCompatibility; readonly rawEvidence: readonly RawEligibilityEvidence[]; readonly suspiciousAssessment?: M5SuspiciousAssessment; readonly suspiciousFindings?: readonly SuspiciousEligibilityEvidence[]; readonly requiredRuleIds?: readonly string[] }): M5EvidenceAssemblyResult {
   let context: M5AssemblyContext;
   let manifest: M5EvidenceManifest;
   let compatibility: M5EvidenceSemanticCompatibility;
@@ -208,6 +233,20 @@ export function assembleM5Evidence(input: { readonly context: M5AssemblyContext;
   } catch (error) {
     return invalid([diagnostic(error instanceof Error ? error.message : "M5_ASSEMBLY_MANIFEST_INVALID", "AGE")]);
   }
+  const assessment = input.suspiciousAssessment;
+  if (!assessment) return incompleteWithoutAssessment(context, manifest, compatibility);
+  const assessmentErrors: M5AssemblyDiagnostic[] = [];
+  if (manifest.suspiciousAssessment.assessmentId !== assessment.suspiciousAssessmentId || manifest.suspiciousAssessment.fingerprint !== assessment.fingerprint) assessmentErrors.push(diagnostic("M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_REF_MISMATCH", "SUSPICIOUS"));
+  if (assessment.candidateId !== context.candidateId || assessment.assetId !== context.assetId || assessment.canonicalIdentifier !== context.canonicalIdentifier || assessment.assetClass !== context.assetClass || assessment.asOf !== context.asOf || assessment.observedAt > context.asOf || assessment.availableAt > context.asOf) assessmentErrors.push(diagnostic("M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_SCOPE_MISMATCH", "SUSPICIOUS"));
+  const requiredRules = [...(input.requiredRuleIds ?? assessment.coveredRuleIds)].sort((a, b) => a.localeCompare(b));
+  if (new Set(requiredRules).size !== requiredRules.length || requiredRules.length !== assessment.coveredRuleIds.length || requiredRules.some((value, index) => value !== assessment.coveredRuleIds[index])) assessmentErrors.push(diagnostic("M5_ASSEMBLY_SUSPICIOUS_RULE_COVERAGE_INVALID", "SUSPICIOUS"));
+  const suspiciousFindings = [...(input.suspiciousFindings ?? [])].sort((a, b) => a.evidenceId.localeCompare(b.evidenceId));
+  const findingReferences = [...assessment.findingReferences].sort((a, b) => a.evidenceId.localeCompare(b.evidenceId));
+  if (new Set(suspiciousFindings.map(value => value.evidenceId)).size !== suspiciousFindings.length) assessmentErrors.push(diagnostic("M5_ASSEMBLY_SUSPICIOUS_FINDING_DUPLICATE", "SUSPICIOUS"));
+  if (suspiciousFindings.length !== findingReferences.length || suspiciousFindings.some((value, index) => value.evidenceId !== findingReferences[index]?.evidenceId || value.fingerprint !== findingReferences[index]?.fingerprint || value.candidateId !== assessment.candidateId || value.assetId !== assessment.assetId || value.canonicalIdentifier !== assessment.canonicalIdentifier || value.assetClass !== assessment.assetClass || value.providerId !== assessment.providerId || value.datasetId !== assessment.datasetId || value.datasetVersion !== assessment.datasetVersion || value.mappingRevisionId !== assessment.mappingRevisionId || value.sourceLineageId !== assessment.sourceLineageId || value.observedAt > assessment.asOf || value.availableAt > assessment.asOf)) assessmentErrors.push(diagnostic("M5_ASSEMBLY_SUSPICIOUS_FINDING_SET_INVALID", "SUSPICIOUS"));
+  if (assessment.result === "NO_FINDINGS" && findingReferences.length !== 0) assessmentErrors.push(diagnostic("M5_ASSEMBLY_SUSPICIOUS_NO_FINDINGS_INVALID", "SUSPICIOUS"));
+  if (assessment.result === "FINDINGS_PRESENT" && findingReferences.length === 0) assessmentErrors.push(diagnostic("M5_ASSEMBLY_SUSPICIOUS_FINDINGS_MISSING", "SUSPICIOUS"));
+  if (assessmentErrors.length) return invalid(assessmentErrors);
 
   const rawById = new Map<string, RawEligibilityEvidence>();
   const errors: M5AssemblyDiagnostic[] = [];
@@ -310,20 +349,14 @@ export function assembleM5Evidence(input: { readonly context: M5AssemblyContext;
   }
 
   const allVisibleSuspicious = input.rawEvidence.filter(raw => raw.evidenceKind === "SUSPICIOUS" && identityMatches(raw) && pinSet.has(pinKey(raw)));
-  const selectedSuspicious = new Set(manifest.suspicious.map(refKey));
-  const unresolvedSuspicious = allVisibleSuspicious.filter(raw => !selectedSuspicious.has(refKey({ evidenceId: raw.evidenceId, fingerprint: raw.fingerprint })));
-  if (unresolvedSuspicious.length) { const ids = unresolvedSuspicious.map(value => value.evidenceId); ambiguities.push(diagnostic("M5_ASSEMBLY_SUSPICIOUS_EVIDENCE_UNRESOLVED", "SUSPICIOUS", ids)); ids.forEach(id => diagnosticIds.add(id)); }
-  else {
-    const flags: string[] = [];
-    for (const ref of manifest.suspicious) {
-      const found = resolve(ref, "SUSPICIOUS");
-      if (invalidSelected(found)) continue;
-      const raw = found.evidence!;
-      if (raw.evidenceKind !== "SUSPICIOUS") { errors.push(diagnostic("M5_ASSEMBLY_SELECTED_KIND_MISMATCH", "SUSPICIOUS", [raw.evidenceId])); diagnosticIds.add(raw.evidenceId); continue; }
-      flags.push(raw.flagCode); addMaterial(raw);
-    }
-    evidence.suspiciousFlags = normalizedStrings(flags, "M5_ASSEMBLY_SUSPICIOUS_INVALID");
+  const visibleRefs = allVisibleSuspicious.map(raw => `${raw.evidenceId}\u0000${raw.fingerprint}`).sort();
+  const assessmentRefs = findingReferences.map(ref => `${ref.evidenceId}\u0000${ref.fingerprint}`).sort();
+  if (visibleRefs.length !== assessmentRefs.length || visibleRefs.some((value, index) => value !== assessmentRefs[index])) {
+    errors.push(diagnostic("M5_ASSEMBLY_SUSPICIOUS_AUTHORITATIVE_SET_MISMATCH", "SUSPICIOUS", allVisibleSuspicious.map(value => value.evidenceId)));
   }
+  const flags: string[] = [];
+  for (const raw of suspiciousFindings) { flags.push(raw.flagCode); addMaterial(raw); }
+  evidence.suspiciousFlags = normalizedStrings(flags, "M5_ASSEMBLY_SUSPICIOUS_INVALID");
 
   if (errors.length) return invalid(errors, diagnosticIds);
   const materialById = new Map<string, RawEligibilityEvidence>();
@@ -334,12 +367,13 @@ export function assembleM5Evidence(input: { readonly context: M5AssemblyContext;
   const materialDatasetPins = frozenArray([...new Map(materialValues.map(value => [pinKey(value), freeze({ providerId: value.providerId, datasetId: value.datasetId, datasetVersion: value.datasetVersion })])).values()].sort((a, b) => pinKey(a).localeCompare(pinKey(b))));
   const materialAvailableAt = materialValues.length ? materialValues.map(value => value.availableAt).sort((a, b) => a.localeCompare(b)).at(-1)! : null;
   const diagnostics = frozenArray([...missing, ...ambiguities].sort((a, b) => a.target.localeCompare(b.target) || a.code.localeCompare(b.code) || a.evidenceIds.join("\u0000").localeCompare(b.evidenceIds.join("\u0000"))));
-  const fingerprint = assemblyFingerprint(context, manifest, compatibility, materialValues, diagnostics);
+  const fingerprint = assemblyFingerprint(context, manifest, compatibility, materialValues, diagnostics, assessment);
   const frozenEvidence: EligibilityEvidence = freeze({ ...evidence, suspiciousFlags: frozenArray(evidence.suspiciousFlags ?? []), evidenceIds: materialEvidenceIds });
   const diagnosticEvidenceIds = frozenArray([...diagnosticIds].sort((a, b) => a.localeCompare(b)));
-  if (missing.length || ambiguities.length) return freeze({ status: "INCOMPLETE", context, evidence: frozenEvidence, missingRequirements: frozenArray(missing), ambiguityDiagnostics: frozenArray(ambiguities), materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
-  if (!materialAvailableAt) return freeze({ status: "INCOMPLETE", context, evidence: frozenEvidence, missingRequirements: frozenArray([diagnostic("M5_ASSEMBLY_MATERIAL_EVIDENCE_MISSING", "AGE")]), ambiguityDiagnostics: frozenArray([]), materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt: null, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
-  return freeze({ status: "COMPLETE", context, evidence: frozenEvidence, materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION });
+  if (errors.length) return invalid(errors, diagnosticIds);
+  if (missing.length || ambiguities.length) return freeze({ status: "INCOMPLETE", context, evidence: frozenEvidence, missingRequirements: frozenArray(missing), ambiguityDiagnostics: frozenArray(ambiguities), materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION, suspiciousAssessmentId: assessment.suspiciousAssessmentId, suspiciousAssessmentFingerprint: assessment.fingerprint, suspiciousAssessmentResult: assessment.result });
+  if (!materialAvailableAt) return freeze({ status: "INCOMPLETE", context, evidence: frozenEvidence, missingRequirements: frozenArray([diagnostic("M5_ASSEMBLY_MATERIAL_EVIDENCE_MISSING", "AGE")]), ambiguityDiagnostics: frozenArray([]), materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt: null, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION, suspiciousAssessmentId: assessment.suspiciousAssessmentId, suspiciousAssessmentFingerprint: assessment.fingerprint, suspiciousAssessmentResult: assessment.result });
+  return freeze({ status: "COMPLETE", context, evidence: frozenEvidence, materialEvidenceIds, diagnosticEvidenceIds, materialDatasetPins, materialAvailableAt, assemblyFingerprint: fingerprint, assemblyVersion: M5_EVIDENCE_ASSEMBLY_VERSION, suspiciousAssessmentId: assessment.suspiciousAssessmentId, suspiciousAssessmentFingerprint: assessment.fingerprint, suspiciousAssessmentResult: assessment.result });
 }
 
 function invalid(errors: readonly M5AssemblyDiagnostic[], ids: ReadonlySet<string> = new Set()): InvalidManifestAssembly {
