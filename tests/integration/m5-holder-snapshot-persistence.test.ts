@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { executeManualIngestionToLineage } from "@/application/intelligence/manual-ingestion-to-lineage";
 import { buildM5HolderSnapshotRequestPlan, assembleM5HolderPageSet, holderPagePayloadFingerprint, projectM5HolderPageSetToSnapshot } from "@/application/intelligence/m5-holder-snapshot-adapter";
 import { createPostgresManualIngestionToLineageUnitOfWork } from "@/infrastructure/postgres/manual-ingestion-to-lineage-uow";
-import { createM5HolderSnapshotPersistenceUnitOfWork } from "@/infrastructure/postgres/m5-holder-snapshot-repository";
+import { createM5HolderSnapshotPersistenceUnitOfWork, createM5HolderSnapshotTransactionRepository } from "@/infrastructure/postgres/m5-holder-snapshot-repository";
 import { persistM5HolderSnapshotFromSourceLineage } from "@/application/intelligence/m5-holder-snapshot-persistence";
 
 const url = process.env.DATABASE_URL;
@@ -50,6 +50,16 @@ describe.skipIf(!enabled)("M5 holder snapshot persistence PostgreSQL integration
       expect(derivations.map(row => [String(row.metric_kind), BigInt(String(row.value_bps))])).toEqual([["SINGLE_CONCENTRATION", ceilBps(maxUint256 - 1000n)], ["TOP10_CONCENTRATION", ceilBps(maxUint256 - 100n)]]);
       const replay = await persistM5HolderSnapshotFromSourceLineage({ snapshot: projected.snapshot, sourceLineageId: ingestion.sourceLineageId, asOf: request.asOf, recordedAt: "2026-02-01T00:09:00.000Z", unitOfWork: uow });
       expect(replay.status).toBe("PERSISTED");
+      expect(await counts()).toEqual(afterFirst);
+      const missingLineage = await persistM5HolderSnapshotFromSourceLineage({ snapshot: projected.snapshot, sourceLineageId: "missing-lineage", asOf: request.asOf, recordedAt: "2026-02-01T00:09:00.000Z", unitOfWork: uow });
+      expect(missingLineage.status).toBe("INCOMPLETE");
+      expect(await counts()).toEqual(afterFirst);
+      if (first.status !== "PERSISTED") return;
+      await expect(sql.begin(async transaction => {
+        const repository = createM5HolderSnapshotTransactionRepository(transaction);
+        await repository.save(first.aggregate);
+        throw new Error("M5_TEST_ROLLBACK_SENTINEL");
+      })).rejects.toThrow("M5_TEST_ROLLBACK_SENTINEL");
       expect(await counts()).toEqual(afterFirst);
     } finally { await sql.end({ timeout: 5 }); }
   });
