@@ -9,6 +9,10 @@ describe("M5 suspicious assessment binding migration contract", () => {
     expect(sql).toContain("manifest_schema_version = 'm5-evidence-manifest/v2'");
     expect(sql).toContain("manifest->>'version' = manifest_schema_version");
     expect(sql).toContain("jsonb_typeof(manifest->'suspiciousAssessment') = 'object'");
+    expect(sql).toContain("manifest ? 'suspiciousAssessment'");
+    expect(sql).toContain("manifest->'suspiciousAssessment' <> 'null'::jsonb");
+    expect(sql).toContain("jsonb_typeof((manifest->'suspiciousAssessment')->'assessmentId') = 'string'");
+    expect(sql).toContain("jsonb_typeof((manifest->'suspiciousAssessment')->'fingerprint') = 'string'");
     expect(sql).toContain("not (manifest ? 'suspicious')");
     expect(sql).toContain("~ '^[a-f0-9]{64}$'");
   });

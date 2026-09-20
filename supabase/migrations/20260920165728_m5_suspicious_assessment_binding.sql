@@ -21,7 +21,13 @@ alter table public.m5_manifest_authorities
   add constraint m5_manifest_authorities_manifest_v2_shape_check
     check (
       jsonb_typeof(manifest) = 'object'
+      and manifest ? 'suspiciousAssessment'
       and jsonb_typeof(manifest->'suspiciousAssessment') = 'object'
+      and manifest->'suspiciousAssessment' <> 'null'::jsonb
+      and (manifest->'suspiciousAssessment') ? 'assessmentId'
+      and (manifest->'suspiciousAssessment') ? 'fingerprint'
+      and jsonb_typeof((manifest->'suspiciousAssessment')->'assessmentId') = 'string'
+      and jsonb_typeof((manifest->'suspiciousAssessment')->'fingerprint') = 'string'
       and length(trim(manifest->'suspiciousAssessment'->>'assessmentId')) > 0
       and (manifest->'suspiciousAssessment'->>'fingerprint') ~ '^[a-f0-9]{64}$'
       and not (manifest ? 'suspicious')

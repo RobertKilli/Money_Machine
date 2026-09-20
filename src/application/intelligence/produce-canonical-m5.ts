@@ -6,7 +6,7 @@ import { canonicalM5HandoffFromAssembly, type CanonicalM5HandoffResult, type Can
 import { persistCanonicalM5Eligibility } from "./persist-canonical-evidence";
 import { normalizeProducerDatasetPins, validateCanonicalProducerSourceContext, type CanonicalProducerSourceContext } from "./canonical-producer-context";
 import type { M5SuspiciousAssessmentReadCapability } from "./m5-suspicious-assessment-repository";
-import type { M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
+import { assertM5SuspiciousRuleSetAuthority, type M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
 
 export interface ProduceCanonicalM5Input {
   readonly sourceContext: CanonicalProducerSourceContext;
@@ -120,7 +120,8 @@ export async function produceCanonicalM5(input: ProduceCanonicalM5Input, depende
   if (assessment.suspiciousAssessmentId !== input.manifest.suspiciousAssessment.assessmentId || assessment.fingerprint !== input.manifest.suspiciousAssessment.fingerprint || assessment.candidateId !== sourceContext.candidateId || assessment.assetId !== sourceContext.assetId || assessment.canonicalIdentifier !== sourceContext.canonicalIdentifier || assessment.assetClass !== sourceContext.assetClass || assessment.asOf !== sourceContext.asOf || !allowedPins.some(pin => pin.providerId === assessment.providerId && pin.datasetId === assessment.datasetId && pin.datasetVersion === assessment.datasetVersion)) return invalid(new Error("M5_ASSEMBLY_SUSPICIOUS_ASSESSMENT_SCOPE_MISMATCH"));
   let ruleSet;
   try { ruleSet = await dependencies.suspiciousRuleSetResolver.resolve({ providerId: assessment.providerId, datasetId: assessment.datasetId, datasetVersion: assessment.datasetVersion, ruleSetVersion: assessment.ruleSetVersion, detectorVersion: assessment.detectorVersion }); } catch (error) { return invalid(error); }
-  if (!ruleSet || ruleSet.fingerprint !== assessment.ruleSetFingerprint) return invalid(new Error("M5_ASSEMBLY_SUSPICIOUS_RULE_SET_INVALID"));
+  try { if (!ruleSet) return invalid(new Error("M5_ASSEMBLY_SUSPICIOUS_RULE_SET_INVALID")); assertM5SuspiciousRuleSetAuthority(ruleSet); } catch (error) { return invalid(error); }
+  if (ruleSet.providerId !== assessment.providerId || ruleSet.datasetId !== assessment.datasetId || ruleSet.datasetVersion !== assessment.datasetVersion || ruleSet.ruleSetVersion !== assessment.ruleSetVersion || ruleSet.detectorVersion !== assessment.detectorVersion || ruleSet.fingerprint !== assessment.ruleSetFingerprint) return invalid(new Error("M5_ASSEMBLY_SUSPICIOUS_RULE_SET_SCOPE_MISMATCH"));
   const rawEvidence = await dependencies.rawEvidenceRepository.readAt({
     candidateId: sourceContext.candidateId,
     assetId: sourceContext.assetId,
