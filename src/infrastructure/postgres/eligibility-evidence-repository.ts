@@ -108,6 +108,10 @@ export function mapQuantitativeEligibilityEvidenceRow(row: RawRow) {
               endAt: timestamp(row.window_end_at, "M5_RAW_ROW_WINDOW_INVALID"),
             },
       qualificationBasis: optionalText(row.qualification_basis),
+      holderSnapshotId: optionalText(row.holder_snapshot_id),
+      holderSnapshotFingerprint: optionalText(row.holder_snapshot_fingerprint),
+      holderDerivationFingerprint: optionalText(row.holder_derivation_fingerprint),
+      asOf: row.as_of == null ? undefined : timestamp(row.as_of, "M5_RAW_ROW_AS_OF_INVALID"),
     } as never),
     row.fingerprint,
   );
@@ -197,7 +201,7 @@ async function insert(
   let result: readonly RawRow[];
   if (record.evidenceKind === "QUANTITATIVE")
     result =
-      await client`insert into public.eligibility_quantitative_evidence (evidence_id,candidate_id,asset_id,canonical_identifier,asset_class,provider_id,dataset_id,dataset_version,mapping_revision_id,source_lineage_id,observed_at,available_at,provenance,fingerprint,metric_kind,value_atoms,scale,unit,semantics_version,currency_code,window_start_at,window_end_at,qualification_basis) values (${record.evidenceId},${record.candidateId},${record.assetId},${record.canonicalIdentifier},${record.assetClass},${record.providerId},${record.datasetId},${record.datasetVersion},${record.mappingRevisionId},${record.sourceLineageId},${record.observedAt},${record.availableAt},${json(record.provenance)}::jsonb,${record.fingerprint},${record.metricKind},${record.valueAtoms.toString()}::numeric,${record.scale},${record.unit},${record.semanticsVersion},${record.currencyCode ?? null},${record.window?.startAt ?? null},${record.window?.endAt ?? null},${record.qualificationBasis ?? null}) on conflict (evidence_id) do nothing returning evidence_id`;
+      await client`insert into public.eligibility_quantitative_evidence (evidence_id,candidate_id,asset_id,canonical_identifier,asset_class,provider_id,dataset_id,dataset_version,mapping_revision_id,source_lineage_id,observed_at,available_at,provenance,fingerprint,metric_kind,value_atoms,scale,unit,semantics_version,currency_code,window_start_at,window_end_at,qualification_basis,holder_snapshot_id,holder_snapshot_fingerprint,holder_derivation_fingerprint,as_of) values (${record.evidenceId},${record.candidateId},${record.assetId},${record.canonicalIdentifier},${record.assetClass},${record.providerId},${record.datasetId},${record.datasetVersion},${record.mappingRevisionId},${record.sourceLineageId},${record.observedAt},${record.availableAt},${json(record.provenance)}::jsonb,${record.fingerprint},${record.metricKind},${record.valueAtoms.toString()}::numeric,${record.scale},${record.unit},${record.semanticsVersion},${record.currencyCode ?? null},${record.window?.startAt ?? null},${record.window?.endAt ?? null},${record.qualificationBasis ?? null},${record.holderSnapshotId ?? null},${record.holderSnapshotFingerprint ?? null},${record.holderDerivationFingerprint ?? null},${record.asOf ?? null}) on conflict (evidence_id) do nothing returning evidence_id`;
   else if (record.evidenceKind === "VENUE")
     result =
       await client`insert into public.eligibility_venue_evidence (evidence_id,candidate_id,asset_id,canonical_identifier,asset_class,provider_id,dataset_id,dataset_version,mapping_revision_id,source_lineage_id,observed_at,available_at,provenance,fingerprint,venue_id,eligibility_state) values (${record.evidenceId},${record.candidateId},${record.assetId},${record.canonicalIdentifier},${record.assetClass},${record.providerId},${record.datasetId},${record.datasetVersion},${record.mappingRevisionId},${record.sourceLineageId},${record.observedAt},${record.availableAt},${json(record.provenance)}::jsonb,${record.fingerprint},${record.venueId},${record.eligibilityState}) on conflict (evidence_id) do nothing returning evidence_id`;

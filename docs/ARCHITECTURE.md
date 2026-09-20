@@ -318,3 +318,6 @@ retain both page and finality receipt timestamps in the envelope/auditable
 fields. Thus a replay of unchanged content has the same payload identity but a
 later snapshot availability/fingerprint, and the finality proof survives the
 package-to-provenance boundary.
+### M5 holder concentration evidence binding
+
+Holder concentration raw evidence is created only from the persisted, sealed holder snapshot and its exact `SINGLE_CONCENTRATION`/`TOP10_CONCENTRATION` derivation pair. A single transaction validates the mapping, provider identity assertion, COMPLETED SourceLineage and snapshot authority before inserting both quantitative rows. Concentration rows carry snapshot, derivation and `asOf` authority fields; all other quantitative metrics retain the prior nullable shape. The binding is server-only, append-only and replay-idempotent, with no provider/network, manifest, evaluator or canonical operation.

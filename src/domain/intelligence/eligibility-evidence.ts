@@ -41,6 +41,11 @@ export interface QuantitativeEligibilityEvidence extends RawEligibilityEvidenceE
   readonly currencyCode?: string;
   readonly window?: Readonly<{ startAt: string; endAt: string }>;
   readonly qualificationBasis?: string;
+  /** Holder concentration authority; forbidden for every other metric. */
+  readonly holderSnapshotId?: string;
+  readonly holderSnapshotFingerprint?: string;
+  readonly holderDerivationFingerprint?: string;
+  readonly asOf?: string;
 }
 
 export interface AgeReferenceEligibilityEvidence extends RawEligibilityEvidenceEnvelope {
@@ -127,7 +132,14 @@ function quantitativeBody(input: QuantitativeEligibilityEvidenceInput): Omit<Qua
   if (input.metricKind === "VOLATILITY" && (input.unit !== "BPS" || input.scale !== 0)) throw new Error("M5_RAW_BPS_INVALID");
   if (input.metricKind === "VOLATILITY" && !window) throw new Error("M5_RAW_WINDOW_REQUIRED");
   if (input.metricKind === "HISTORY_SPAN") { if (input.unit !== "DAYS" || input.scale !== 0 || !window) throw new Error("M5_RAW_HISTORY_SPAN_INVALID"); nonBlank(input.qualificationBasis ?? "", "M5_RAW_HISTORY_SPAN_INVALID"); }
-  return frozen({ ...envelope, evidenceKind: "QUANTITATIVE", metricKind: input.metricKind, valueAtoms: input.valueAtoms, scale: input.scale, unit: input.unit.trim(), semanticsVersion: input.semanticsVersion.trim(), ...(input.currencyCode ? { currencyCode: input.currencyCode.trim() } : {}), ...(window ? { window } : {}), ...(input.qualificationBasis ? { qualificationBasis: input.qualificationBasis.trim() } : {}) });
+  const holderFields = [input.holderSnapshotId, input.holderSnapshotFingerprint, input.holderDerivationFingerprint, input.asOf];
+  if (CONCENTRATION_METRICS.has(input.metricKind)) {
+    nonBlank(input.holderSnapshotId ?? "", "M5_RAW_HOLDER_SNAPSHOT_ID_REQUIRED");
+    if (!input.holderSnapshotFingerprint || !SHA256.test(input.holderSnapshotFingerprint)) throw new Error("M5_RAW_HOLDER_SNAPSHOT_FINGERPRINT_REQUIRED");
+    if (!input.holderDerivationFingerprint || !SHA256.test(input.holderDerivationFingerprint)) throw new Error("M5_RAW_HOLDER_DERIVATION_FINGERPRINT_REQUIRED");
+    timestamp(input.asOf ?? "", "M5_RAW_AS_OF_REQUIRED");
+  } else if (holderFields.some(value => value !== undefined)) throw new Error("M5_RAW_HOLDER_AUTHORITY_FORBIDDEN");
+  return frozen({ ...envelope, evidenceKind: "QUANTITATIVE", metricKind: input.metricKind, valueAtoms: input.valueAtoms, scale: input.scale, unit: input.unit.trim(), semanticsVersion: input.semanticsVersion.trim(), ...(input.currencyCode ? { currencyCode: input.currencyCode.trim() } : {}), ...(window ? { window } : {}), ...(input.qualificationBasis ? { qualificationBasis: input.qualificationBasis.trim() } : {}), ...(CONCENTRATION_METRICS.has(input.metricKind) ? { holderSnapshotId: input.holderSnapshotId!.trim(), holderSnapshotFingerprint: input.holderSnapshotFingerprint!, holderDerivationFingerprint: input.holderDerivationFingerprint!, asOf: input.asOf } : {}) });
 }
 
 export function rawEligibilityEvidenceFingerprint(record: Omit<RawEligibilityEvidence, "fingerprint">): string { return digest({ version: ELIGIBILITY_RAW_EVIDENCE_VERSION, ...record }); }
