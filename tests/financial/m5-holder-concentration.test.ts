@@ -220,6 +220,19 @@ describe("M5 holder concentration authority", () => {
     expect(invalidFingerprint.status).toBe("INVALID");
   });
 
+  it.each([
+    ["missing page", (value: M5HolderSnapshot) => ({ ...fixture(value), fullPaginationProof: { ...fixture(value).fullPaginationProof, pages: [fixture(value).fullPaginationProof.pages[1]] } }), "INCOMPLETE"],
+    ["page after final", (value: M5HolderSnapshot) => ({ ...fixture(value), fullPaginationProof: { ...fixture(value).fullPaginationProof, pages: [...fixture(value).fullPaginationProof.pages, { ...fixture(value).fullPaginationProof.pages[1], pageOrdinal: 2, isFinal: false }] } }), "INCOMPLETE"],
+    ["duplicate item", (value: M5HolderSnapshot) => ({ ...fixture(value), holders: fixture(value).holders.map((holder, index) => index === 1 ? { ...holder, itemOrdinal: 0 } : holder) }), "INVALID"],
+    ["block mismatch", (value: M5HolderSnapshot) => ({ ...fixture(value), fullPaginationProof: { ...fixture(value).fullPaginationProof, pages: fixture(value).fullPaginationProof.pages.map((page, index) => index === 1 ? { ...page, blockHash: `0x${"b".repeat(64)}` } : page) } }), "INVALID"],
+    ["decimals mismatch", (value: M5HolderSnapshot) => ({ ...fixture(value), fullPaginationProof: { ...fixture(value).fullPaginationProof, pages: fixture(value).fullPaginationProof.pages.map((page, index) => index === 1 ? { ...page, tokenDecimals: 6 } : page) } }), "INVALID"],
+    ["chain mismatch", (value: M5HolderSnapshot) => ({ ...fixture(value), chainId: "eip155:137" }), "INVALID"],
+  ])("classifies %s without emitting concentration values", (_name, alter, expected) => {
+    const parsed = parseM5HolderSnapshotFixture(alter(snapshot()));
+    expect(parsed.status).toBe(expected);
+    expect(parsed.status === "READY" ? parsed.snapshot : undefined).toBeUndefined();
+  });
+
   it("preserves bigint precision for large atom values", () => {
     const large = (1n << 64n) + 123n;
     const value = snapshot({
