@@ -207,3 +207,9 @@ called only for `COMPLETE` assemblies. `NO_FINDINGS` maps to CLEAN and
 empty list. Canonical M5 stores the assessment ID, fingerprint, and result in
 its immutable material fingerprint. Manifest-v1 and the legacy empty-list flow
 fail closed and must not be used for production or deployment.
+
+## 12. Manual provider-neutral ingestion-to-lineage boundary
+
+`m5-normalized-source-package/v1` is a strict, secret-safe manual input contract, not a raw provider payload or provider adapter. Its parser rejects unknown fields, secret-like keys, query-bearing URLs, unsafe cursors, non-canonical UTC timestamps, duplicate records/ordinals, and quarantined temporal material. File I/O and pure deterministic planning happen before any database connection. Planning derives every provenance ID/fingerprint and the only successful lifecycle: `STARTED`, one `SOURCE_OBSERVED` per observation, then `COMPLETED`.
+
+`npm run m5:ingest -- --package <path>` is dry-run by default; `--apply` requires server-only `DATABASE_URL`. Apply uses one PostgreSQL transaction and one shared `TransactionSql` for request, attempt, events, artifacts, envelopes, observations, availability claims, and COMPLETED-only sealed source-lineage membership. The package is synthetic/manual input and proves neither provider data nor legal/identity authority. Provider contracts, legal and availability decisions, identity assertions, mapping, raw evidence, manifests, canonical M5, scheduling, and notifications remain separate work.
