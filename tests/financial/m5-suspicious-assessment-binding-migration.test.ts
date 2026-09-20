@@ -7,6 +7,7 @@ describe("M5 suspicious assessment binding migration contract", () => {
   it("fails closed and makes manifest authority strict v2", () => {
     expect(sql).toContain("M5_SUSPICIOUS_ASSESSMENT_BINDING_REQUIRES_EMPTY_AUTHORITY_TABLES");
     expect(sql).toContain("manifest_schema_version = 'm5-evidence-manifest/v2'");
+    expect(sql).toContain("drop constraint if exists m5_manifest_authorities_manifest_schema_version_check1");
     expect(sql).toContain("manifest->>'version' = manifest_schema_version");
     expect(sql).toContain("jsonb_typeof(manifest->'suspiciousAssessment') = 'object'");
     expect(sql).toContain("manifest ? 'suspiciousAssessment'");

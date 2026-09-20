@@ -11,6 +11,7 @@ $$;
 
 alter table public.m5_manifest_authorities
   drop constraint if exists m5_manifest_authorities_manifest_schema_version_check,
+  drop constraint if exists m5_manifest_authorities_manifest_schema_version_check1,
   drop constraint if exists m5_manifest_authorities_manifest_check;
 
 alter table public.m5_manifest_authorities
