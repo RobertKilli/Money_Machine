@@ -5,6 +5,13 @@ import { buildM5HolderSnapshotRequestPlan, assembleM5HolderPageSet, holderPagePa
 import { createPostgresManualIngestionToLineageUnitOfWork } from "@/infrastructure/postgres/manual-ingestion-to-lineage-uow";
 import { createM5HolderSnapshotPersistenceUnitOfWork, createM5HolderSnapshotTransactionRepository } from "@/infrastructure/postgres/m5-holder-snapshot-repository";
 import { persistM5HolderSnapshotFromSourceLineage } from "@/application/intelligence/m5-holder-snapshot-persistence";
+import { buildManualIngestionToLineagePlan } from "@/application/intelligence/manual-ingestion-to-lineage";
+import { createProviderAssetIdentityAssertionAuthority } from "@/application/intelligence/create-provider-asset-identity-assertion";
+import { createProviderAssetIdentityAssertionUnitOfWork } from "@/infrastructure/postgres/provider-asset-identity-repository";
+import { createAssetMappingRevisionFromSourceLineage } from "@/application/intelligence/create-asset-mapping-revision-from-source-lineage";
+import { createAssetMappingSourceLineageUnitOfWork } from "@/infrastructure/postgres/asset-mapping-revision-repository";
+import { persistM5HolderConcentrationEvidence } from "@/application/intelligence/m5-holder-concentration-evidence";
+import { createM5HolderConcentrationEvidenceUnitOfWork } from "@/infrastructure/postgres/m5-holder-concentration-evidence-uow";
 
 const url = process.env.DATABASE_URL;
 const enabled = process.env.MONEY_MACHINE_HOLDER_PERSISTENCE_INTEGRATION === "1" && process.env.MONEY_MACHINE_HOLDER_PERSISTENCE_SCHEMA_READY === "1" && Boolean(url);
@@ -42,11 +49,25 @@ describe.skipIf(!enabled)("M5 holder snapshot persistence PostgreSQL integration
       const uow = createM5HolderSnapshotPersistenceUnitOfWork(sql);
       const first = await persistM5HolderSnapshotFromSourceLineage({ snapshot: projected.snapshot, sourceLineageId: ingestion.sourceLineageId, asOf: request.asOf, recordedAt: "2026-02-01T00:09:00.000Z", unitOfWork: uow });
       expect(first.status).toBe("PERSISTED");
+      if (first.status !== "PERSISTED") return;
+      const plan = buildManualIngestionToLineagePlan(normalized);
+      const sourceRecord = plan.records[0]!;
+      const assertion = await createProviderAssetIdentityAssertionAuthority({ unitOfWork: createProviderAssetIdentityAssertionUnitOfWork(sql), projection: { projectionVersion: "m5-provider-asset-identity-projection/v1", sourceArtifactId: sourceRecord.artifact.sourceArtifactId, sourceEnvelopeId: sourceRecord.envelope.sourceEnvelopeId, parserVersion: sourceRecord.envelope.parserContractVersion, envelopeSchemaVersion: sourceRecord.envelope.envelopeSchemaVersion, identity: { type: "EVM_CONTRACT_ADDRESS", namespace: "eip155:1", value: request.contractAddress }, diagnostics: [] }, recordedAt: "2026-02-01T00:09:00.000Z" });
+      const mapping = await createAssetMappingRevisionFromSourceLineage({ unitOfWork: createAssetMappingSourceLineageUnitOfWork(sql), value: { sourceLineageId: ingestion.sourceLineageId, providerAssetIdentityAssertionId: assertion.providerAssetIdentityAssertionId, canonicalAssetId: "canonical:synthetic-asset", canonicalIdentifier: "asset:synthetic-asset", assetClass: "CRYPTO", mappingRevisionVersion: "m5-asset-mapping-revision/v1", validFrom: ingestion.observedAt, recordedAt: "2026-02-01T00:09:00.000Z" } });
+      const evidence = await persistM5HolderConcentrationEvidence({ unitOfWork: createM5HolderConcentrationEvidenceUnitOfWork(sql), mappingRevisionId: mapping.mappingRevisionId, snapshotId: first.aggregate.snapshot.snapshotId, candidateId: "candidate:synthetic" });
+      expect(evidence.status).toBe("PERSISTED");
+      const evidenceRows = await sql`select metric_kind,value_atoms,unit,scale,holder_snapshot_id,holder_snapshot_fingerprint,holder_derivation_fingerprint,as_of from public.eligibility_quantitative_evidence where holder_snapshot_id=${first.aggregate.snapshot.snapshotId} order by metric_kind`;
+      expect(evidenceRows).toHaveLength(2);
+      const ceilBps = (numerator: bigint) => (numerator * 10_000n + maxUint256 - 1n) / maxUint256;
+      expect(evidenceRows.map(row => [String(row.metric_kind), BigInt(String(row.value_atoms)), String(row.unit), Number(row.scale)])).toEqual([["SINGLE_CONCENTRATION", ceilBps(maxUint256 - 1000n), "BPS", 0], ["TOP10_CONCENTRATION", ceilBps(maxUint256 - 100n), "BPS", 0]]);
+      expect(evidenceRows.every(row => String(row.holder_snapshot_fingerprint) === first.aggregate.snapshot.fingerprint && String(row.holder_derivation_fingerprint).length === 64 && row.as_of != null)).toBe(true);
+      const evidenceReplay = await persistM5HolderConcentrationEvidence({ unitOfWork: createM5HolderConcentrationEvidenceUnitOfWork(sql), mappingRevisionId: mapping.mappingRevisionId, snapshotId: first.aggregate.snapshot.snapshotId, candidateId: "candidate:synthetic" });
+      expect(evidenceReplay.status).toBe("PERSISTED");
+      expect((await sql`select count(*)::int as count from public.eligibility_quantitative_evidence where holder_snapshot_id=${first.aggregate.snapshot.snapshotId}`)[0]!.count).toBe(2);
       const counts = async () => (await sql`select (select count(*) from public.intelligence_m5_holder_snapshots)::int as snapshots,(select count(*) from public.intelligence_m5_holder_snapshot_pages)::int as pages,(select count(*) from public.intelligence_m5_holder_snapshot_holders)::int as holders,(select count(*) from public.intelligence_m5_holder_concentration_derivations)::int as derivations`)[0];
       const afterFirst = await counts();
       expect(afterFirst).toEqual({ snapshots: 1, pages: 2, holders: 11, derivations: 2 });
       const derivations = await sql`select metric_kind,value_bps from public.intelligence_m5_holder_concentration_derivations where snapshot_id=${first.status === "PERSISTED" ? first.aggregate.snapshot.snapshotId : ""} order by metric_kind`;
-      const ceilBps = (numerator: bigint) => (numerator * 10_000n + maxUint256 - 1n) / maxUint256;
       expect(derivations.map(row => [String(row.metric_kind), BigInt(String(row.value_bps))])).toEqual([["SINGLE_CONCENTRATION", ceilBps(maxUint256 - 1000n)], ["TOP10_CONCENTRATION", ceilBps(maxUint256 - 100n)]]);
       const replay = await persistM5HolderSnapshotFromSourceLineage({ snapshot: projected.snapshot, sourceLineageId: ingestion.sourceLineageId, asOf: request.asOf, recordedAt: "2026-02-01T00:09:00.000Z", unitOfWork: uow });
       expect(replay.status).toBe("PERSISTED");
@@ -54,7 +75,6 @@ describe.skipIf(!enabled)("M5 holder snapshot persistence PostgreSQL integration
       const missingLineage = await persistM5HolderSnapshotFromSourceLineage({ snapshot: projected.snapshot, sourceLineageId: "missing-lineage", asOf: request.asOf, recordedAt: "2026-02-01T00:09:00.000Z", unitOfWork: uow });
       expect(missingLineage.status).toBe("INCOMPLETE");
       expect(await counts()).toEqual(afterFirst);
-      if (first.status !== "PERSISTED") return;
       await expect(sql.begin(async transaction => {
         const repository = createM5HolderSnapshotTransactionRepository(transaction);
         await repository.save(first.aggregate);
