@@ -355,3 +355,22 @@ conditional on these two metrics only; holder concentration retains its
 separate authority contract and other quantitative metrics retain null
 authority fields. This slice performs no provider/network work and does not
 produce manifest, evaluator, eligibility-status or canonical M5 output.
+
+### M5 market metrics authority
+
+`m5-market-metrics-authority/v1` is a fixture-only, provider-neutral authority
+for `MARKET_CAP`, `VOLUME` and `LIQUIDITY`. It binds those values to one sealed
+`SourceLineage`, explicit quote/minor-unit policy, a reported market-cap basis,
+an exact rolling-24-hour volume window, and a complete versioned liquidity
+universe. FDV is never a market-cap fallback. A top pool, sample, missing page,
+or unsupported completeness claim is `INCOMPLETE`; the service never estimates
+total liquidity.
+
+The authority persists one parent, source material members and exactly three
+metric derivations in a transaction-scoped repository. The separate evidence
+service validates mapping, provider identity, lineage and the authority, then
+writes `MARKET_CAP`, `VOLUME` and `LIQUIDITY` raw quantitative evidence as one
+atomic pair/set. Replays are idempotent and stored rows are reread and
+reconstructed; no newest/best selection is allowed. This slice does not create
+venue authority, suspicious assessments, manifests, evaluator results or
+canonical M5. Provider/legal/production approval remains a separate blocker.
