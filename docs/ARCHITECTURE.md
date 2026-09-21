@@ -321,3 +321,20 @@ package-to-provenance boundary.
 ### M5 holder concentration evidence binding
 
 Holder concentration raw evidence is created only from the persisted, sealed holder snapshot and its exact `SINGLE_CONCENTRATION`/`TOP10_CONCENTRATION` derivation pair. A single transaction validates the mapping, provider identity assertion, COMPLETED SourceLineage and snapshot authority before inserting both quantitative rows. Concentration rows carry snapshot, derivation and `asOf` authority fields; all other quantitative metrics retain the prior nullable shape. The binding is server-only, append-only and replay-idempotent, with no provider/network, manifest, evaluator or canonical operation.
+
+### M5 daily series authority persistence
+
+`m5-daily-series-authority/v1` binds a normalized daily-close series to one
+sealed, `COMPLETED` SourceLineage. Every observation retains its artifact,
+envelope, observation, provider record and payload fingerprint, while the
+parent records the exact ordered material set and maximum receipt availability.
+The existing `history-span/crypto-daily/v1` and
+`volatility/crypto-daily/v1` derivations are reused without reimplementing
+their bigint mathematics; exactly one row for each derivation is sealed with
+the parent and observations in one transaction. The server-only schema uses
+`NUMERIC(78,0)` for close atoms, RLS with no client policies or privileges, and
+the immutable mutation trigger. Replay is idempotent and material conflicts,
+missing members, lifecycle failures and timestamp/cadence violations fail
+closed. This fixture/provider-neutral slice performs no provider calls and
+creates no raw evidence, manifest or canonical M5; its migration remains
+unapplied to hosted environments until separately approved.
