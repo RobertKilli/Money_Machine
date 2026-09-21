@@ -75,6 +75,12 @@ export interface VenueEligibilityEvidence extends RawEligibilityEvidenceEnvelope
   readonly evidenceKind: "VENUE";
   readonly venueId: string;
   readonly eligibilityState: VenueEligibilityState;
+  readonly venueAuthorityId?: string;
+  readonly venueAuthorityFingerprint?: string;
+  readonly venueMemberId?: string;
+  readonly venueMemberFingerprint?: string;
+  readonly venueAuthorityMemberCount?: number;
+  readonly asOf?: string;
 }
 
 export interface SuspiciousEligibilityEvidence extends RawEligibilityEvidenceEnvelope {
@@ -182,7 +188,12 @@ export function createContractVerificationEligibilityEvidence(input: ContractVer
 
 export function createVenueEligibilityEvidence(input: VenueEligibilityEvidenceInput): VenueEligibilityEvidence {
   const envelope = normalizedEnvelope(input); nonBlank(input.venueId, "M5_RAW_VENUE_ID_INVALID"); if (!VENUE_STATES.has(input.eligibilityState)) throw new Error("M5_RAW_VENUE_STATE_INVALID");
-  const body = frozen({ ...envelope, evidenceKind: "VENUE" as const, venueId: input.venueId.trim(), eligibilityState: input.eligibilityState });
+  const authorityFields = [input.venueAuthorityId, input.venueAuthorityFingerprint, input.venueMemberId, input.venueMemberFingerprint, input.asOf];
+  if (authorityFields.some(value => value !== undefined) && authorityFields.some(value => typeof value !== "string" || value.trim() === "")) throw new Error("M5_RAW_VENUE_AUTHORITY_PARTIAL");
+  if (authorityFields.some(value => value !== undefined) && (!SHA256.test(input.venueAuthorityFingerprint!) || !SHA256.test(input.venueMemberFingerprint!) || !input.asOf)) throw new Error("M5_RAW_VENUE_AUTHORITY_INVALID");
+  if (input.asOf !== undefined) { timestamp(input.asOf, "M5_RAW_AS_OF_INVALID"); if (input.availableAt > input.asOf) throw new Error("M5_RAW_VENUE_AS_OF_INVALID"); }
+  if (input.venueAuthorityMemberCount !== undefined && (!Number.isSafeInteger(input.venueAuthorityMemberCount) || input.venueAuthorityMemberCount < 1)) throw new Error("M5_RAW_VENUE_MEMBER_COUNT_INVALID");
+  const body = frozen({ ...envelope, evidenceKind: "VENUE" as const, venueId: input.venueId.trim(), eligibilityState: input.eligibilityState, ...(input.venueAuthorityId !== undefined ? { venueAuthorityId: input.venueAuthorityId.trim(), venueAuthorityFingerprint: input.venueAuthorityFingerprint!, venueMemberId: input.venueMemberId!.trim(), venueMemberFingerprint: input.venueMemberFingerprint!, venueAuthorityMemberCount: input.venueAuthorityMemberCount, asOf: input.asOf } : {}) });
   return frozen({ ...body, fingerprint: rawEligibilityEvidenceFingerprint(body) });
 }
 
