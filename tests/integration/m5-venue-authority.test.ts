@@ -65,9 +65,12 @@ describe.skipIf(!enabled)("M5 venue authority PostgreSQL integration", () => {
       expect(await counts()).toEqual({ authorities: 1, members: 2, evidence: 2 });
       const replay = await persistM5VenueEvidence({ unitOfWork: createM5VenueEvidenceUnitOfWork(sql), mappingRevisionId: mapping.mappingRevisionId, authorityId: authority.authority.authorityId, candidateId: "candidate-venue" });
       expect(replay.status).toBe("PERSISTED"); expect(await counts()).toEqual({ authorities: 1, members: 2, evidence: 2 });
-      const rollbackUow = createM5VenueEvidenceUnitOfWork(sql);
-      await expect(rollbackUow.withTransaction(async repositories => { await repositories.evidence.save(evidence.evidence[0]!); throw new Error("M5_TEST_VENUE_ROLLBACK_SENTINEL"); })).rejects.toThrow("M5_TEST_VENUE_ROLLBACK_SENTINEL");
-      expect(await counts()).toEqual({ authorities: 1, members: 2, evidence: 2 });
+      const rollbackAuthority = await persistM5VenueAuthority({ providerId, datasetId, datasetVersion, sourceLineageId: ingested.sourceLineageId, asOf, universeNamespace: "synthetic:venues", universeId: "universe-rollback", recordedAt, unitOfWork: createM5VenueAuthorityPersistenceUnitOfWork(sql) });
+      expect(rollbackAuthority.status).toBe("PERSISTED"); if (rollbackAuthority.status !== "PERSISTED") return;
+      const baseEvidenceUow = createM5VenueEvidenceUnitOfWork(sql);
+      const rollbackUow = { withTransaction: <T>(work: Parameters<typeof baseEvidenceUow.withTransaction>[0]) => baseEvidenceUow.withTransaction(async repositories => { let writes = 0; return work({ ...repositories, evidence: { save: async row => { const saved = await repositories.evidence.save(row); writes += 1; if (writes === 1) throw new Error("M5_TEST_VENUE_ROLLBACK_SENTINEL"); return saved; } } }); }) };
+      await expect(persistM5VenueEvidence({ unitOfWork: rollbackUow, mappingRevisionId: mapping.mappingRevisionId, authorityId: rollbackAuthority.authority.authorityId, candidateId: "candidate-rollback" })).rejects.toThrow("M5_TEST_VENUE_ROLLBACK_SENTINEL");
+      expect(await counts()).toEqual({ authorities: 2, members: 4, evidence: 2 });
     } finally { await sql.end({ timeout: 5 }); }
   });
 });
