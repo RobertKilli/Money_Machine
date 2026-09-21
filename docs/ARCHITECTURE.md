@@ -338,3 +338,20 @@ missing members, lifecycle failures and timestamp/cadence violations fail
 closed. This fixture/provider-neutral slice performs no provider calls and
 creates no raw evidence, manifest or canonical M5; its migration remains
 unapplied to hosted environments until separately approved.
+
+### M5 daily-series quantitative evidence binding
+
+`HISTORY_SPAN` and `VOLATILITY` evidence is produced only from the exact
+persisted daily-series authority and its two persisted derivations. The
+application service validates the mapping revision, provider identity
+assertion and sealed SourceLineage in the same transaction as the daily
+authority and raw-evidence reads. It never selects evidence automatically:
+the downstream manifest remains the explicit selector.
+
+Both quantitative rows are written atomically and reread authoritatively;
+replay with identical material is idempotent and a conflict or database
+failure rolls back the entire pair. Daily-series authority fields are
+conditional on these two metrics only; holder concentration retains its
+separate authority contract and other quantitative metrics retain null
+authority fields. This slice performs no provider/network work and does not
+produce manifest, evaluator, eligibility-status or canonical M5 output.

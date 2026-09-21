@@ -45,6 +45,10 @@ export interface QuantitativeEligibilityEvidence extends RawEligibilityEvidenceE
   readonly holderSnapshotId?: string;
   readonly holderSnapshotFingerprint?: string;
   readonly holderDerivationFingerprint?: string;
+  /** Daily-series authority; forbidden for every non-daily metric. */
+  readonly dailySeriesAuthorityId?: string;
+  readonly dailySeriesAuthorityFingerprint?: string;
+  readonly dailySeriesDerivationFingerprint?: string;
   readonly asOf?: string;
 }
 
@@ -132,14 +136,20 @@ function quantitativeBody(input: QuantitativeEligibilityEvidenceInput): Omit<Qua
   if (input.metricKind === "VOLATILITY" && (input.unit !== "BPS" || input.scale !== 0)) throw new Error("M5_RAW_BPS_INVALID");
   if (input.metricKind === "VOLATILITY" && !window) throw new Error("M5_RAW_WINDOW_REQUIRED");
   if (input.metricKind === "HISTORY_SPAN") { if (input.unit !== "DAYS" || input.scale !== 0 || !window) throw new Error("M5_RAW_HISTORY_SPAN_INVALID"); nonBlank(input.qualificationBasis ?? "", "M5_RAW_HISTORY_SPAN_INVALID"); }
-  const holderFields = [input.holderSnapshotId, input.holderSnapshotFingerprint, input.holderDerivationFingerprint, input.asOf];
+  const holderFields = [input.holderSnapshotId, input.holderSnapshotFingerprint, input.holderDerivationFingerprint];
+  const dailyFields = [input.dailySeriesAuthorityId, input.dailySeriesAuthorityFingerprint, input.dailySeriesDerivationFingerprint];
   if (CONCENTRATION_METRICS.has(input.metricKind)) {
     nonBlank(input.holderSnapshotId ?? "", "M5_RAW_HOLDER_SNAPSHOT_ID_REQUIRED");
     if (!input.holderSnapshotFingerprint || !SHA256.test(input.holderSnapshotFingerprint)) throw new Error("M5_RAW_HOLDER_SNAPSHOT_FINGERPRINT_REQUIRED");
     if (!input.holderDerivationFingerprint || !SHA256.test(input.holderDerivationFingerprint)) throw new Error("M5_RAW_HOLDER_DERIVATION_FINGERPRINT_REQUIRED");
     timestamp(input.asOf ?? "", "M5_RAW_AS_OF_REQUIRED");
   } else if (holderFields.some(value => value !== undefined)) throw new Error("M5_RAW_HOLDER_AUTHORITY_FORBIDDEN");
-  return frozen({ ...envelope, evidenceKind: "QUANTITATIVE", metricKind: input.metricKind, valueAtoms: input.valueAtoms, scale: input.scale, unit: input.unit.trim(), semanticsVersion: input.semanticsVersion.trim(), ...(input.currencyCode ? { currencyCode: input.currencyCode.trim() } : {}), ...(window ? { window } : {}), ...(input.qualificationBasis ? { qualificationBasis: input.qualificationBasis.trim() } : {}), ...(CONCENTRATION_METRICS.has(input.metricKind) ? { holderSnapshotId: input.holderSnapshotId!.trim(), holderSnapshotFingerprint: input.holderSnapshotFingerprint!, holderDerivationFingerprint: input.holderDerivationFingerprint!, asOf: input.asOf } : {}) });
+  if (input.metricKind === "HISTORY_SPAN" || input.metricKind === "VOLATILITY") {
+    if (dailyFields.some(value => typeof value !== "string" || value.trim() === "")) throw new Error("M5_RAW_DAILY_AUTHORITY_REQUIRED");
+    if (!SHA256.test(input.dailySeriesAuthorityFingerprint!) || !SHA256.test(input.dailySeriesDerivationFingerprint!)) throw new Error("M5_RAW_DAILY_AUTHORITY_FINGERPRINT_REQUIRED");
+    timestamp(input.asOf ?? "", "M5_RAW_AS_OF_REQUIRED");
+  } else if (dailyFields.some(value => value !== undefined) || (!CONCENTRATION_METRICS.has(input.metricKind) && input.asOf !== undefined)) throw new Error("M5_RAW_DAILY_AUTHORITY_FORBIDDEN");
+  return frozen({ ...envelope, evidenceKind: "QUANTITATIVE", metricKind: input.metricKind, valueAtoms: input.valueAtoms, scale: input.scale, unit: input.unit.trim(), semanticsVersion: input.semanticsVersion.trim(), ...(input.currencyCode ? { currencyCode: input.currencyCode.trim() } : {}), ...(window ? { window } : {}), ...(input.qualificationBasis ? { qualificationBasis: input.qualificationBasis.trim() } : {}), ...(CONCENTRATION_METRICS.has(input.metricKind) ? { holderSnapshotId: input.holderSnapshotId!.trim(), holderSnapshotFingerprint: input.holderSnapshotFingerprint!, holderDerivationFingerprint: input.holderDerivationFingerprint!, asOf: input.asOf } : {}), ...((input.metricKind === "HISTORY_SPAN" || input.metricKind === "VOLATILITY") ? { dailySeriesAuthorityId: input.dailySeriesAuthorityId!.trim(), dailySeriesAuthorityFingerprint: input.dailySeriesAuthorityFingerprint!, dailySeriesDerivationFingerprint: input.dailySeriesDerivationFingerprint!, asOf: input.asOf } : {}) });
 }
 
 export function rawEligibilityEvidenceFingerprint(record: Omit<RawEligibilityEvidence, "fingerprint">): string { return digest({ version: ELIGIBILITY_RAW_EVIDENCE_VERSION, ...record }); }
