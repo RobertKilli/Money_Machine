@@ -6,7 +6,7 @@ import { createTransactionSourceLineageRepository } from "./source-lineage-repos
 type Row = Record<string, unknown>;
 const r = (v: unknown): Row => v as Row;
 const text = (v: unknown, c: string): string => { if (typeof v !== "string" || !v) throw new Error(c); return v; };
-const decimal = (v: unknown, c: string): bigint => { const s = typeof v === "bigint" || typeof v === "string" ? String(v) : String(v); if (!/^(0|[1-9][0-9]*)$/.test(s)) throw new Error(c); return BigInt(s); };
+const decimal = (v: unknown, c: string): bigint => { if (typeof v !== "bigint" && typeof v !== "string") throw new Error(c); const s = String(v); if (!/^(0|[1-9][0-9]*)$/.test(s)) throw new Error(c); return BigInt(s); };
 const integer = (v: unknown, c: string): number => { const n = typeof v === "number" ? v : Number(v); if (!Number.isSafeInteger(n) || n < 0) throw new Error(c); return n; };
 const time = (v: unknown, c: string): string => { const s = v instanceof Date ? v.toISOString() : text(v, c); if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(s)) throw new Error(c); return s; };
 const array = (v: unknown, c: string): string[] => { if (!Array.isArray(v) || v.some(x => typeof x !== "string")) throw new Error(c); return v; };
@@ -37,7 +37,7 @@ function mapAggregate(parent: Row, observations: readonly Row[], derivations: re
   const expected = [rebuilt.historySpan, rebuilt.volatility];
   for (const value of expected) {
     const stored = mapped.find(d => d.metricKind === value.metricKind);
-    if (!stored || stored.fingerprint !== value.fingerprint || stored.value !== value.value || JSON.stringify(stored.orderedObservationIds) !== JSON.stringify(value.orderedObservationIds)) throw new Error("M5_DAILY_REPOSITORY_DERIVATION_INVALID");
+    if (!stored || stored.fingerprint !== value.fingerprint || stored.value !== value.value || stored.derivationVersion !== value.derivationVersion || stored.cadencePolicyVersion !== value.cadencePolicyVersion || stored.roundingVersion !== value.roundingVersion || stored.unit !== value.unit || stored.scale !== value.scale || stored.observedAt !== value.observedAt || stored.availableAt !== value.availableAt || stored.asOf !== value.asOf || stored.observationCount !== value.observationCount || stored.returnCount !== value.returnCount || stored.earliestObservedAt !== value.earliestObservedAt || stored.latestObservedAt !== value.latestObservedAt || stored.maximumObservedGap !== value.maximumObservedGap || stored.priceScale !== value.priceScale || stored.quoteUnit !== value.quoteUnit || JSON.stringify(stored.orderedObservationIds) !== JSON.stringify(value.orderedObservationIds)) throw new Error("M5_DAILY_REPOSITORY_DERIVATION_INVALID");
   }
   return Object.freeze({ authority: rebuilt.authority, historySpan: mapped.find(d => d.metricKind === "HISTORY_SPAN")!, volatility: mapped.find(d => d.metricKind === "VOLATILITY")! });
 }

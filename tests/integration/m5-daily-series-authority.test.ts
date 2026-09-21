@@ -38,6 +38,9 @@ describe.skipIf(!enabled)("M5 daily series authority PostgreSQL integration", ()
       const counts = async () => (await sql`select (select count(*) from public.intelligence_m5_daily_series_authorities)::int as parents,(select count(*) from public.intelligence_m5_daily_series_observations)::int as observations,(select count(*) from public.intelligence_m5_daily_series_derivations)::int as derivations`)[0];
       expect(await counts()).toEqual({ parents: 1, observations: 15, derivations: 2 });
       const replay = await persistM5DailySeriesAuthority({ ...input, unitOfWork: uow }); expect(replay.status).toBe("PERSISTED"); expect(await counts()).toEqual({ parents: 1, observations: 15, derivations: 2 });
+      const databaseFailureUow: M5DailySeriesAuthorityUnitOfWork = { withTransaction: <T>(work: (repositories: M5DailySeriesAuthorityRepositories) => Promise<T>) => uow.withTransaction(async repositories => work({ ...repositories, dailySeries: { ...repositories.dailySeries, save: async () => { throw new Error("M5_TEST_DATABASE_FAILURE"); } } })) };
+      await expect(persistM5DailySeriesAuthority({ ...input, unitOfWork: databaseFailureUow })).rejects.toThrow("M5_TEST_DATABASE_FAILURE");
+      expect(await counts()).toEqual({ parents: 1, observations: 15, derivations: 2 });
       const rollbackUow: M5DailySeriesAuthorityUnitOfWork = { withTransaction: <T>(work: (repositories: M5DailySeriesAuthorityRepositories) => Promise<T>) => uow.withTransaction(async repositories => { await work(repositories); throw new Error("M5_TEST_DAILY_ROLLBACK_SENTINEL"); }) };
       const freshInput = { ...input, asOf: "2026-02-03T00:00:00.000Z", sourceLineageId: ingested.sourceLineageId, recordedAt: "2026-02-02T00:02:00.000Z" };
       await expect(persistM5DailySeriesAuthority({ ...freshInput, unitOfWork: rollbackUow })).rejects.toThrow("M5_TEST_DAILY_ROLLBACK_SENTINEL");

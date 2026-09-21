@@ -6,6 +6,7 @@ const F = 1_000_000_000_000n;
 const prices = [100n, 200n, 400n, 800n, 1600n, 3200n, 6400n, 12800n, 25600n, 51200n, 102400n, 204800n, 409600n, 819200n, 2457600n].map(value => value * F);
 const asOf = "2026-02-01T00:00:00.000Z";
 const observations = prices.map((closeValue, index) => ({ ordinal: index, observationId: `daily-${index}`, sourceArtifactId: `artifact-${index}`, sourceEnvelopeId: `envelope-${index}`, sourceObservationId: `observation-${index}`, providerExternalRecordId: `provider-${index}`, payloadFingerprint: `${index.toString(16).padStart(2, "0")}${"a".repeat(62)}`, observedAt: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`, availableAt: `2026-01-${String(index + 2).padStart(2, "0")}T00:00:00.000Z`, closeValue, priceScale: 12, quoteUnit: "USD" as const }));
+const floorSqrt = (value: bigint): bigint => { if (value < 0n) throw new Error("negative"); let low = 0n; let high = value + 1n; while (high - low > 1n) { const mid = (low + high) / 2n; if (mid * mid <= value) low = mid; else high = mid; } return low; };
 
 describe("M5 daily series authority", () => {
   it("reuses the existing derivations and produces exact known values", () => {
@@ -14,6 +15,16 @@ describe("M5 daily series authority", () => {
     if (result.status !== "READY") return;
     expect(result.historySpan.value).toBe(14n);
     expect(result.volatility.value).toBe(2575n);
+    const returns = prices.slice(1).map((price, index) => ((price - prices[index]!) * 10_000n) / prices[index]!);
+    const meanNumerator = returns.reduce((sum, value) => sum + value, 0n);
+    const sumSquares = returns.reduce((sum, value) => sum + value * value, 0n);
+    const varianceNumerator = 14n * sumSquares - meanNumerator * meanNumerator;
+    expect(returns).toEqual([...Array(13).fill(10_000n), 20_000n]);
+    expect(meanNumerator).toBe(150_000n);
+    expect(sumSquares).toBe(1_700_000_000n);
+    expect(varianceNumerator).toBe(1_300_000_000n);
+    expect(floorSqrt(varianceNumerator)).toBe(36_055n);
+    expect(floorSqrt(varianceNumerator) / 14n).toBe(2_575n);
   });
 
   it("creates a deep immutable authority and excludes recordedAt from its fingerprint", () => {

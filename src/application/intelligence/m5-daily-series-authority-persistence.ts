@@ -29,7 +29,13 @@ export async function persistM5DailySeriesAuthority(input: Readonly<{ providerId
       if (!repositories.sourceLineage.validateForRawEvidenceCreation || !repositories.sourceLineage.readMemberAuthorities) throw new Error("M5_DAILY_AUTHORITY_MATERIAL_MISMATCH");
       await repositories.sourceLineage.validateForRawEvidenceCreation(input.sourceLineageId);
       const authorities = await repositories.sourceLineage.readMemberAuthorities(input.sourceLineageId);
-      if (lineage.providerId !== input.providerId || lineage.datasetId !== input.datasetId || lineage.datasetVersion !== input.datasetVersion || authorities.length !== input.observations.length) throw new Error("M5_DAILY_AUTHORITY_MATERIAL_MISMATCH");
+      const members = await repositories.sourceLineage.readMembers(input.sourceLineageId);
+      if (lineage.providerId !== input.providerId || lineage.datasetId !== input.datasetId || lineage.datasetVersion !== input.datasetVersion || authorities.length !== input.observations.length || members.length !== input.observations.length) throw new Error("M5_DAILY_AUTHORITY_MATERIAL_MISMATCH");
+      input.observations.forEach((observation, index) => {
+        const member = members[index];
+        const authority = authorities[index];
+        if (!member || !authority || member.memberOrdinal !== index || member.sourceLineageId !== input.sourceLineageId || member.providerId !== input.providerId || member.datasetId !== input.datasetId || member.datasetVersion !== input.datasetVersion || member.sourceArtifactId !== observation.sourceArtifactId || member.sourceEnvelopeId !== observation.sourceEnvelopeId || member.sourceObservationId !== observation.sourceObservationId || member.observedAt !== observation.observedAt || member.effectiveAvailableAt !== observation.availableAt || authority.artifact.sourceArtifactId !== member.sourceArtifactId || authority.envelope.sourceEnvelopeId !== member.sourceEnvelopeId || authority.observation.sourceObservationId !== member.sourceObservationId) throw new Error("M5_DAILY_AUTHORITY_MATERIAL_MISMATCH");
+      });
       const bound = createM5DailySeriesAuthority({ ...input, observations: bindMaterial(input.observations, authorities) });
       if (bound.status !== "READY") return freeze({ status: bound.status, diagnostics: ["M5_DAILY_AUTHORITY_NOT_READY"] });
       return freeze({ status: "PERSISTED", aggregate: await repositories.dailySeries.save({ authority: bound.authority, historySpan: bound.historySpan, volatility: bound.volatility }) });

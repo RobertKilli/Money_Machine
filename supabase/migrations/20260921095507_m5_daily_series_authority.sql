@@ -51,6 +51,8 @@ create table public.intelligence_m5_daily_series_observations (
   unique (authority_id, observation_id),
   unique (authority_id, observed_at),
   foreign key (source_artifact_id, provider_id, dataset_id, dataset_version) references public.intelligence_source_artifacts(source_artifact_id, provider_id, dataset_id, dataset_version),
+  foreign key (source_envelope_id, source_artifact_id) references public.intelligence_source_envelopes(source_envelope_id, source_artifact_id),
+  foreign key (source_observation_id) references public.intelligence_ingestion_source_observations(source_observation_id),
   check (observed_at <= available_at)
 );
 
@@ -84,6 +86,8 @@ create table public.intelligence_m5_daily_series_derivations (
 
 create index intelligence_m5_daily_series_authorities_lineage_fk_idx on public.intelligence_m5_daily_series_authorities(source_lineage_id, provider_id, dataset_id, dataset_version);
 create index intelligence_m5_daily_series_observations_artifact_fk_idx on public.intelligence_m5_daily_series_observations(source_artifact_id, provider_id, dataset_id, dataset_version);
+create index intelligence_m5_daily_series_observations_envelope_fk_idx on public.intelligence_m5_daily_series_observations(source_envelope_id, source_artifact_id);
+create index intelligence_m5_daily_series_observations_source_observation_fk_idx on public.intelligence_m5_daily_series_observations(source_observation_id);
 create index intelligence_m5_daily_series_observations_authority_idx on public.intelligence_m5_daily_series_observations(authority_id);
 create index intelligence_m5_daily_series_derivations_authority_idx on public.intelligence_m5_daily_series_derivations(authority_id);
 
