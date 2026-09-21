@@ -11,6 +11,10 @@ describe("M5 market metrics authority migration", () => {
     expect(sql).toContain("intelligence_m5_market_metric_materials_artifact_idx");
     expect(sql).toContain("intelligence_m5_market_metric_materials_envelope_idx");
     expect(sql).toContain("intelligence_m5_market_metric_materials_observation_idx");
+    expect(sql).toContain("coverage_complete boolean");
+    expect(sql).toContain("expected_component_count integer");
+    expect(sql).toContain("derivation_version = 'm5-market-metrics-authority/v1'");
+    expect(sql).toContain("jsonb_array_length(component_ids)");
     expect(sql).toContain("enable row level security");
     expect(sql).toContain("revoke all privileges");
     expect(sql).toContain("reject_intelligence_mutation()");
@@ -29,5 +33,12 @@ describe("M5 market metrics authority migration", () => {
   it("fails closed before replacing the existing quantitative constraints", () => {
     expect(sql.indexOf("M5_MARKET_METRICS_EVIDENCE_PRECONDITION")).toBeGreaterThan(-1);
     expect(sql.indexOf("M5_MARKET_METRICS_EVIDENCE_PRECONDITION")).toBeLessThan(sql.indexOf("drop constraint eligibility_quantitative_holder_authority_fields_check"));
+  });
+
+  it("guards liquidity completeness without unsafe jsonb array evaluation", () => {
+    expect(sql).toContain("jsonb_typeof(component_ids) = 'array'");
+    expect(sql).toContain("case when jsonb_typeof(component_ids) = 'array'");
+    expect(sql).toContain("case when jsonb_typeof(components) = 'array'");
+    expect(sql).toContain("coverage_complete is true");
   });
 });
