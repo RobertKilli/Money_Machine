@@ -1,6 +1,7 @@
 import { encodeM5DatasetPin } from "@/domain/intelligence/m5-dataset-pin";
 import { createM5SuspiciousAssessment, type M5SuspiciousAssessment } from "@/domain/intelligence/m5-suspicious-assessment";
 import { assertM5SuspiciousRuleSetAuthority } from "@/domain/intelligence/m5-suspicious-rule-set";
+import { assertM5SuspiciousCoverageAuthority, type M5SuspiciousCoverageAuthority } from "@/domain/intelligence/m5-suspicious-coverage";
 import type { M5SuspiciousAssessmentUnitOfWork, CreateM5SuspiciousAssessmentRequest } from "@/application/intelligence/m5-suspicious-assessment-repository";
 
 const same = (left: readonly string[], right: readonly string[]) => left.length === right.length && left.every((value, index) => value === right[index]);
@@ -43,6 +44,10 @@ export async function createM5SuspiciousAssessmentAuthority(input: Readonly<{ un
       sourceLineageId: mapping.sourceLineageId,
       ruleSetVersion: ruleSet.ruleSetVersion,
       ruleSetFingerprint: ruleSet.fingerprint,
+      ruleSetAuthorityId: request.ruleSetAuthorityId ?? ruleSet.ruleSetAuthorityId,
+      coverageAuthorityId: request.coverageAuthorityId,
+      coverageFingerprint: request.coverageFingerprint,
+      evaluatedRuleCount: request.evaluatedRuleCount,
       detectorVersion: ruleSet.detectorVersion,
       coveredRuleIds: ruleSet.requiredRuleIds,
       result: request.result,
@@ -61,4 +66,18 @@ export async function createM5SuspiciousAssessmentAuthority(input: Readonly<{ un
     if (!reread) throw new Error("M5_SUSPICIOUS_ASSESSMENT_REREAD_NOT_FOUND");
     return reread.assessment;
   });
+}
+
+/** Strict v1 entry point.  Coverage is persisted/re-read by the caller's
+ * transaction-scoped repository before this function is invoked. */
+export async function createM5SuspiciousAssessmentFromCompleteCoverage(input: Readonly<{
+  unitOfWork: M5SuspiciousAssessmentUnitOfWork;
+  request: CreateM5SuspiciousAssessmentRequest & { ruleSetAuthorityId: string; coverageAuthorityId: string; coverageFingerprint: string; evaluatedRuleCount: number };
+  coverage: M5SuspiciousCoverageAuthority;
+}>): Promise<M5SuspiciousAssessment> {
+  assertM5SuspiciousCoverageAuthority(input.coverage);
+  if (input.coverage.status !== "COMPLETE") throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_NOT_COMPLETE");
+  if (input.coverage.ruleSetAuthorityId !== input.request.ruleSetAuthorityId || input.coverage.coverageAuthorityId !== input.request.coverageAuthorityId || input.coverage.fingerprint !== input.request.coverageFingerprint) throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_BINDING_MISMATCH");
+  if (input.request.evaluatedRuleCount !== input.coverage.evaluatedRuleIds.length) throw new Error("M5_SUSPICIOUS_ASSESSMENT_EVALUATED_RULE_COUNT_INVALID");
+  return createM5SuspiciousAssessmentAuthority({ unitOfWork: input.unitOfWork, request: input.request });
 }

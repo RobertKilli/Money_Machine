@@ -61,4 +61,8 @@ export type CreateM5SuspiciousAssessmentRequest = Readonly<{
   mappingRevisionId: string;
   sourceLineageId: string;
   findingEvidenceIds: readonly string[];
+  ruleSetAuthorityId?: string;
+  coverageAuthorityId?: string;
+  coverageFingerprint?: string;
+  evaluatedRuleCount?: number;
 }>;
