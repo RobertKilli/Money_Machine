@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const originalMigration = readFileSync(
   "supabase/migrations/20260921105605_m5_daily_series_evidence_binding.sql",
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 const fixMigration = readFileSync(
   "supabase/migrations/20260921120642_fix_m5_daily_series_evidence_null_checks.sql",
   "utf8",
@@ -13,7 +13,7 @@ const fixMigration = readFileSync(
 
 describe("M5 daily-series evidence NULL-check fix migration", () => {
   it("does not modify the applied migration and recreates the exact checks", () => {
-    expect(createHash("sha256").update(originalMigration).digest("hex")).toBe("7871540901ce38d87b8cb8942ada058d112831a0c9ae94b044d3bc78cddc162b");
+    expect(createHash("sha256").update(originalMigration).digest("hex")).toBe("49a2d8dba06de320aafb200550c56dd79572dfbd358525f2761137d5a963f227");
     expect(originalMigration).toContain("eligibility_quantitative_holder_authority_fields_check");
     expect(originalMigration).toContain("eligibility_quantitative_daily_authority_fields_check");
     expect(fixMigration).toContain("drop constraint eligibility_quantitative_holder_authority_fields_check");
