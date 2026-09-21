@@ -4,7 +4,7 @@ import { createM5VenueAuthority, type VenueAuthoritySourceMaterial } from "@/dom
 const t = "2026-01-01T00:00:00.000Z";
 const a = "2026-01-01T00:01:00.000Z";
 const asOf = "2026-01-01T00:02:00.000Z";
-const material = (record: string, venue: string, page: number, ordinal: number, finalPage: boolean): VenueAuthoritySourceMaterial => ({ sourceArtifactId: `artifact-${record}`, sourceEnvelopeId: `envelope-${record}`, sourceObservationId: `observation-${record}`, providerExternalRecordId: record, payloadFingerprint: `${"a".repeat(63)}${ordinal}`, venueNamespace: "EXCHANGE", venueId: venue, venueType: "CEX", pageOrdinal: page, recordOrdinal: ordinal, finalPage, expectedPageCount: 2, expectedRecordCount: 3, coverageKind: "PAGINATED_COMPLETE_UNIVERSE", coverageVersion: "venue-pages/v1", observedAt: t, availableAt: a });
+const material = (record: string, venue: string, page: number, ordinal: number, finalPage: boolean): VenueAuthoritySourceMaterial => ({ sourceArtifactId: `artifact-${record}`, sourceEnvelopeId: `envelope-${record}`, sourceObservationId: `observation-${record}`, sourceObservationRetrievedAt: a, providerExternalRecordId: record, payloadFingerprint: `${"a".repeat(63)}${ordinal}`, venueNamespace: "EXCHANGE", venueId: venue, venueType: "CEX", pageOrdinal: page, recordOrdinal: ordinal, finalPage, expectedPageCount: 2, expectedRecordCount: 3, coverageKind: "PAGINATED_COMPLETE_UNIVERSE", coverageVersion: "venue-pages/v1", observedAt: t, availableAt: a });
 
 describe("M5 venue-universe authority", () => {
   it("deduplicates pools/pairs on the same venue and is permutation invariant", () => {
@@ -21,5 +21,11 @@ describe("M5 venue-universe authority", () => {
   it("rejects duplicate records and invalid venue identity material", () => {
     const duplicate = material("pool-a", "venue-a", 0, 0, false);
     expect(createM5VenueAuthority({ providerId: "p", datasetId: "d", datasetVersion: "v", sourceLineageId: "l", asOf, universeNamespace: "N", universeId: "u", expectedPageCount: 2, expectedRecordCount: 3, materials: [duplicate, duplicate, material("pool-c", "venue-c", 1, 2, true)], recordedAt: asOf }).status).toBe("INVALID");
+  });
+  it("normalizes canonical venue identity without merging distinct stable IDs", () => {
+    const values = [material("pool-a", "Venue-A", 0, 0, false), material("pool-b", "venue-b", 1, 1, true)].map(value => ({ ...value, expectedRecordCount: 2 }));
+    const result = createM5VenueAuthority({ providerId: "p", datasetId: "d", datasetVersion: "v", sourceLineageId: "l", asOf, universeNamespace: "N", universeId: "u", expectedPageCount: 2, expectedRecordCount: 2, materials: values, recordedAt: asOf });
+    expect(result.status).toBe("READY");
+    if (result.status === "READY") expect(result.authority.members.map(member => member.venueId).sort()).toEqual(["venue-a", "venue-b"]);
   });
 });

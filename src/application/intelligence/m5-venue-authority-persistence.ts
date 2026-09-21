@@ -28,6 +28,7 @@ function authoritativeMaterial(authority: { readonly artifact: Record<string, un
     sourceArtifactId: text(authority.artifact.sourceArtifactId, "M5_VENUE_AUTHORITY_MATERIAL_MISMATCH"),
     sourceEnvelopeId: text(authority.envelope.sourceEnvelopeId, "M5_VENUE_AUTHORITY_MATERIAL_MISMATCH"),
     sourceObservationId: text(authority.observation.sourceObservationId, "M5_VENUE_AUTHORITY_MATERIAL_MISMATCH"),
+    sourceObservationRetrievedAt: text(authority.observation.retrievedAt, "M5_VENUE_AUTHORITY_TIMESTAMP_INVALID"),
     providerExternalRecordId: text(authority.artifact.providerExternalRecordId, "M5_VENUE_AUTHORITY_MATERIAL_MISMATCH"),
     payloadFingerprint: text(authority.artifact.payloadFingerprint, "M5_VENUE_AUTHORITY_MATERIAL_MISMATCH"),
     venueNamespace: textField("venueNamespace"),

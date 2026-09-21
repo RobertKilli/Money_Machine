@@ -56,9 +56,13 @@ create table public.intelligence_m5_venue_authority_members (
   venue_id text not null,
   venue_type text,
   chain_id text,
+  provider_id text not null,
+  dataset_id text not null,
+  dataset_version text not null,
   source_artifact_id text not null,
   source_envelope_id text not null,
   source_observation_id text not null,
+  source_observation_retrieved_at timestamptz not null,
   source_record_ids jsonb not null,
   source_artifact_ids jsonb not null,
   source_envelope_ids jsonb not null,
@@ -71,11 +75,11 @@ create table public.intelligence_m5_venue_authority_members (
   unique (authority_id, member_id),
   unique (authority_id, member_id, fingerprint),
   check (member_ordinal >= 0),
-  check (length(trim(member_id)) > 0 and length(trim(venue_namespace)) > 0 and length(trim(venue_id)) > 0),
+  check (length(trim(member_id)) > 0 and length(trim(venue_namespace)) > 0 and length(trim(venue_id)) > 0 and length(trim(provider_id)) > 0 and length(trim(dataset_id)) > 0 and length(trim(dataset_version)) > 0),
   check (jsonb_typeof(source_record_ids) = 'array' and jsonb_array_length(source_record_ids) > 0),
   check (jsonb_typeof(source_artifact_ids) = 'array' and jsonb_typeof(source_envelope_ids) = 'array' and jsonb_typeof(source_observation_ids) = 'array'),
   check (jsonb_typeof(payload_fingerprints) = 'array'),
-  check (observed_at <= available_at),
+  check (observed_at <= available_at and observed_at <= source_observation_retrieved_at),
   check (fingerprint ~ '^[a-f0-9]{64}$')
 );
 
@@ -83,17 +87,20 @@ alter table public.intelligence_m5_venue_authority_members
   add constraint intelligence_m5_venue_authority_members_parent_fk
   foreign key (authority_id) references public.intelligence_m5_venue_authorities(authority_id) on delete restrict,
   add constraint intelligence_m5_venue_authority_members_artifact_fk
-  foreign key (source_artifact_id) references public.intelligence_source_artifacts(source_artifact_id) on delete restrict,
+  foreign key (source_artifact_id, provider_id, dataset_id, dataset_version) references public.intelligence_source_artifacts(source_artifact_id, provider_id, dataset_id, dataset_version) on delete restrict,
   add constraint intelligence_m5_venue_authority_members_envelope_fk
-  foreign key (source_envelope_id) references public.intelligence_source_envelopes(source_envelope_id) on delete restrict,
+  foreign key (source_envelope_id, source_artifact_id) references public.intelligence_source_envelopes(source_envelope_id, source_artifact_id) on delete restrict,
   add constraint intelligence_m5_venue_authority_members_observation_fk
-  foreign key (source_observation_id) references public.intelligence_ingestion_source_observations(source_observation_id) on delete restrict;
+  foreign key (source_observation_id, source_artifact_id, source_observation_retrieved_at) references public.intelligence_ingestion_source_observations(source_observation_id, source_artifact_id, retrieved_at) on delete restrict;
 
 create index intelligence_m5_venue_authorities_lineage_idx on public.intelligence_m5_venue_authorities(source_lineage_id);
 create index intelligence_m5_venue_authority_members_authority_idx on public.intelligence_m5_venue_authority_members(authority_id, member_ordinal, member_id);
 create index intelligence_m5_venue_authority_members_artifact_idx on public.intelligence_m5_venue_authority_members(source_artifact_id, authority_id);
+create index intelligence_m5_venue_authority_members_artifact_scope_idx on public.intelligence_m5_venue_authority_members(source_artifact_id, provider_id, dataset_id, dataset_version);
 create index intelligence_m5_venue_authority_members_envelope_idx on public.intelligence_m5_venue_authority_members(source_envelope_id, authority_id);
+create index intelligence_m5_venue_authority_members_envelope_artifact_idx on public.intelligence_m5_venue_authority_members(source_envelope_id, source_artifact_id);
 create index intelligence_m5_venue_authority_members_observation_idx on public.intelligence_m5_venue_authority_members(source_observation_id, authority_id);
+create index intelligence_m5_venue_authority_members_observation_artifact_time_idx on public.intelligence_m5_venue_authority_members(source_observation_id, source_artifact_id, source_observation_retrieved_at);
 
 alter table public.eligibility_venue_evidence
   add column venue_authority_id text not null,
