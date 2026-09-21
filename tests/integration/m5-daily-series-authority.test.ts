@@ -12,7 +12,7 @@ function assertLocal(value: string): void { const host = new URL(value).hostname
 function fixture() {
   const receipt = "2026-02-01T00:00:00.000Z";
   const prices = [100n, 200n, 400n, 800n, 1600n, 3200n, 6400n, 12800n, 25600n, 51200n, 102400n, 204800n, 409600n, 819200n, 2457600n].map(v => v * 1_000_000_000_000n);
-  const rows = (kind: "prices" | "marketCaps" | "totalVolumes") => prices.map((_, index) => ({ timestamp: Date.UTC(2026, 0, index + 1), price: kind === "prices" ? `${prices[index]!.toString().slice(0, -12)}.${prices[index]!.toString().slice(-12)}` : "1000.00", marketCap: null, volume: null }));
+  const rows = (kind: "prices" | "marketCaps" | "totalVolumes") => prices.map((_, index) => ({ timestamp: Date.UTC(2026, 0, index + 1), price: kind === "prices" ? prices[index]!.toString() : "1000.00", marketCap: null, volume: null }));
   return { providerId: "coingecko", datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/v1", network: "eth", contractAddress: "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01", coinId: "synthetic-daily-authority", receipt: { receivedAt: receipt, pages: [{ pageOrdinal: 0, receivedAt: receipt }] }, prices: rows("prices"), marketCaps: rows("marketCaps"), totalVolumes: rows("totalVolumes"), pools: [] };
 }
 
