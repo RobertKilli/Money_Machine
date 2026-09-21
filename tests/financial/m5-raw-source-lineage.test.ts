@@ -17,11 +17,10 @@ describe("M5 raw source-lineage creation", () => {
     expect(typeof reader.readAt).toBe("function");
     expect("save" in reader).toBe(false);
   });
-  it("derives all shared authority fields and saves once", async () => {
+  it("rejects generic venue creation without a persisted venue authority", async () => {
     const save = vi.fn(async (record) => record);
-    const result = await createRawEligibilityEvidenceFromMapping({ unitOfWork: { withTransaction: async work => work({ mappingRepository: { readById: async () => mapping } as never, sourceLineageRepository: { validateForRawEvidenceCreation: async () => lineage } as never, rawEvidenceRepository: { save } }) }, value: input() });
-    expect(save).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ evidenceId: "evidence-1", sourceLineageId: "lineage-1", providerId: "p", datasetId: "d", datasetVersion: "v1", assetId: "asset-1", observedAt: t, availableAt: a, provenance: { sourceType: "M5_SOURCE_LINEAGE", sourceRecordIds: ["artifact-a", "artifact-b"], payloadFingerprint: "f".repeat(64) } });
+    await expect(createRawEligibilityEvidenceFromMapping({ unitOfWork: { withTransaction: async work => work({ mappingRepository: { readById: async () => mapping } as never, sourceLineageRepository: { validateForRawEvidenceCreation: async () => lineage } as never, rawEvidenceRepository: { save } }) }, value: input() })).rejects.toThrow("M5_RAW_VENUE_AUTHORITY_REQUIRED");
+    expect(save).not.toHaveBeenCalled();
   });
 
   it("does not allow caller-derived provenance to override lineage", async () => {

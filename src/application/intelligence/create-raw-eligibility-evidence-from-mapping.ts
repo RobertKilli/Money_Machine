@@ -6,7 +6,7 @@ import type {
   VenueEligibilityEvidenceInput,
   RawEligibilityEvidence,
 } from "@/domain/intelligence/eligibility-evidence";
-import { createAgeReferenceEligibilityEvidence, createContractVerificationEligibilityEvidence, createQuantitativeEligibilityEvidence, createSuspiciousEligibilityEvidence, createVenueEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
+import { createAgeReferenceEligibilityEvidence, createContractVerificationEligibilityEvidence, createQuantitativeEligibilityEvidence, createSuspiciousEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
 import type { AssetMappingRevisionRepository } from "@/application/intelligence/asset-mapping-revision-repository";
 import type { SourceLineageRepository } from "@/application/intelligence/source-lineage-repository";
 import type { RawEligibilityEvidenceRepository } from "@/infrastructure/postgres/eligibility-evidence-repository";
@@ -36,7 +36,7 @@ export async function createRawEligibilityEvidenceFromMapping(input: Readonly<{ 
     if (value.family === "QUANTITATIVE") record = createQuantitativeEligibilityEvidence({ ...shared, ...value.payload } as QuantitativeEligibilityEvidenceInput);
     else if (value.family === "REFERENCE_AGE") record = createAgeReferenceEligibilityEvidence({ ...shared, ...value.payload } as AgeReferenceEligibilityEvidenceInput);
     else if (value.family === "REFERENCE_CONTRACT") record = createContractVerificationEligibilityEvidence({ ...shared, ...value.payload } as ContractVerificationEligibilityEvidenceInput);
-    else if (value.family === "VENUE") record = createVenueEligibilityEvidence({ ...shared, ...value.payload } as VenueEligibilityEvidenceInput);
+    else if (value.family === "VENUE") throw new Error("M5_RAW_VENUE_AUTHORITY_REQUIRED");
     else record = createSuspiciousEligibilityEvidence({ ...shared, ...value.payload } as SuspiciousEligibilityEvidenceInput);
     return rawEvidenceRepository.save(record);
   });

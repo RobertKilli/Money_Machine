@@ -374,3 +374,24 @@ atomic pair/set. Replays are idempotent and stored rows are reread and
 reconstructed; no newest/best selection is allowed. This slice does not create
 venue authority, suspicious assessments, manifests, evaluator results or
 canonical M5. Provider/legal/production approval remains a separate blocker.
+
+### M5 venue-universe authority
+
+`m5-venue-universe-authority/v1` is a fixture-only, server-only authority
+for an exact, complete venue universe. Venue identity is distinct from a
+pool, pair or provider record: multiple pools/pairs on one canonical venue
+produce one member, while conflicting identity mappings fail closed. A
+versioned paginated coverage contract requires every page, one final marker,
+and exact source-record reconciliation. Top-pool, sample, trending and
+partial pagination material is `INCOMPLETE`, never a venue count.
+
+The authority is bound to a sealed `COMPLETED` SourceLineage and persisted
+immutably before venue evidence is created. One transaction writes exactly
+one venue evidence row per authoritative member and rereads the full set;
+replay is idempotent and a failure rolls back the entire set. Manifest venue
+references must select the exact authority member set, with no subset,
+newest or best selection. Zero-venue representation remains fail-closed when
+the existing manifest contract cannot distinguish it from missing evidence.
+This slice does not change evaluator thresholds or produce suspicious,
+canonical or scheduled output; provider completeness and legal approval remain
+external blockers.
