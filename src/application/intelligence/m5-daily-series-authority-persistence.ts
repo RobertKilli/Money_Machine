@@ -14,8 +14,10 @@ function bindMaterial(material: readonly M5DailySeriesObservationInput[], author
   const byArtifact = authorityByArtifact(authorities);
   return material.map(row => {
     const a = byArtifact.get(row.sourceArtifactId);
-    if (!a || a.artifact.providerExternalRecordId !== row.providerExternalRecordId || a.artifact.payloadFingerprint !== row.payloadFingerprint || a.envelope.payloadFingerprint !== row.payloadFingerprint || a.observation.sourceObservationId !== row.sourceObservationId || a.envelope.sourceEnvelopeId !== row.sourceEnvelopeId) throw new Error("M5_DAILY_AUTHORITY_MATERIAL_MISMATCH");
-    return freeze({ ...row });
+    const envelope = a?.envelope.normalizedEnvelope;
+    const fields = envelope && typeof envelope === "object" ? envelope as Record<string, unknown> : undefined;
+    if (!a || !fields || a.artifact.providerExternalRecordId !== row.providerExternalRecordId || a.artifact.payloadFingerprint !== row.payloadFingerprint || a.envelope.payloadFingerprint !== row.payloadFingerprint || a.observation.sourceObservationId !== row.sourceObservationId || a.envelope.sourceEnvelopeId !== row.sourceEnvelopeId || String(fields.closeValueAtoms) !== row.closeValue.toString() || Number(fields.priceScale) !== row.priceScale || String(fields.quoteUnit) !== row.quoteUnit) throw new Error("M5_DAILY_AUTHORITY_MATERIAL_MISMATCH");
+    return freeze({ ...row, providerExternalRecordId: a.artifact.providerExternalRecordId, payloadFingerprint: a.artifact.payloadFingerprint, observedAt: a.envelope.observedAt, availableAt: a.claim.effectiveAvailableAt });
   });
 }
 
@@ -31,10 +33,12 @@ export async function persistM5DailySeriesAuthority(input: Readonly<{ providerId
       const authorities = await repositories.sourceLineage.readMemberAuthorities(input.sourceLineageId);
       const members = await repositories.sourceLineage.readMembers(input.sourceLineageId);
       if (lineage.providerId !== input.providerId || lineage.datasetId !== input.datasetId || lineage.datasetVersion !== input.datasetVersion || authorities.length !== input.observations.length || members.length !== input.observations.length) throw new Error("M5_DAILY_AUTHORITY_MATERIAL_MISMATCH");
-      input.observations.forEach((observation, index) => {
-        const member = members[index];
-        const authority = authorities[index];
-        if (!member || !authority || member.memberOrdinal !== index || member.sourceLineageId !== input.sourceLineageId || member.providerId !== input.providerId || member.datasetId !== input.datasetId || member.datasetVersion !== input.datasetVersion || member.sourceArtifactId !== observation.sourceArtifactId || member.sourceEnvelopeId !== observation.sourceEnvelopeId || member.sourceObservationId !== observation.sourceObservationId || member.observedAt !== observation.observedAt || member.effectiveAvailableAt !== observation.availableAt || authority.artifact.sourceArtifactId !== member.sourceArtifactId || authority.envelope.sourceEnvelopeId !== member.sourceEnvelopeId || authority.observation.sourceObservationId !== member.sourceObservationId) throw new Error("M5_DAILY_AUTHORITY_MATERIAL_MISMATCH");
+      const membersByArtifact = new Map(members.map(member => [member.sourceArtifactId, member]));
+      const authoritiesByArtifact = new Map(authorities.map(authority => [authority.artifact.sourceArtifactId, authority]));
+      input.observations.forEach((observation) => {
+        const member = membersByArtifact.get(observation.sourceArtifactId);
+        const authority = authoritiesByArtifact.get(observation.sourceArtifactId);
+        if (!member || !authority || member.sourceLineageId !== input.sourceLineageId || member.providerId !== input.providerId || member.datasetId !== input.datasetId || member.datasetVersion !== input.datasetVersion || member.sourceEnvelopeId !== observation.sourceEnvelopeId || member.sourceObservationId !== observation.sourceObservationId || authority.artifact.sourceArtifactId !== member.sourceArtifactId || authority.envelope.sourceEnvelopeId !== member.sourceEnvelopeId || authority.observation.sourceObservationId !== member.sourceObservationId) throw new Error("M5_DAILY_AUTHORITY_MATERIAL_MISMATCH");
       });
       const bound = createM5DailySeriesAuthority({ ...input, observations: bindMaterial(input.observations, authorities) });
       if (bound.status !== "READY") return freeze({ status: bound.status, diagnostics: ["M5_DAILY_AUTHORITY_NOT_READY"] });
