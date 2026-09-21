@@ -37,6 +37,10 @@ describe("M5 raw eligibility evidence", () => {
     expect(() => quantitative("LIQUIDITY", { provenance: { sourceType: "PROVIDER", sourceRecordIds: ["record"], payloadFingerprint: "a".repeat(64) } })).toThrow("M5_RAW_SOURCE_TYPE_INVALID");
     expect(() => quantitative("LIQUIDITY", { provenance: { sourceType: "M5_SOURCE_LINEAGE", sourceRecordIds: ["record"], payloadFingerprint: "payload" } })).toThrow("M5_RAW_PAYLOAD_FINGERPRINT_INVALID");
   });
+  it("rejects as-of and partial authority on non-daily, non-concentration metrics", () => {
+    expect(() => quantitative("LIQUIDITY", { asOf: "2026-09-13T00:00:00.000Z" })).toThrow("M5_RAW_DAILY_AUTHORITY_FORBIDDEN");
+    expect(() => quantitative("LIQUIDITY", { dailySeriesAuthorityId: "authority-1" })).toThrow("M5_RAW_DAILY_AUTHORITY_FORBIDDEN");
+  });
   it("fails closed for invalid identity, timestamps, numeric representations, and ranges", () => {
     expect(() => quantitative("LIQUIDITY", { assetClass: " UNKNOWN " })).toThrow("M5_RAW_ASSET_CLASS_UNKNOWN"); expect(() => quantitative("LIQUIDITY", { candidateId: " " })).toThrow("M5_RAW_CANDIDATEID_INVALID"); expect(() => quantitative("LIQUIDITY", { observedAt: "2026-09-13T10:00:00Z" })).toThrow("M5_RAW_OBSERVED_AT_INVALID");
     expect(() => quantitative("LIQUIDITY", { valueAtoms: 1.5 })).toThrow("M5_RAW_VALUE_INVALID"); for (const metricKind of ["TOP10_CONCENTRATION", "SINGLE_CONCENTRATION"] as const) { expect(quantitative(metricKind, { valueAtoms: 10000n, unit: "BPS", currencyCode: undefined }).valueAtoms).toBe(10000n); expect(() => quantitative(metricKind, { valueAtoms: 10001n, unit: "BPS", currencyCode: undefined })).toThrow("M5_RAW_BPS_INVALID"); } expect(() => quantitative("VOLATILITY", { valueAtoms: -1n, unit: "BPS", currencyCode: undefined })).toThrow("M5_RAW_VALUE_INVALID"); expect(() => createVenueEligibilityEvidence(base({ venueId: "", eligibilityState: "ELIGIBLE" }) as never)).toThrow("M5_RAW_VENUE_ID_INVALID"); expect(() => createSuspiciousEligibilityEvidence(base({ flagCode: "", severity: "LOW", sourceSignalId: "s" }) as never)).toThrow("M5_RAW_SUSPICIOUS_FLAG_INVALID");

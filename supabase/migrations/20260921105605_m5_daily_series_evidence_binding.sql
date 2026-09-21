@@ -20,7 +20,9 @@ alter table public.eligibility_quantitative_evidence
   add constraint eligibility_quantitative_holder_authority_fields_check check (
     (metric_kind in ('SINGLE_CONCENTRATION','TOP10_CONCENTRATION')
       and btrim(holder_snapshot_id) <> ''
+      and holder_snapshot_fingerprint is not null
       and holder_snapshot_fingerprint ~ '^[a-f0-9]{64}$'
+      and holder_derivation_fingerprint is not null
       and holder_derivation_fingerprint ~ '^[a-f0-9]{64}$'
       and as_of is not null
       and daily_series_authority_id is null
@@ -48,7 +50,9 @@ alter table public.eligibility_quantitative_evidence
   add constraint eligibility_quantitative_daily_authority_fields_check check (
     (metric_kind in ('HISTORY_SPAN','VOLATILITY')
       and btrim(daily_series_authority_id) <> ''
+      and daily_series_authority_fingerprint is not null
       and daily_series_authority_fingerprint ~ '^[a-f0-9]{64}$'
+      and daily_series_derivation_fingerprint is not null
       and daily_series_derivation_fingerprint ~ '^[a-f0-9]{64}$'
       and as_of is not null
       and holder_snapshot_id is null

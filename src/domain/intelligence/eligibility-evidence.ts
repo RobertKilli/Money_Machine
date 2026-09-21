@@ -143,12 +143,12 @@ function quantitativeBody(input: QuantitativeEligibilityEvidenceInput): Omit<Qua
     if (!input.holderSnapshotFingerprint || !SHA256.test(input.holderSnapshotFingerprint)) throw new Error("M5_RAW_HOLDER_SNAPSHOT_FINGERPRINT_REQUIRED");
     if (!input.holderDerivationFingerprint || !SHA256.test(input.holderDerivationFingerprint)) throw new Error("M5_RAW_HOLDER_DERIVATION_FINGERPRINT_REQUIRED");
     timestamp(input.asOf ?? "", "M5_RAW_AS_OF_REQUIRED");
-  } else if (holderFields.some(value => value !== undefined) || (CONCENTRATION_METRICS.has(input.metricKind) && input.asOf === undefined)) throw new Error("M5_RAW_HOLDER_AUTHORITY_FORBIDDEN");
+  } else if (holderFields.some(value => value !== undefined)) throw new Error("M5_RAW_HOLDER_AUTHORITY_FORBIDDEN");
   if (input.metricKind === "HISTORY_SPAN" || input.metricKind === "VOLATILITY") {
     if (dailyFields.some(value => typeof value !== "string" || value.trim() === "")) throw new Error("M5_RAW_DAILY_AUTHORITY_REQUIRED");
     if (!SHA256.test(input.dailySeriesAuthorityFingerprint!) || !SHA256.test(input.dailySeriesDerivationFingerprint!)) throw new Error("M5_RAW_DAILY_AUTHORITY_FINGERPRINT_REQUIRED");
     timestamp(input.asOf ?? "", "M5_RAW_AS_OF_REQUIRED");
-  } else if (dailyFields.some(value => value !== undefined)) throw new Error("M5_RAW_DAILY_AUTHORITY_FORBIDDEN");
+  } else if (dailyFields.some(value => value !== undefined) || (!CONCENTRATION_METRICS.has(input.metricKind) && input.asOf !== undefined)) throw new Error("M5_RAW_DAILY_AUTHORITY_FORBIDDEN");
   return frozen({ ...envelope, evidenceKind: "QUANTITATIVE", metricKind: input.metricKind, valueAtoms: input.valueAtoms, scale: input.scale, unit: input.unit.trim(), semanticsVersion: input.semanticsVersion.trim(), ...(input.currencyCode ? { currencyCode: input.currencyCode.trim() } : {}), ...(window ? { window } : {}), ...(input.qualificationBasis ? { qualificationBasis: input.qualificationBasis.trim() } : {}), ...(CONCENTRATION_METRICS.has(input.metricKind) ? { holderSnapshotId: input.holderSnapshotId!.trim(), holderSnapshotFingerprint: input.holderSnapshotFingerprint!, holderDerivationFingerprint: input.holderDerivationFingerprint!, asOf: input.asOf } : {}), ...((input.metricKind === "HISTORY_SPAN" || input.metricKind === "VOLATILITY") ? { dailySeriesAuthorityId: input.dailySeriesAuthorityId!.trim(), dailySeriesAuthorityFingerprint: input.dailySeriesAuthorityFingerprint!, dailySeriesDerivationFingerprint: input.dailySeriesDerivationFingerprint!, asOf: input.asOf } : {}) });
 }
 
