@@ -65,4 +65,5 @@ export type CreateM5SuspiciousAssessmentRequest = Readonly<{
   coverageAuthorityId?: string;
   coverageFingerprint?: string;
   evaluatedRuleCount?: number;
+  coverageStatus?: "COMPLETE";
 }>;

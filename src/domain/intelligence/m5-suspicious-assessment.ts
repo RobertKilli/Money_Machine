@@ -30,6 +30,7 @@ export type M5SuspiciousAssessment = Readonly<{
   coverageAuthorityId?: string;
   coverageFingerprint?: string;
   evaluatedRuleCount?: number;
+  coverageStatus?: "COMPLETE";
   detectorVersion: string;
   coveredRuleIds: readonly string[];
   result: M5SuspiciousAssessmentResult;
@@ -122,7 +123,8 @@ function material(input: M5SuspiciousAssessmentInput): Omit<M5SuspiciousAssessme
   const coverageAuthorityId = input.coverageAuthorityId === undefined ? undefined : nonBlank(input.coverageAuthorityId, "M5_SUSPICIOUS_ASSESSMENT_COVERAGE_AUTHORITY_INVALID");
   const coverageFingerprint = input.coverageFingerprint === undefined ? undefined : sha(input.coverageFingerprint, "M5_SUSPICIOUS_ASSESSMENT_COVERAGE_FINGERPRINT_INVALID");
   const evaluatedRuleCount = input.evaluatedRuleCount === undefined ? undefined : input.evaluatedRuleCount;
-  if ((coverageAuthorityId === undefined) !== (coverageFingerprint === undefined) || (coverageAuthorityId === undefined) !== (evaluatedRuleCount === undefined)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_BINDING_INCOMPLETE");
+  const coverageStatus = input.coverageStatus;
+  if ((coverageAuthorityId === undefined) !== (coverageFingerprint === undefined) || (coverageAuthorityId === undefined) !== (evaluatedRuleCount === undefined) || (coverageAuthorityId !== undefined && coverageStatus !== "COMPLETE")) throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_BINDING_INCOMPLETE");
   if (evaluatedRuleCount !== undefined && (!Number.isInteger(evaluatedRuleCount) || evaluatedRuleCount !== coveredRuleIds.length)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_EVALUATED_RULE_COUNT_INVALID");
   const primaryPin = `m5-pin/v1:${Buffer.from(JSON.stringify([nonBlank(input.providerId, "M5_SUSPICIOUS_ASSESSMENT_PROVIDER_INVALID"), nonBlank(input.datasetId, "M5_SUSPICIOUS_ASSESSMENT_DATASET_INVALID"), nonBlank(input.datasetVersion, "M5_SUSPICIOUS_ASSESSMENT_DATASET_VERSION_INVALID")]), "utf8").toString("base64url")}`;
   if (!datasetPins.includes(primaryPin)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_PIN_SCOPE_INVALID");
@@ -144,6 +146,7 @@ function material(input: M5SuspiciousAssessmentInput): Omit<M5SuspiciousAssessme
     coverageAuthorityId,
     coverageFingerprint,
     evaluatedRuleCount,
+    coverageStatus,
     detectorVersion: nonBlank(input.detectorVersion, "M5_SUSPICIOUS_ASSESSMENT_DETECTOR_INVALID"),
     coveredRuleIds,
     result,

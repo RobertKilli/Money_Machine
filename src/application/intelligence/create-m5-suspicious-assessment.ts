@@ -48,6 +48,7 @@ export async function createM5SuspiciousAssessmentAuthority(input: Readonly<{ un
       coverageAuthorityId: request.coverageAuthorityId,
       coverageFingerprint: request.coverageFingerprint,
       evaluatedRuleCount: request.evaluatedRuleCount,
+      coverageStatus: request.coverageStatus,
       detectorVersion: ruleSet.detectorVersion,
       coveredRuleIds: ruleSet.requiredRuleIds,
       result: request.result,
@@ -72,12 +73,12 @@ export async function createM5SuspiciousAssessmentAuthority(input: Readonly<{ un
  * transaction-scoped repository before this function is invoked. */
 export async function createM5SuspiciousAssessmentFromCompleteCoverage(input: Readonly<{
   unitOfWork: M5SuspiciousAssessmentUnitOfWork;
-  request: CreateM5SuspiciousAssessmentRequest & { ruleSetAuthorityId: string; coverageAuthorityId: string; coverageFingerprint: string; evaluatedRuleCount: number };
+  request: CreateM5SuspiciousAssessmentRequest & { ruleSetAuthorityId: string; coverageAuthorityId: string; coverageFingerprint: string; evaluatedRuleCount: number; coverageStatus?: "COMPLETE" };
   coverage: M5SuspiciousCoverageAuthority;
 }>): Promise<M5SuspiciousAssessment> {
   assertM5SuspiciousCoverageAuthority(input.coverage);
   if (input.coverage.status !== "COMPLETE") throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_NOT_COMPLETE");
   if (input.coverage.ruleSetAuthorityId !== input.request.ruleSetAuthorityId || input.coverage.coverageAuthorityId !== input.request.coverageAuthorityId || input.coverage.fingerprint !== input.request.coverageFingerprint) throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_BINDING_MISMATCH");
   if (input.request.evaluatedRuleCount !== input.coverage.evaluatedRuleIds.length) throw new Error("M5_SUSPICIOUS_ASSESSMENT_EVALUATED_RULE_COUNT_INVALID");
-  return createM5SuspiciousAssessmentAuthority({ unitOfWork: input.unitOfWork, request: input.request });
+  return createM5SuspiciousAssessmentAuthority({ unitOfWork: input.unitOfWork, request: { ...input.request, coverageStatus: "COMPLETE" } });
 }

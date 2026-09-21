@@ -97,7 +97,8 @@ alter table public.eligibility_suspicious_assessments
   add column coverage_authority_id text,
   add column coverage_fingerprint text,
   add column evaluated_rule_count integer,
-  add constraint eligibility_suspicious_assessments_coverage_pair_check check ((coverage_authority_id is null and coverage_fingerprint is null and evaluated_rule_count is null and rule_set_authority_id is null) or (coverage_authority_id is not null and coverage_fingerprint is not null and evaluated_rule_count is not null and evaluated_rule_count > 0 and rule_set_authority_id is not null));
+  add column coverage_status text,
+  add constraint eligibility_suspicious_assessments_coverage_pair_check check ((coverage_authority_id is null and coverage_fingerprint is null and evaluated_rule_count is null and rule_set_authority_id is null and coverage_status is null) or (coverage_authority_id is not null and coverage_fingerprint is not null and evaluated_rule_count is not null and evaluated_rule_count > 0 and rule_set_authority_id is not null and coverage_status = 'COMPLETE'));
 
 alter table public.eligibility_suspicious_assessments
   add constraint eligibility_suspicious_assessments_rule_set_authority_fk

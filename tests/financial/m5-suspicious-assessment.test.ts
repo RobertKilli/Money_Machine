@@ -14,7 +14,7 @@ const pin = encodeM5DatasetPin({ providerId: "provider", datasetId: "dataset", d
 const base = () => ({
   contractVersion: "m5-suspicious-assessment/v1" as const,
   providerId: "provider", datasetId: "dataset", datasetVersion: "v1", candidateId: "candidate", assetId: "canonical-asset", canonicalIdentifier: "asset:canonical", assetClass: "TOKEN",
-  mappingRevisionId: "m5-mapping:revision", sourceLineageId: "m5-lineage", ruleSetVersion: "rules/v1", ruleSetFingerprint: "a".repeat(64), detectorVersion: "detector/v1", coveredRuleIds: ["RULE_B", "RULE_A"], result: "NO_FINDINGS" as const, findingReferences: [], asOf, observedAt, availableAt, sourceRecordIds: ["artifact-1"], payloadFingerprint: "b".repeat(64), datasetPins: [pin], recordedAt: "2026-01-02T00:00:00.000Z",
+  mappingRevisionId: "m5-mapping:revision", sourceLineageId: "m5-lineage", ruleSetVersion: "rules/v1", ruleSetFingerprint: "a".repeat(64), ruleSetAuthorityId: "ruleset-authority", coverageAuthorityId: "coverage-authority", coverageFingerprint: "c".repeat(64), evaluatedRuleCount: 2, coverageStatus: "COMPLETE" as const, detectorVersion: "detector/v1", coveredRuleIds: ["RULE_B", "RULE_A"], result: "NO_FINDINGS" as const, findingReferences: [], asOf, observedAt, availableAt, sourceRecordIds: ["artifact-1"], payloadFingerprint: "b".repeat(64), datasetPins: [pin], recordedAt: "2026-01-02T00:00:00.000Z",
 });
 
 describe("M5 suspicious assessment authority", () => {
