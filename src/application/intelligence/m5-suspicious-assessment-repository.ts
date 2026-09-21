@@ -3,6 +3,7 @@ import type { SuspiciousEligibilityEvidence } from "@/domain/intelligence/eligib
 import type { SourceLineage, SourceLineageMember } from "@/domain/intelligence/source-lineage";
 import type { M5SuspiciousAssessment, M5SuspiciousFindingReference } from "@/domain/intelligence/m5-suspicious-assessment";
 import type { M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
+import type { M5SuspiciousCoverageAuthority } from "@/domain/intelligence/m5-suspicious-coverage";
 
 export interface M5SuspiciousAssessmentRepository {
   readonly save: (assessment: M5SuspiciousAssessment) => Promise<M5SuspiciousAssessment>;
@@ -42,6 +43,7 @@ export interface M5SuspiciousAssessmentRepositories {
   readonly mappings: Readonly<{ readById: (id: string) => Promise<AssetMappingRevision | undefined> }>;
   readonly lineages: Readonly<{ validateForRawEvidenceCreation: (id: string) => Promise<SourceLineage>; readMembers: (id: string) => Promise<readonly SourceLineageMember[]> }>;
   readonly ruleSets: M5SuspiciousRuleSetAuthorityResolver;
+  readonly coverage?: Readonly<{ readById: (id: string) => Promise<M5SuspiciousCoverageAuthority | undefined> }>;
 }
 
 export interface M5SuspiciousAssessmentUnitOfWork {

@@ -7,6 +7,7 @@ import type { M5SuspiciousAssessmentUnitOfWork, CreateM5SuspiciousAssessmentRequ
 const same = (left: readonly string[], right: readonly string[]) => left.length === right.length && left.every((value, index) => value === right[index]);
 
 export async function createM5SuspiciousAssessmentAuthority(input: Readonly<{ unitOfWork: M5SuspiciousAssessmentUnitOfWork; request: CreateM5SuspiciousAssessmentRequest }>): Promise<M5SuspiciousAssessment> {
+  if (!input.request.ruleSetAuthorityId || !input.request.coverageAuthorityId || !input.request.coverageFingerprint || input.request.evaluatedRuleCount === undefined || input.request.coverageStatus !== "COMPLETE") throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_AUTHORITY_REQUIRED");
   return input.unitOfWork.withTransaction(async repositories => {
     const request = input.request;
     const mapping = await repositories.mappings.readById(request.mappingRevisionId);
@@ -17,6 +18,11 @@ export async function createM5SuspiciousAssessmentAuthority(input: Readonly<{ un
     if (!ruleSet) throw new Error("M5_SUSPICIOUS_ASSESSMENT_RULE_SET_NOT_FOUND");
     assertM5SuspiciousRuleSetAuthority(ruleSet);
     if (ruleSet.providerId !== mapping.providerId || ruleSet.datasetId !== mapping.datasetId || ruleSet.datasetVersion !== mapping.datasetVersion || ruleSet.detectorVersion !== request.detectorVersion || ruleSet.ruleSetVersion !== request.ruleSetVersion) throw new Error("M5_SUSPICIOUS_ASSESSMENT_RULE_SET_SCOPE_MISMATCH");
+    if (!repositories.coverage) throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_REPOSITORY_REQUIRED");
+    const coverage = await repositories.coverage.readById(request.coverageAuthorityId!);
+    if (!coverage) throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_NOT_FOUND");
+    assertM5SuspiciousCoverageAuthority(coverage);
+    if (coverage.status !== "COMPLETE" || coverage.fingerprint !== request.coverageFingerprint || coverage.ruleSetAuthorityId !== request.ruleSetAuthorityId || coverage.ruleSetFingerprint !== ruleSet.fingerprint || coverage.evaluatedRuleIds.length !== request.evaluatedRuleCount || coverage.requiredRuleIds.length !== coverage.evaluatedRuleIds.length || coverage.requiredRuleIds.some((id, index) => id !== coverage.evaluatedRuleIds[index])) throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_BINDING_INVALID");
     const lineage = await repositories.lineages.validateForRawEvidenceCreation(request.sourceLineageId);
     const members = await repositories.lineages.readMembers(request.sourceLineageId);
     if (lineage.providerId !== mapping.providerId || lineage.datasetId !== mapping.datasetId || lineage.datasetVersion !== mapping.datasetVersion) throw new Error("M5_SUSPICIOUS_ASSESSMENT_LINEAGE_SCOPE_MISMATCH");

@@ -7,6 +7,7 @@ import { createAssetMappingRevisionRepository } from "@/infrastructure/postgres/
 import { createProviderAssetIdentityReadRepository } from "@/infrastructure/postgres/provider-asset-identity-repository";
 import type { M5SuspiciousAssessmentRepositories, M5SuspiciousAssessmentUnitOfWork } from "@/application/intelligence/m5-suspicious-assessment-repository";
 import type { M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
+import { createM5SuspiciousCoverageRepositories } from "@/infrastructure/postgres/m5-suspicious-coverage-repository";
 
 type RawRow = Record<string, unknown>;
 const text = (value: unknown, code: string): string => { if (typeof value !== "string" || !value.trim()) throw new Error(code); return value.trim(); };
@@ -110,7 +111,8 @@ function repositories(client: TransactionSql, ruleSets: M5SuspiciousRuleSetAutho
     if (JSON.stringify(members) !== JSON.stringify(assessment.findingReferences)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MEMBER_SET_INVALID");
     return Object.freeze({ assessment, members });
   };
-  return Object.freeze({ assessments: { ...assessments, readSealedById }, memberships, findings, mappings: { readById: async (id: string) => { if (!mappingRepository.readById) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MAPPING_READER_INVALID"); return mappingRepository.readById(id); } }, lineages: { validateForRawEvidenceCreation: async (id: string) => { if (!lineageRepository.validateForRawEvidenceCreation) throw new Error("M5_SUSPICIOUS_ASSESSMENT_LINEAGE_READER_INVALID"); return lineageRepository.validateForRawEvidenceCreation(id); }, readMembers: lineageRepository.readMembers }, ruleSets });
+  const coverage = createM5SuspiciousCoverageRepositories(client).coverage;
+  return Object.freeze({ assessments: { ...assessments, readSealedById }, memberships, findings, mappings: { readById: async (id: string) => { if (!mappingRepository.readById) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MAPPING_READER_INVALID"); return mappingRepository.readById(id); } }, lineages: { validateForRawEvidenceCreation: async (id: string) => { if (!lineageRepository.validateForRawEvidenceCreation) throw new Error("M5_SUSPICIOUS_ASSESSMENT_LINEAGE_READER_INVALID"); return lineageRepository.validateForRawEvidenceCreation(id); }, readMembers: lineageRepository.readMembers }, ruleSets, coverage });
 }
 
 export function createM5SuspiciousAssessmentUnitOfWork(client: Sql, ruleSets: M5SuspiciousRuleSetAuthorityResolver): M5SuspiciousAssessmentUnitOfWork {
