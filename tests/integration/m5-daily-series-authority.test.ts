@@ -9,7 +9,7 @@ import { createProviderAssetIdentityAssertionAuthority } from "@/application/int
 import { createProviderAssetIdentityAssertionUnitOfWork } from "@/infrastructure/postgres/provider-asset-identity-repository";
 import { createAssetMappingRevisionFromSourceLineage } from "@/application/intelligence/create-asset-mapping-revision-from-source-lineage";
 import { createAssetMappingSourceLineageUnitOfWork } from "@/infrastructure/postgres/asset-mapping-revision-repository";
-import { persistM5DailySeriesEvidence } from "@/application/intelligence/m5-daily-series-evidence";
+import { persistM5DailySeriesEvidence, type M5DailySeriesEvidenceRepositories, type M5DailySeriesEvidenceUnitOfWork } from "@/application/intelligence/m5-daily-series-evidence";
 import { createM5DailySeriesEvidenceUnitOfWork } from "@/infrastructure/postgres/m5-daily-series-evidence-uow";
 
 const url = process.env.DATABASE_URL;
@@ -55,14 +55,19 @@ describe.skipIf(!enabled)("M5 daily series authority PostgreSQL integration", ()
       expect((await sql`select count(*)::int as count from public.eligibility_quantitative_evidence`)[0]!.count).toBe(2);
       const evidenceReplay = await persistM5DailySeriesEvidence({ unitOfWork: evidenceUow, mappingRevisionId: mapping.mappingRevisionId, authorityId: evidenceAuthority.aggregate.authority.authorityId, candidateId: "candidate-daily" });
       expect(evidenceReplay.status).toBe("PERSISTED"); expect((await sql`select count(*)::int as count from public.eligibility_quantitative_evidence`)[0]!.count).toBe(2);
-      const replay = await persistM5DailySeriesAuthority({ ...input, unitOfWork: uow }); expect(replay.status).toBe("PERSISTED"); expect(await counts()).toEqual({ parents: 1, observations: 15, derivations: 2 });
+      const rollbackAuthority = await persistM5DailySeriesAuthority({ ...input, asOf: "2026-02-04T00:00:00.000Z", recordedAt: "2026-02-02T00:03:00.000Z", unitOfWork: uow });
+      expect(rollbackAuthority.status).toBe("PERSISTED"); if (rollbackAuthority.status !== "PERSISTED") return;
+      const evidenceRollbackUow: M5DailySeriesEvidenceUnitOfWork = { withTransaction: <T>(work: (repositories: M5DailySeriesEvidenceRepositories) => Promise<T>) => evidenceUow.withTransaction(async repositories => { const result = await work(repositories); throw new Error("M5_TEST_EVIDENCE_ROLLBACK_SENTINEL"); return result; }) };
+      await expect(persistM5DailySeriesEvidence({ unitOfWork: evidenceRollbackUow, mappingRevisionId: mapping.mappingRevisionId, authorityId: rollbackAuthority.aggregate.authority.authorityId, candidateId: "candidate-daily" })).rejects.toThrow("M5_TEST_EVIDENCE_ROLLBACK_SENTINEL");
+      expect((await sql`select count(*)::int as count from public.eligibility_quantitative_evidence`)[0]!.count).toBe(2);
+      const replay = await persistM5DailySeriesAuthority({ ...input, unitOfWork: uow }); expect(replay.status).toBe("PERSISTED"); expect(await counts()).toEqual({ parents: 2, observations: 30, derivations: 4 });
       const databaseFailureUow: M5DailySeriesAuthorityUnitOfWork = { withTransaction: <T>(work: (repositories: M5DailySeriesAuthorityRepositories) => Promise<T>) => uow.withTransaction(async repositories => work({ ...repositories, dailySeries: { ...repositories.dailySeries, save: async () => { throw new Error("M5_TEST_DATABASE_FAILURE"); } } })) };
       await expect(persistM5DailySeriesAuthority({ ...input, unitOfWork: databaseFailureUow })).rejects.toThrow("M5_TEST_DATABASE_FAILURE");
-      expect(await counts()).toEqual({ parents: 1, observations: 15, derivations: 2 });
+      expect(await counts()).toEqual({ parents: 2, observations: 30, derivations: 4 });
       const rollbackUow: M5DailySeriesAuthorityUnitOfWork = { withTransaction: <T>(work: (repositories: M5DailySeriesAuthorityRepositories) => Promise<T>) => uow.withTransaction(async repositories => { await work(repositories); throw new Error("M5_TEST_DAILY_ROLLBACK_SENTINEL"); }) };
       const freshInput = { ...input, asOf: "2026-02-03T00:00:00.000Z", sourceLineageId: ingested.sourceLineageId, recordedAt: "2026-02-02T00:02:00.000Z" };
       await expect(persistM5DailySeriesAuthority({ ...freshInput, unitOfWork: rollbackUow })).rejects.toThrow("M5_TEST_DAILY_ROLLBACK_SENTINEL");
-      expect(await counts()).toEqual({ parents: 1, observations: 15, derivations: 2 });
+      expect(await counts()).toEqual({ parents: 2, observations: 30, derivations: 4 });
       const missing = await persistM5DailySeriesAuthority({ ...input, sourceLineageId: "missing-lineage", unitOfWork: uow }); expect(missing.status).toBe("INCOMPLETE");
     } finally { await sql.end({ timeout: 5 }); }
   });
