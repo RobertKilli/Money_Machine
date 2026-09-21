@@ -1,6 +1,7 @@
 import type { Sql, TransactionSql } from "postgres";
 import { assertM5MarketMetricsAuthority, createM5MarketMetricsAuthority, type M5MarketMetricsAuthorityAggregate, type MarketSourceMaterial } from "@/domain/intelligence/m5-market-metrics-authority";
 import type { M5MarketMetricsEvidenceUnitOfWork } from "@/application/intelligence/m5-market-metrics-evidence";
+import type { M5MarketMetricsAuthorityPersistenceRepositories, M5MarketMetricsAuthorityPersistenceUnitOfWork } from "@/application/intelligence/m5-market-metrics-authority-persistence";
 import { createSourceLineageRepository } from "./source-lineage-repository";
 import { createProviderAssetIdentityReadRepository } from "./provider-asset-identity-repository";
 import { createAssetMappingRevisionRepository } from "./asset-mapping-revision-repository";
@@ -46,4 +47,8 @@ export function createM5MarketMetricsAuthorityTransactionRepository(client: Tran
 
 export function createM5MarketMetricsEvidenceUnitOfWork(sql: Sql): M5MarketMetricsEvidenceUnitOfWork {
   return { withTransaction: <T>(work: Parameters<M5MarketMetricsEvidenceUnitOfWork["withTransaction"]>[0]) => sql.begin(async tx => { const lineage = createSourceLineageRepository(tx); const assertion = createProviderAssetIdentityReadRepository(tx); const mappingBase = createAssetMappingRevisionRepository(tx, lineage, assertion); const mapping = { readById: async (id: string) => mappingBase.readById ? mappingBase.readById(id) : undefined }; const evidence = createRawEligibilityEvidenceRepository(tx, mapping, lineage); const market = createM5MarketMetricsAuthorityTransactionRepository(tx); return work({ mapping, lineage, assertion, market, evidence }); }) as unknown as Promise<T> };
+}
+
+export function createM5MarketMetricsAuthorityPersistenceUnitOfWork(sql: Sql): M5MarketMetricsAuthorityPersistenceUnitOfWork {
+  return { withTransaction: <T>(work: (repositories: M5MarketMetricsAuthorityPersistenceRepositories) => Promise<T>) => sql.begin(async tx => work(Object.freeze({ sourceLineage: createSourceLineageRepository(tx), market: createM5MarketMetricsAuthorityTransactionRepository(tx) }))) as unknown as Promise<T> };
 }
