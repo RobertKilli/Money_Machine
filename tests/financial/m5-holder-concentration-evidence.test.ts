@@ -1,0 +1,38 @@
+import { describe, expect, it, vi } from "vitest";
+import { createM5HolderSnapshot, deriveM5HolderConcentration } from "@/domain/intelligence/m5-holder-concentration";
+import { persistM5HolderConcentrationEvidence } from "@/application/intelligence/m5-holder-concentration-evidence";
+import type { RawEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
+import { createProviderAssetIdentityAssertion } from "@/domain/intelligence/provider-asset-identity-assertion";
+
+const snapshot = createM5HolderSnapshot({ providerId: "provider", datasetId: "holders", datasetVersion: "v1", sourceLineageId: "lineage-1", sourceLineageBinding: "BOUND", chainId: "eip155:1", contractAddress: `0x${"1".repeat(40)}`, blockNumber: 100n, blockHash: `0x${"a".repeat(64)}`, blockTimestamp: "2026-01-01T00:00:00.000Z", finalityStatus: "CONFIRMED", finalityDepth: 12, tokenDecimals: 18, supplyBasis: "TOTAL_SUPPLY", addressPolicy: "INCLUDE_ALL", denominatorAtoms: 100n, declaredHolderCount: 2, fullPaginationProof: { pageCount: 1, finalPageOrdinal: 0, pages: [{ pageOrdinal: 0, itemCount: 2, isFinal: true, blockNumber: 100n, blockHash: `0x${"a".repeat(64)}`, tokenDecimals: 18, sourceRecordIds: ["artifact-1"], payloadFingerprint: "a".repeat(64) }] }, holders: [{ address: `0x${"2".repeat(40)}`, balanceAtoms: 60n, inclusionState: "INCLUDED", sourceRecordId: "artifact-1", sourcePageOrdinal: 0, sourceItemOrdinal: 0, ordinal: 0 }, { address: `0x${"3".repeat(40)}`, balanceAtoms: 40n, inclusionState: "INCLUDED", sourceRecordId: "artifact-1", sourcePageOrdinal: 0, sourceItemOrdinal: 1, ordinal: 1 }], materialSourceRecordIds: ["artifact-1"], payloadFingerprints: ["a".repeat(64)], observedAt: "2026-01-01T00:01:00.000Z", availableAt: "2026-01-01T00:02:00.000Z", recordedAt: "2026-01-01T00:03:00.000Z" });
+const concentration = deriveM5HolderConcentration(snapshot, "2026-01-01T00:03:00.000Z");
+const lineage = { sourceLineageId: "lineage-1", providerId: "provider", datasetId: "holders", datasetVersion: "v1", observedAt: snapshot.observedAt, effectiveAvailableAt: snapshot.availableAt, sourceArtifactIds: ["artifact-1"], fingerprint: "b".repeat(64) } as never;
+const assertion = createProviderAssetIdentityAssertion({ providerId: "provider", datasetId: "holders", datasetVersion: "v1", providerSourceNamespace: "synthetic:ethereum", providerAssetId: "asset-1", sourceArtifactId: "artifact-1", sourceEnvelopeId: "envelope-1", parserVersion: "parser/v1", envelopeSchemaVersion: "schema/v1", identityType: "EVM_CONTRACT_ADDRESS", identityNamespace: "eip155:1", identityValue: snapshot.contractAddress, sourcePayloadFingerprint: "d".repeat(64), recordedAt: snapshot.recordedAt });
+const mapping = { mappingRevisionId: "mapping-1", providerId: "provider", datasetId: "holders", datasetVersion: "v1", sourceLineageId: "lineage-1", providerAssetIdentityAssertionId: assertion.providerAssetIdentityAssertionId, providerAssetNamespace: "synthetic:ethereum", providerAssetId: "asset-1", canonicalAssetId: "canonical-1", canonicalIdentifier: "asset:one", assetClass: "CRYPTO", observedAt: snapshot.observedAt, availableAt: snapshot.availableAt, sourceRecordIds: ["artifact-1"], payloadFingerprint: "b".repeat(64), mappingRevisionVersion: "m5-asset-mapping-revision/v1", validFrom: snapshot.observedAt, fingerprint: "c".repeat(64), recordedAt: snapshot.recordedAt } as never;
+
+describe("M5 holder concentration evidence binding", () => {
+  it("persists exactly the authoritative derivation pair", async () => {
+    if (concentration.status !== "READY") throw new Error("fixture");
+    const saved: RawEligibilityEvidence[] = [];
+    const save = vi.fn(async (record: RawEligibilityEvidence): Promise<RawEligibilityEvidence> => { saved.push(record); return record; });
+    const result = await persistM5HolderConcentrationEvidence({ mappingRevisionId: "mapping-1", snapshotId: snapshot.snapshotId, candidateId: "candidate-1", unitOfWork: { withTransaction: async work => work({ mapping: { readById: async () => mapping }, lineage: { readById: async () => lineage, validateForRawEvidenceCreation: async () => lineage }, assertion: { readById: async () => assertion }, snapshots: { readById: async () => ({ snapshot, concentration, finalityProof: { referenceBlockNumber: 112n, referenceBlockHash: `0x${"b".repeat(64)}`, observedAt: snapshot.availableAt, receivedAt: snapshot.availableAt } }) }, evidence: { save } }) } });
+    expect(result.status).toBe("PERSISTED"); expect(save).toHaveBeenCalledTimes(2); expect(saved.map(record => record.evidenceKind === "QUANTITATIVE" ? record.metricKind : "")).toEqual(["SINGLE_CONCENTRATION", "TOP10_CONCENTRATION"]); expect(saved.every(record => record.evidenceKind === "QUANTITATIVE" && record.holderSnapshotId === snapshot.snapshotId)).toBe(true);
+  });
+  it("fails closed without a snapshot and never writes a partial pair", async () => {
+    const save = vi.fn();
+    const result = await persistM5HolderConcentrationEvidence({ mappingRevisionId: "mapping-1", snapshotId: "missing", candidateId: "candidate-1", unitOfWork: { withTransaction: async work => work({ mapping: { readById: async () => mapping }, lineage: { readById: async () => lineage, validateForRawEvidenceCreation: async () => lineage }, assertion: { readById: async () => assertion }, snapshots: { readById: async () => undefined }, evidence: { save } }) } });
+    expect(result.status).toBe("INCOMPLETE"); expect(save).not.toHaveBeenCalled();
+  });
+  it("propagates a second-write conflict so the transaction can roll back the first write", async () => {
+    if (concentration.status !== "READY") throw new Error("fixture");
+    const save = vi.fn()
+      .mockResolvedValueOnce({ evidenceKind: "QUANTITATIVE", metricKind: "SINGLE_CONCENTRATION", holderDerivationFingerprint: concentration.single.fingerprint } as RawEligibilityEvidence)
+      .mockRejectedValueOnce(new Error("M5_RAW_EVIDENCE_CONFLICT"));
+    await expect(persistM5HolderConcentrationEvidence({ mappingRevisionId: "mapping-1", snapshotId: snapshot.snapshotId, candidateId: "candidate-1", unitOfWork: { withTransaction: async work => work({ mapping: { readById: async () => mapping }, lineage: { readById: async () => lineage, validateForRawEvidenceCreation: async () => lineage }, assertion: { readById: async () => assertion }, snapshots: { readById: async () => ({ snapshot, concentration, finalityProof: { referenceBlockNumber: 112n, referenceBlockHash: `0x${"b".repeat(64)}`, observedAt: snapshot.availableAt, receivedAt: snapshot.availableAt } }) }, evidence: { save } }) } })).rejects.toThrow("M5_RAW_EVIDENCE_CONFLICT");
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+  it("rejects concentration records without holder authority fields", async () => {
+    const { createQuantitativeEligibilityEvidence } = await import("@/domain/intelligence/eligibility-evidence");
+    expect(() => createQuantitativeEligibilityEvidence({ evidenceId: "e", candidateId: "c", assetId: "a", canonicalIdentifier: "id", assetClass: "CRYPTO", providerId: "p", datasetId: "d", datasetVersion: "v1", mappingRevisionId: "m", sourceLineageId: "l", observedAt: snapshot.observedAt, availableAt: snapshot.availableAt, provenance: { sourceType: "M5_SOURCE_LINEAGE", sourceRecordIds: ["r"], payloadFingerprint: "a".repeat(64) }, metricKind: "SINGLE_CONCENTRATION", valueAtoms: 1n, scale: 0, unit: "BPS", semanticsVersion: "m5-holder-concentration-evidence/v1" } as never)).toThrow("M5_RAW_HOLDER_SNAPSHOT_ID_REQUIRED");
+  });
+});
