@@ -337,10 +337,8 @@ export function assembleM5Evidence(input: { readonly context: M5AssemblyContext;
       if (invalidSelected(found)) continue;
       const raw = found.evidence!;
       if (raw.evidenceKind !== "VENUE") { errors.push(diagnostic("M5_ASSEMBLY_SELECTED_KIND_MISMATCH", "VENUES", [raw.evidenceId])); diagnosticIds.add(raw.evidenceId); continue; }
-      if (raw.venueAuthorityId !== undefined || raw.venueMemberId !== undefined) {
-        if (!raw.venueAuthorityId || !raw.venueAuthorityFingerprint || !raw.venueMemberId || !raw.venueMemberFingerprint || raw.venueAuthorityMemberCount === undefined || raw.venueMemberId !== raw.venueId || venueMemberIds.has(raw.venueMemberId)) { errors.push(diagnostic("M5_ASSEMBLY_VENUE_AUTHORITY_BINDING_INVALID", "VENUES", [raw.evidenceId])); diagnosticIds.add(raw.evidenceId); }
-        else { venueAuthorityIds.add(raw.venueAuthorityId); venueAuthorityFingerprints.add(raw.venueAuthorityFingerprint); venueMemberIds.add(raw.venueMemberId); declaredVenueMemberCount = declaredVenueMemberCount ?? raw.venueAuthorityMemberCount; if (declaredVenueMemberCount !== raw.venueAuthorityMemberCount) { errors.push(diagnostic("M5_ASSEMBLY_VENUE_AUTHORITY_SET_INVALID", "VENUES", [raw.evidenceId])); diagnosticIds.add(raw.evidenceId); } }
-      }
+      if (!raw.venueAuthorityId || !raw.venueAuthorityFingerprint || !raw.venueMemberId || !raw.venueMemberFingerprint || raw.venueAuthorityMemberCount === undefined || raw.venueMemberId !== raw.venueId || venueMemberIds.has(raw.venueMemberId)) { errors.push(diagnostic("M5_ASSEMBLY_VENUE_AUTHORITY_BINDING_INVALID", "VENUES", [raw.evidenceId])); diagnosticIds.add(raw.evidenceId); }
+      else { venueAuthorityIds.add(raw.venueAuthorityId); venueAuthorityFingerprints.add(raw.venueAuthorityFingerprint); venueMemberIds.add(raw.venueMemberId); declaredVenueMemberCount = declaredVenueMemberCount ?? raw.venueAuthorityMemberCount; if (declaredVenueMemberCount !== raw.venueAuthorityMemberCount) { errors.push(diagnostic("M5_ASSEMBLY_VENUE_AUTHORITY_SET_INVALID", "VENUES", [raw.evidenceId])); diagnosticIds.add(raw.evidenceId); } }
       const values = byVenue.get(raw.venueId) ?? []; values.push(raw); byVenue.set(raw.venueId, values);
     }
     if (venueAuthorityIds.size > 0 && (venueAuthorityIds.size !== 1 || venueAuthorityFingerprints.size !== 1 || declaredVenueMemberCount !== venueMemberIds.size)) { errors.push(diagnostic("M5_ASSEMBLY_VENUE_AUTHORITY_SET_INVALID", "VENUES", [...venueMemberIds])); }
