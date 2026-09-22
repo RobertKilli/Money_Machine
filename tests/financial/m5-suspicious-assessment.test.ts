@@ -3,9 +3,10 @@ import { encodeM5DatasetPin } from "@/domain/intelligence/m5-dataset-pin";
 import { createAssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
 import { createSuspiciousEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
 import { createM5SuspiciousRuleSetAuthority, createM5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
-import { createM5SuspiciousAssessment, m5SuspiciousAssessmentIdFor } from "@/domain/intelligence/m5-suspicious-assessment";
-import { createM5SuspiciousCoverageAuthority } from "@/domain/intelligence/m5-suspicious-coverage";
-import { createM5SuspiciousAssessmentAuthority } from "@/application/intelligence/create-m5-suspicious-assessment";
+import { createM5SuspiciousAssessment, m5SuspiciousAssessmentIdFor, type M5SuspiciousAssessment } from "@/domain/intelligence/m5-suspicious-assessment";
+import { createM5SuspiciousCoverageAuthority, type M5SuspiciousCoverageAuthority } from "@/domain/intelligence/m5-suspicious-coverage";
+import { createM5SuspiciousAssessmentAuthority, persistM5SuspiciousAssessmentWithCoverage } from "@/application/intelligence/create-m5-suspicious-assessment";
+import type { SourceLineageClaimAuthority } from "@/application/intelligence/source-lineage-repository";
 import type { M5SuspiciousAssessmentRepositories } from "@/application/intelligence/m5-suspicious-assessment-repository";
 
 const observedAt = "2026-01-01T00:00:00.000Z";
@@ -57,7 +58,7 @@ describe("M5 suspicious assessment authority", () => {
     const coverage = createM5SuspiciousCoverageAuthority({ contractVersion: "m5-suspicious-coverage-authority/v1", ruleSetAuthorityId: ruleSet.ruleSetAuthorityId, ruleSetFingerprint: ruleSet.fingerprint, providerId: "provider", datasetId: "dataset", datasetVersion: "v1", mappingRevisionId: mapping.mappingRevisionId, providerAssetIdentityAssertionId: "identity", sourceLineageId: "m5-lineage", sourceLineageFingerprint: "b".repeat(64), candidateId: "candidate", assetId: "canonical-asset", canonicalIdentifier: "asset:canonical", assetClass: "TOKEN", asOf, requiredRuleIds: ["RULE_A"], evaluatedRuleIds: ["RULE_A"], materials: [{ materialId: "artifact-1", artifactId: "artifact-1", envelopeId: "envelope-1", observationId: "observation-1", payloadFingerprint: "b".repeat(64), observedAt, availableAt }], status: "COMPLETE", observedAt, availableAt, recordedAt: asOf });
     let stored = undefined as ReturnType<typeof createM5SuspiciousAssessment> | undefined;
     const repositories: M5SuspiciousAssessmentRepositories = {
-      ruleSets: createM5SuspiciousRuleSetAuthorityResolver([ruleSet]),
+      ruleSets: { ...createM5SuspiciousRuleSetAuthorityResolver([ruleSet]), readById: async id => id === ruleSet.ruleSetAuthorityId ? ruleSet : undefined },
       mappings: { readById: async () => mapping },
       lineages: { validateForRawEvidenceCreation: async () => ({ sourceLineageId: "m5-lineage", providerId: "provider", datasetId: "dataset", datasetVersion: "v1", sourceArtifactIds: ["artifact-1"], availabilityClaimIds: ["claim-1"], ingestionAttemptIds: ["attempt-1"], memberCount: 1, observedAt, effectiveAvailableAt: availableAt, contractVersion: "m5-source-lineage/v1", fingerprint: "b".repeat(64), recordedAt: "2026-01-02T00:00:00.000Z" }), readMembers: async () => [{ sourceLineageId: "m5-lineage", memberOrdinal: 0, availabilityClaimId: "claim-1", sourceArtifactId: "artifact-1", sourceEnvelopeId: "envelope-1", sourceObservationId: "observation-1", ingestionAttemptId: "attempt-1", providerId: "provider", datasetId: "dataset", datasetVersion: "v1", observedAt, effectiveAvailableAt: availableAt, memberFingerprint: "c".repeat(64) }] },
       findings: { readExact: async () => [finding] },
@@ -70,5 +71,28 @@ describe("M5 suspicious assessment authority", () => {
     expect(result.findingReferences).toEqual([{ evidenceId: "finding-1", fingerprint: finding.fingerprint }]);
     expect(result.coveredRuleIds).toEqual(["RULE_A"]);
     expect(result.suspiciousAssessmentId).toBe(m5SuspiciousAssessmentIdFor(result));
+  });
+
+  it("persists coverage and assessment through one transaction-scoped capability", async () => {
+    const ruleSet = createM5SuspiciousRuleSetAuthority({ contractVersion: "m5-suspicious-rule-set/v1", ruleSetVersion: "rules/v1", providerId: "provider", datasetId: "dataset", datasetVersion: "v1", detectorVersion: "detector/v1", requiredRuleIds: ["RULE_A"] });
+    const mapping = createAssetMappingRevision({ mappingRevisionVersion: "m5-asset-mapping-revision/v1", providerId: "provider", datasetId: "dataset", datasetVersion: "v1", sourceLineageId: "m5-lineage", providerAssetIdentityAssertionId: "m5-provider-asset-identity:" + "1".repeat(64), providerAssetNamespace: "eip155:1", providerAssetId: "0x" + "1".repeat(40), canonicalAssetId: "canonical-asset", canonicalIdentifier: "asset:canonical", assetClass: "TOKEN", validFrom: observedAt, observedAt, availableAt, sourceRecordIds: ["artifact-1"], payloadFingerprint: "b".repeat(64), recordedAt: asOf });
+    const lineage = { sourceLineageId: "m5-lineage", providerId: "provider", datasetId: "dataset", datasetVersion: "v1", sourceArtifactIds: ["artifact-1"], availabilityClaimIds: ["claim-1"], ingestionAttemptIds: ["attempt-1"], memberCount: 1, observedAt, effectiveAvailableAt: availableAt, contractVersion: "m5-source-lineage/v1" as const, fingerprint: "b".repeat(64), recordedAt: asOf };
+    let savedCoverage: M5SuspiciousCoverageAuthority | undefined;
+    let savedAssessment: M5SuspiciousAssessment | undefined;
+    const repos: M5SuspiciousAssessmentRepositories = {
+      ruleSets: { ...createM5SuspiciousRuleSetAuthorityResolver([ruleSet]), readById: async id => id === ruleSet.ruleSetAuthorityId ? ruleSet : undefined },
+      mappings: { readById: async () => mapping },
+      lineages: { validateForRawEvidenceCreation: async () => lineage, readMembers: async () => [{ sourceLineageId: "m5-lineage", memberOrdinal: 0, availabilityClaimId: "claim-1", sourceArtifactId: "artifact-1", sourceEnvelopeId: "envelope-1", sourceObservationId: "observation-1", ingestionAttemptId: "attempt-1", providerId: "provider", datasetId: "dataset", datasetVersion: "v1", observedAt, effectiveAvailableAt: availableAt, memberFingerprint: "c".repeat(64) }], readMemberAuthorities: async () => [{ artifact: { sourceArtifactId: "artifact-1", payloadFingerprint: "b".repeat(64) }, envelope: { sourceEnvelopeId: "envelope-1", observedAt }, observation: { sourceObservationId: "observation-1", retrievedAt: availableAt } } as unknown as SourceLineageClaimAuthority] },
+      findings: { readExact: async () => [] },
+      coverage: { readById: async () => savedCoverage, save: async value => { savedCoverage = value; return value; } },
+      assessments: { save: async value => { savedAssessment = value; return value; }, readById: async () => savedAssessment, readSealedById: async () => savedAssessment ? { assessment: savedAssessment, members: [] } : undefined },
+      memberships: { save: async (_assessment, members) => members, readByAssessmentId: async () => [] },
+    };
+    let transactions = 0;
+    const result = await persistM5SuspiciousAssessmentWithCoverage({ unitOfWork: { withTransaction: async work => { transactions += 1; return work(repos); } }, request: { result: "NO_FINDINGS", ruleSetVersion: "rules/v1", detectorVersion: "detector/v1", ruleSetAuthorityId: ruleSet.ruleSetAuthorityId, asOf, recordedAt: asOf, candidateId: "candidate", assetId: "canonical-asset", canonicalIdentifier: "asset:canonical", assetClass: "TOKEN", mappingRevisionId: mapping.mappingRevisionId, sourceLineageId: "m5-lineage", findingEvidenceIds: [] }, evaluation: { evaluatedRuleIds: ["RULE_A"], materials: [{ materialId: "artifact-1", artifactId: "artifact-1", envelopeId: "envelope-1", observationId: "observation-1", payloadFingerprint: "b".repeat(64), observedAt, availableAt }] } });
+    expect(transactions).toBe(1);
+    expect(savedCoverage?.status).toBe("COMPLETE");
+    expect(result.coverageAuthorityId).toBe(savedCoverage?.coverageAuthorityId);
+    expect(savedAssessment?.coverageFingerprint).toBe(savedCoverage?.fingerprint);
   });
 });

@@ -108,12 +108,34 @@ alter table public.eligibility_suspicious_assessments
     foreign key (coverage_authority_id, coverage_fingerprint)
     references public.m5_suspicious_coverage_authorities(coverage_authority_id, coverage_fingerprint) on delete restrict;
 
+-- v1 authoritative assessments cannot have a legacy nullable authority pair.
+-- The empty-table guard above makes this a forward-only, fail-closed change;
+-- existing application rows are never backfilled or fabricated.
+do $$
+declare n bigint;
+begin
+  execute 'select count(*) from public.eligibility_suspicious_assessments' into n;
+  if n <> 0 then raise exception 'M5_SUSPICIOUS_COVERAGE_REQUIRES_EMPTY_ASSESSMENTS_FOR_NOT_NULL'; end if;
+end $$;
+
+alter table public.eligibility_suspicious_assessments
+  alter column rule_set_authority_id set not null,
+  alter column coverage_authority_id set not null,
+  alter column coverage_fingerprint set not null,
+  alter column evaluated_rule_count set not null,
+  alter column coverage_status set not null;
+
 create index eligibility_suspicious_assessments_rule_set_authority_idx on public.eligibility_suspicious_assessments(rule_set_authority_id, rule_set_fingerprint, suspicious_assessment_id);
 
 create index m5_suspicious_rule_set_rules_authority_idx on public.m5_suspicious_rule_set_rules(rule_set_authority_id, rule_ordinal);
+create index m5_suspicious_coverage_authorities_rule_set_fk_idx on public.m5_suspicious_coverage_authorities(rule_set_authority_id, rule_set_fingerprint, provider_id, dataset_id, dataset_version, coverage_authority_id);
 create index m5_suspicious_coverage_authorities_scope_idx on public.m5_suspicious_coverage_authorities(provider_id, dataset_id, dataset_version, candidate_id, asset_id, as_of, coverage_authority_id);
 create index m5_suspicious_coverage_rule_inputs_authority_idx on public.m5_suspicious_coverage_rule_inputs(coverage_authority_id, rule_ordinal);
 create index eligibility_suspicious_assessments_coverage_idx on public.eligibility_suspicious_assessments(coverage_authority_id, coverage_fingerprint, suspicious_assessment_id);
+create index eligibility_suspicious_assessments_dataset_fk_idx on public.eligibility_suspicious_assessments(dataset_id, provider_id, dataset_version);
+create index eligibility_suspicious_assessments_lineage_fk_idx on public.eligibility_suspicious_assessments(source_lineage_id, provider_id, dataset_id, dataset_version);
+create index eligibility_suspicious_assessments_mapping_fk_idx on public.eligibility_suspicious_assessments(mapping_revision_id, provider_id, dataset_id, dataset_version, asset_id, canonical_identifier, asset_class);
+create index eligibility_suspicious_assessment_findings_parent_fk_idx on public.eligibility_suspicious_assessment_findings(suspicious_assessment_id, provider_id, dataset_id, dataset_version, mapping_revision_id, source_lineage_id);
 
 alter table public.m5_suspicious_rule_set_authorities enable row level security;
 alter table public.m5_suspicious_rule_set_rules enable row level security;

@@ -1,8 +1,9 @@
 import type { AssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
 import type { SuspiciousEligibilityEvidence } from "@/domain/intelligence/eligibility-evidence";
 import type { SourceLineage, SourceLineageMember } from "@/domain/intelligence/source-lineage";
+import type { SourceLineageClaimAuthority } from "@/application/intelligence/source-lineage-repository";
 import type { M5SuspiciousAssessment, M5SuspiciousFindingReference } from "@/domain/intelligence/m5-suspicious-assessment";
-import type { M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
+import type { M5SuspiciousRuleSetAuthority, M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
 import type { M5SuspiciousCoverageAuthority } from "@/domain/intelligence/m5-suspicious-coverage";
 
 export interface M5SuspiciousAssessmentRepository {
@@ -41,9 +42,11 @@ export interface M5SuspiciousAssessmentRepositories {
   readonly memberships: M5SuspiciousAssessmentMembershipRepository;
   readonly findings: M5SuspiciousFindingAuthorityReader;
   readonly mappings: Readonly<{ readById: (id: string) => Promise<AssetMappingRevision | undefined> }>;
-  readonly lineages: Readonly<{ validateForRawEvidenceCreation: (id: string) => Promise<SourceLineage>; readMembers: (id: string) => Promise<readonly SourceLineageMember[]> }>;
-  readonly ruleSets: M5SuspiciousRuleSetAuthorityResolver;
-  readonly coverage?: Readonly<{ readById: (id: string) => Promise<M5SuspiciousCoverageAuthority | undefined> }>;
+  readonly lineages: Readonly<{ validateForRawEvidenceCreation: (id: string) => Promise<SourceLineage>; readMembers: (id: string) => Promise<readonly SourceLineageMember[]>; readMemberAuthorities?: (id: string) => Promise<readonly SourceLineageClaimAuthority[]> }>;
+  /** Persisted authority reads are mandatory for the v1 write path.  The
+   * legacy resolver remains optional solely for old read-only callers. */
+  readonly ruleSets: M5SuspiciousRuleSetAuthorityResolver & Readonly<{ readById?: (id: string) => Promise<M5SuspiciousRuleSetAuthority | undefined>; save?: (authority: M5SuspiciousRuleSetAuthority) => Promise<M5SuspiciousRuleSetAuthority> }>;
+  readonly coverage?: Readonly<{ readById: (id: string) => Promise<M5SuspiciousCoverageAuthority | undefined>; save?: (authority: M5SuspiciousCoverageAuthority) => Promise<M5SuspiciousCoverageAuthority> }>;
 }
 
 export interface M5SuspiciousAssessmentUnitOfWork {
