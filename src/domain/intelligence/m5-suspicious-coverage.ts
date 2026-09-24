@@ -4,9 +4,18 @@ export const M5_SUSPICIOUS_COVERAGE_CONTRACT_VERSION = "m5-suspicious-coverage-a
 export type M5SuspiciousCoverageStatus = "COMPLETE" | "INCOMPLETE" | "INVALID";
 export type M5SuspiciousCoverageMaterial = Readonly<{
   materialId: string;
+  sourceLineageId: string;
+  sourceLineageMemberOrdinal: number;
+  sourceLineageMemberFingerprint: string;
+  availabilityClaimId: string;
+  availabilityClaimFingerprint: string;
   artifactId: string;
+  sourceArtifactFingerprint: string;
   envelopeId: string;
+  envelopeFingerprint: string;
   observationId: string;
+  observationFingerprint: string;
+  ingestionAttemptId: string;
   payloadFingerprint: string;
   observedAt: string;
   availableAt: string;
@@ -50,13 +59,13 @@ function material(input: M5SuspiciousCoverageInput): Omit<M5SuspiciousCoverageAu
   if (input.contractVersion !== M5_SUSPICIOUS_COVERAGE_CONTRACT_VERSION) throw new Error("M5_SUSPICIOUS_COVERAGE_CONTRACT_INVALID");
   const required = ids(input.requiredRuleIds, "M5_SUSPICIOUS_COVERAGE_REQUIRED_RULES_INVALID");
   const evaluated = ids(input.evaluatedRuleIds, "M5_SUSPICIOUS_COVERAGE_EVALUATED_RULES_INVALID");
-  const mats = [...input.materials].map((m) => ({ materialId: text(m.materialId, "M5_SUSPICIOUS_COVERAGE_MATERIAL_INVALID"), artifactId: text(m.artifactId, "M5_SUSPICIOUS_COVERAGE_ARTIFACT_INVALID"), envelopeId: text(m.envelopeId, "M5_SUSPICIOUS_COVERAGE_ENVELOPE_INVALID"), observationId: text(m.observationId, "M5_SUSPICIOUS_COVERAGE_OBSERVATION_INVALID"), payloadFingerprint: sha(m.payloadFingerprint, "M5_SUSPICIOUS_COVERAGE_PAYLOAD_INVALID"), observedAt: time(m.observedAt, "M5_SUSPICIOUS_COVERAGE_OBSERVED_INVALID"), availableAt: time(m.availableAt, "M5_SUSPICIOUS_COVERAGE_AVAILABLE_INVALID") })).sort((a, b) => a.materialId.localeCompare(b.materialId));
+  const mats = [...input.materials].map((m) => ({ materialId: text(m.materialId, "M5_SUSPICIOUS_COVERAGE_MATERIAL_INVALID"), sourceLineageId: text(m.sourceLineageId, "M5_SUSPICIOUS_COVERAGE_LINEAGE_INVALID"), sourceLineageMemberOrdinal: Number.isInteger(m.sourceLineageMemberOrdinal) && m.sourceLineageMemberOrdinal >= 0 ? m.sourceLineageMemberOrdinal : (() => { throw new Error("M5_SUSPICIOUS_COVERAGE_LINEAGE_MEMBER_INVALID"); })(), sourceLineageMemberFingerprint: sha(m.sourceLineageMemberFingerprint, "M5_SUSPICIOUS_COVERAGE_LINEAGE_MEMBER_INVALID"), availabilityClaimId: text(m.availabilityClaimId, "M5_SUSPICIOUS_COVERAGE_CLAIM_INVALID"), availabilityClaimFingerprint: sha(m.availabilityClaimFingerprint, "M5_SUSPICIOUS_COVERAGE_CLAIM_INVALID"), artifactId: text(m.artifactId, "M5_SUSPICIOUS_COVERAGE_ARTIFACT_INVALID"), sourceArtifactFingerprint: sha(m.sourceArtifactFingerprint, "M5_SUSPICIOUS_COVERAGE_ARTIFACT_INVALID"), envelopeId: text(m.envelopeId, "M5_SUSPICIOUS_COVERAGE_ENVELOPE_INVALID"), envelopeFingerprint: sha(m.envelopeFingerprint, "M5_SUSPICIOUS_COVERAGE_ENVELOPE_INVALID"), observationId: text(m.observationId, "M5_SUSPICIOUS_COVERAGE_OBSERVATION_INVALID"), observationFingerprint: sha(m.observationFingerprint, "M5_SUSPICIOUS_COVERAGE_OBSERVATION_INVALID"), ingestionAttemptId: text(m.ingestionAttemptId, "M5_SUSPICIOUS_COVERAGE_ATTEMPT_INVALID"), payloadFingerprint: sha(m.payloadFingerprint, "M5_SUSPICIOUS_COVERAGE_PAYLOAD_INVALID"), observedAt: time(m.observedAt, "M5_SUSPICIOUS_COVERAGE_OBSERVED_INVALID"), availableAt: time(m.availableAt, "M5_SUSPICIOUS_COVERAGE_AVAILABLE_INVALID") })).sort((a, b) => a.materialId.localeCompare(b.materialId));
   if (new Set(mats.map(m => m.materialId)).size !== mats.length) throw new Error("M5_SUSPICIOUS_COVERAGE_DUPLICATE_MATERIAL");
   if (mats.some(m => m.observedAt > m.availableAt || m.availableAt > input.asOf)) throw new Error("M5_SUSPICIOUS_COVERAGE_TEMPORAL_INVALID");
   const status = input.status;
   if (!["COMPLETE", "INCOMPLETE", "INVALID"].includes(status)) throw new Error("M5_SUSPICIOUS_COVERAGE_STATUS_INVALID");
   const equal = required.length === evaluated.length && required.every((r, i) => r === evaluated[i]);
-  if (status === "COMPLETE" && (!equal || mats.length === 0)) throw new Error("M5_SUSPICIOUS_COVERAGE_NOT_COMPLETE");
+  if (status === "COMPLETE" && (!equal || mats.length !== required.length)) throw new Error("M5_SUSPICIOUS_COVERAGE_NOT_COMPLETE");
   const out = { contractVersion: input.contractVersion, ruleSetAuthorityId: text(input.ruleSetAuthorityId, "M5_SUSPICIOUS_COVERAGE_RULE_SET_INVALID"), ruleSetFingerprint: sha(input.ruleSetFingerprint, "M5_SUSPICIOUS_COVERAGE_RULE_SET_FINGERPRINT_INVALID"), providerId: text(input.providerId, "M5_SUSPICIOUS_COVERAGE_PROVIDER_INVALID"), datasetId: text(input.datasetId, "M5_SUSPICIOUS_COVERAGE_DATASET_INVALID"), datasetVersion: text(input.datasetVersion, "M5_SUSPICIOUS_COVERAGE_DATASET_VERSION_INVALID"), mappingRevisionId: text(input.mappingRevisionId, "M5_SUSPICIOUS_COVERAGE_MAPPING_INVALID"), providerAssetIdentityAssertionId: text(input.providerAssetIdentityAssertionId, "M5_SUSPICIOUS_COVERAGE_IDENTITY_INVALID"), sourceLineageId: text(input.sourceLineageId, "M5_SUSPICIOUS_COVERAGE_LINEAGE_INVALID"), sourceLineageFingerprint: sha(input.sourceLineageFingerprint, "M5_SUSPICIOUS_COVERAGE_LINEAGE_FINGERPRINT_INVALID"), candidateId: text(input.candidateId, "M5_SUSPICIOUS_COVERAGE_CANDIDATE_INVALID"), assetId: text(input.assetId, "M5_SUSPICIOUS_COVERAGE_ASSET_INVALID"), canonicalIdentifier: text(input.canonicalIdentifier, "M5_SUSPICIOUS_COVERAGE_IDENTIFIER_INVALID"), assetClass: text(input.assetClass, "M5_SUSPICIOUS_COVERAGE_ASSET_CLASS_INVALID"), asOf: time(input.asOf, "M5_SUSPICIOUS_COVERAGE_AS_OF_INVALID"), requiredRuleIds: required, evaluatedRuleIds: evaluated, materials: Object.freeze(mats), status, observedAt: time(input.observedAt, "M5_SUSPICIOUS_COVERAGE_OBSERVED_INVALID"), availableAt: time(input.availableAt, "M5_SUSPICIOUS_COVERAGE_AVAILABLE_INVALID"), recordedAt: time(input.recordedAt, "M5_SUSPICIOUS_COVERAGE_RECORDED_INVALID") };
   if (out.observedAt > out.availableAt || out.availableAt > out.asOf) throw new Error("M5_SUSPICIOUS_COVERAGE_TEMPORAL_INVALID");
   return out;

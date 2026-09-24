@@ -408,3 +408,12 @@ server-side with deterministic fingerprints, authoritative rereads and
 append-only replay/conflict semantics in one transaction boundary. This slice
 does not add detection algorithms or live provider access; production and legal
 approval remain separate gates.
+
+The database is the final authority for this boundary: deferred constraint
+triggers seal rule-set counts and COMPLETE coverage member sets at commit, after
+the parent and all members have been inserted. Coverage input rows carry the
+paired SourceLineage member, claim, artifact, envelope, observation and attempt
+authority keys and fingerprints; callers cannot substitute parallel arrays or
+unbound material. An assessment has a composite foreign key to the exact
+persisted `COMPLETE` coverage scope, so an application-side status declaration
+cannot turn incomplete coverage into an authoritative clean result.

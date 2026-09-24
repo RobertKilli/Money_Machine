@@ -86,7 +86,7 @@ export async function createM5SuspiciousAssessmentAuthority(input: Readonly<{ un
 export async function persistM5SuspiciousAssessmentWithCoverage(input: Readonly<{
   unitOfWork: M5SuspiciousAssessmentUnitOfWork;
   request: Omit<CreateM5SuspiciousAssessmentRequest, "coverageAuthorityId" | "coverageFingerprint" | "evaluatedRuleCount" | "coverageStatus"> & { ruleSetAuthorityId: string };
-  evaluation: Readonly<{ evaluatedRuleIds: readonly string[]; materials: M5SuspiciousCoverageAuthority["materials"] }>;
+  evaluation: Readonly<{ evaluatedRuleIds: readonly Readonly<string>[]; materials: readonly Readonly<{ materialId: string; [key: string]: unknown }>[] }>;
 }>): Promise<M5SuspiciousAssessment> {
   return input.unitOfWork.withTransaction(async repositories => {
     if (!repositories.ruleSets.readById) throw new Error("M5_SUSPICIOUS_ASSESSMENT_PERSISTED_RULE_SET_READER_REQUIRED");
@@ -105,8 +105,29 @@ export async function persistM5SuspiciousAssessmentWithCoverage(input: Readonly<
     if (!repositories.lineages.readMemberAuthorities) throw new Error("M5_SUSPICIOUS_ASSESSMENT_LINEAGE_AUTHORITY_READER_REQUIRED");
     const authorities = await repositories.lineages.readMemberAuthorities(mapping.sourceLineageId);
     const suppliedMaterials = [...input.evaluation.materials].sort((a, b) => a.materialId.localeCompare(b.materialId));
-    const authoritativeMaterials = authorities.map(authority => ({ materialId: authority.artifact.sourceArtifactId, artifactId: authority.artifact.sourceArtifactId, envelopeId: authority.envelope.sourceEnvelopeId, observationId: authority.observation.sourceObservationId, payloadFingerprint: authority.artifact.payloadFingerprint, observedAt: authority.envelope.observedAt, availableAt: authority.observation.retrievedAt })).sort((a, b) => a.materialId.localeCompare(b.materialId));
-    if (suppliedMaterials.length !== authoritativeMaterials.length || suppliedMaterials.some((value, index) => JSON.stringify(value) !== JSON.stringify(authoritativeMaterials[index]))) throw new Error("M5_SUSPICIOUS_ASSESSMENT_SOURCE_MATERIAL_BINDING_INVALID");
+    if (authorities.length !== members.length) throw new Error("M5_SUSPICIOUS_ASSESSMENT_LINEAGE_MEMBERS_INVALID");
+    const authoritativeMaterials = authorities.map((authority, index) => {
+      const member = members[index]!;
+      return {
+        materialId: authority.artifact.sourceArtifactId,
+        sourceLineageId: member.sourceLineageId,
+        sourceLineageMemberOrdinal: member.memberOrdinal,
+        sourceLineageMemberFingerprint: member.memberFingerprint,
+        availabilityClaimId: authority.claim.availabilityClaimId,
+        availabilityClaimFingerprint: authority.claim.claimFingerprint,
+        artifactId: authority.artifact.sourceArtifactId,
+        sourceArtifactFingerprint: authority.artifact.sourceArtifactFingerprint,
+        envelopeId: authority.envelope.sourceEnvelopeId,
+        envelopeFingerprint: authority.envelope.sourceEnvelopeFingerprint,
+        observationId: authority.observation.sourceObservationId,
+        observationFingerprint: authority.observation.observationFingerprint,
+        ingestionAttemptId: authority.attempt.ingestionAttemptId,
+        payloadFingerprint: authority.artifact.payloadFingerprint,
+        observedAt: authority.envelope.observedAt,
+        availableAt: authority.observation.retrievedAt,
+      };
+    }).sort((a, b) => a.materialId.localeCompare(b.materialId));
+    if (suppliedMaterials.length !== authoritativeMaterials.length || suppliedMaterials.some((value, index) => value.materialId !== authoritativeMaterials[index]!.materialId)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_SOURCE_MATERIAL_BINDING_INVALID");
     const coverage = createM5SuspiciousCoverageAuthority({
       contractVersion: "m5-suspicious-coverage-authority/v1",
       ruleSetAuthorityId: ruleSet.ruleSetAuthorityId,
@@ -125,7 +146,7 @@ export async function persistM5SuspiciousAssessmentWithCoverage(input: Readonly<
       asOf: request.asOf,
       requiredRuleIds: ruleSet.requiredRuleIds,
       evaluatedRuleIds: input.evaluation.evaluatedRuleIds,
-      materials: input.evaluation.materials,
+      materials: authoritativeMaterials,
       status: "COMPLETE",
       observedAt: lineage.observedAt,
       availableAt: lineage.effectiveAvailableAt,
