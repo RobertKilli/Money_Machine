@@ -25,6 +25,12 @@ export type M5SuspiciousAssessment = Readonly<{
   sourceLineageId: string;
   ruleSetVersion: string;
   ruleSetFingerprint: string;
+  /** Persisted authority bindings are required by the v2 application path. */
+  ruleSetAuthorityId?: string;
+  coverageAuthorityId?: string;
+  coverageFingerprint?: string;
+  evaluatedRuleCount?: number;
+  coverageStatus?: "COMPLETE";
   detectorVersion: string;
   coveredRuleIds: readonly string[];
   result: M5SuspiciousAssessmentResult;
@@ -113,6 +119,13 @@ function material(input: M5SuspiciousAssessmentInput): Omit<M5SuspiciousAssessme
   const asOf = timestamp(input.asOf, "M5_SUSPICIOUS_ASSESSMENT_AS_OF_INVALID");
   if (observedAt > availableAt || availableAt > asOf) throw new Error("M5_SUSPICIOUS_ASSESSMENT_TEMPORAL_ORDER_INVALID");
   const datasetPins = normalizeM5DatasetPins(input.datasetPins);
+  const ruleSetAuthorityId = input.ruleSetAuthorityId === undefined ? undefined : nonBlank(input.ruleSetAuthorityId, "M5_SUSPICIOUS_ASSESSMENT_RULE_SET_AUTHORITY_INVALID");
+  const coverageAuthorityId = input.coverageAuthorityId === undefined ? undefined : nonBlank(input.coverageAuthorityId, "M5_SUSPICIOUS_ASSESSMENT_COVERAGE_AUTHORITY_INVALID");
+  const coverageFingerprint = input.coverageFingerprint === undefined ? undefined : sha(input.coverageFingerprint, "M5_SUSPICIOUS_ASSESSMENT_COVERAGE_FINGERPRINT_INVALID");
+  const evaluatedRuleCount = input.evaluatedRuleCount === undefined ? undefined : input.evaluatedRuleCount;
+  const coverageStatus = input.coverageStatus;
+  if ((coverageAuthorityId === undefined) !== (coverageFingerprint === undefined) || (coverageAuthorityId === undefined) !== (evaluatedRuleCount === undefined) || (coverageAuthorityId !== undefined && coverageStatus !== "COMPLETE")) throw new Error("M5_SUSPICIOUS_ASSESSMENT_COVERAGE_BINDING_INCOMPLETE");
+  if (evaluatedRuleCount !== undefined && (!Number.isInteger(evaluatedRuleCount) || evaluatedRuleCount !== coveredRuleIds.length)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_EVALUATED_RULE_COUNT_INVALID");
   const primaryPin = `m5-pin/v1:${Buffer.from(JSON.stringify([nonBlank(input.providerId, "M5_SUSPICIOUS_ASSESSMENT_PROVIDER_INVALID"), nonBlank(input.datasetId, "M5_SUSPICIOUS_ASSESSMENT_DATASET_INVALID"), nonBlank(input.datasetVersion, "M5_SUSPICIOUS_ASSESSMENT_DATASET_VERSION_INVALID")]), "utf8").toString("base64url")}`;
   if (!datasetPins.includes(primaryPin)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_PIN_SCOPE_INVALID");
   return {
@@ -129,6 +142,11 @@ function material(input: M5SuspiciousAssessmentInput): Omit<M5SuspiciousAssessme
     sourceLineageId: nonBlank(input.sourceLineageId, "M5_SUSPICIOUS_ASSESSMENT_LINEAGE_INVALID"),
     ruleSetVersion: nonBlank(input.ruleSetVersion, "M5_SUSPICIOUS_ASSESSMENT_RULE_SET_INVALID"),
     ruleSetFingerprint: sha(input.ruleSetFingerprint, "M5_SUSPICIOUS_ASSESSMENT_RULE_SET_FINGERPRINT_INVALID"),
+    ruleSetAuthorityId,
+    coverageAuthorityId,
+    coverageFingerprint,
+    evaluatedRuleCount,
+    coverageStatus,
     detectorVersion: nonBlank(input.detectorVersion, "M5_SUSPICIOUS_ASSESSMENT_DETECTOR_INVALID"),
     coveredRuleIds,
     result,

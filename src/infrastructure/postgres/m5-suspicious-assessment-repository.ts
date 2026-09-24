@@ -7,11 +7,11 @@ import { createAssetMappingRevisionRepository } from "@/infrastructure/postgres/
 import { createProviderAssetIdentityReadRepository } from "@/infrastructure/postgres/provider-asset-identity-repository";
 import type { M5SuspiciousAssessmentRepositories, M5SuspiciousAssessmentUnitOfWork } from "@/application/intelligence/m5-suspicious-assessment-repository";
 import type { M5SuspiciousRuleSetAuthorityResolver } from "@/domain/intelligence/m5-suspicious-rule-set";
+import { createM5SuspiciousCoverageRepositories } from "@/infrastructure/postgres/m5-suspicious-coverage-repository";
 
 type RawRow = Record<string, unknown>;
 const text = (value: unknown, code: string): string => { if (typeof value !== "string" || !value.trim()) throw new Error(code); return value.trim(); };
 const timestamp = (value: unknown, code: string): string => { const result = value instanceof Date ? value.toISOString() : text(value, code); if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(result) || Number.isNaN(Date.parse(result)) || new Date(result).toISOString() !== result) throw new Error(code); return result; };
-const json = (value: unknown): string => JSON.stringify(value);
 const SHA = /^[a-f0-9]{64}$/;
 const array = (value: unknown, code: string): readonly string[] => { if (!Array.isArray(value)) throw new Error(code); return Object.freeze(value.map(item => text(item, code))); };
 const references = (value: unknown): readonly M5SuspiciousFindingReference[] => { if (!Array.isArray(value)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_ROW_FINDINGS_INVALID"); return Object.freeze(value.map(item => { if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_ROW_FINDINGS_INVALID"); const record = item as Record<string, unknown>; return Object.freeze({ evidenceId: text(record.evidenceId, "M5_SUSPICIOUS_ASSESSMENT_ROW_FINDING_ID_INVALID"), fingerprint: text(record.fingerprint, "M5_SUSPICIOUS_ASSESSMENT_ROW_FINDING_FINGERPRINT_INVALID") }); })); };
@@ -32,6 +32,11 @@ export function mapM5SuspiciousAssessmentRow(row: RawRow): M5SuspiciousAssessmen
     sourceLineageId: text(row.source_lineage_id, "M5_SUSPICIOUS_ASSESSMENT_ROW_LINEAGE_INVALID"),
     ruleSetVersion: text(row.rule_set_version, "M5_SUSPICIOUS_ASSESSMENT_ROW_RULE_SET_INVALID"),
     ruleSetFingerprint: text(row.rule_set_fingerprint, "M5_SUSPICIOUS_ASSESSMENT_ROW_RULE_SET_FINGERPRINT_INVALID"),
+    ...(row.rule_set_authority_id == null ? {} : { ruleSetAuthorityId: text(row.rule_set_authority_id, "M5_SUSPICIOUS_ASSESSMENT_ROW_RULE_SET_AUTHORITY_INVALID") }),
+    ...(row.coverage_authority_id == null ? {} : { coverageAuthorityId: text(row.coverage_authority_id, "M5_SUSPICIOUS_ASSESSMENT_ROW_COVERAGE_AUTHORITY_INVALID") }),
+    ...(row.coverage_fingerprint == null ? {} : { coverageFingerprint: text(row.coverage_fingerprint, "M5_SUSPICIOUS_ASSESSMENT_ROW_COVERAGE_FINGERPRINT_INVALID") }),
+    ...(row.evaluated_rule_count == null ? {} : { evaluatedRuleCount: Number(row.evaluated_rule_count) }),
+    ...(row.coverage_status == null ? {} : { coverageStatus: text(row.coverage_status, "M5_SUSPICIOUS_ASSESSMENT_ROW_COVERAGE_STATUS_INVALID") as "COMPLETE" }),
     detectorVersion: text(row.detector_version, "M5_SUSPICIOUS_ASSESSMENT_ROW_DETECTOR_INVALID"),
     coveredRuleIds: array(row.covered_rule_ids, "M5_SUSPICIOUS_ASSESSMENT_ROW_RULES_INVALID"),
     result: text(row.result, "M5_SUSPICIOUS_ASSESSMENT_ROW_RESULT_INVALID") as M5SuspiciousAssessment["result"],
@@ -64,7 +69,7 @@ function repositories(client: TransactionSql, ruleSets: M5SuspiciousRuleSetAutho
     },
     save: async (assessment: M5SuspiciousAssessment) => {
       assertM5SuspiciousAssessment(assessment);
-      await client`insert into public.eligibility_suspicious_assessments (suspicious_assessment_id,contract_version,fingerprint,provider_id,dataset_id,dataset_version,candidate_id,asset_id,canonical_identifier,asset_class,mapping_revision_id,source_lineage_id,rule_set_version,rule_set_fingerprint,detector_version,covered_rule_ids,result,finding_references,as_of,observed_at,available_at,source_record_ids,payload_fingerprint,dataset_pins,recorded_at) values (${assessment.suspiciousAssessmentId},${assessment.contractVersion},${assessment.fingerprint},${assessment.providerId},${assessment.datasetId},${assessment.datasetVersion},${assessment.candidateId},${assessment.assetId},${assessment.canonicalIdentifier},${assessment.assetClass},${assessment.mappingRevisionId},${assessment.sourceLineageId},${assessment.ruleSetVersion},${assessment.ruleSetFingerprint},${assessment.detectorVersion},${json(assessment.coveredRuleIds)}::jsonb,${assessment.result},${json(assessment.findingReferences)}::jsonb,${assessment.asOf},${assessment.observedAt},${assessment.availableAt},${json(assessment.sourceRecordIds)}::jsonb,${assessment.payloadFingerprint},${json(assessment.datasetPins)}::jsonb,${assessment.recordedAt}) on conflict (suspicious_assessment_id) do nothing`;
+      await client`insert into public.eligibility_suspicious_assessments (suspicious_assessment_id,contract_version,fingerprint,provider_id,dataset_id,dataset_version,candidate_id,asset_id,canonical_identifier,asset_class,mapping_revision_id,source_lineage_id,rule_set_version,rule_set_fingerprint,rule_set_authority_id,coverage_authority_id,coverage_fingerprint,evaluated_rule_count,coverage_status,detector_version,covered_rule_ids,result,finding_references,as_of,observed_at,available_at,source_record_ids,payload_fingerprint,dataset_pins,recorded_at) values (${assessment.suspiciousAssessmentId},${assessment.contractVersion},${assessment.fingerprint},${assessment.providerId},${assessment.datasetId},${assessment.datasetVersion},${assessment.candidateId},${assessment.assetId},${assessment.canonicalIdentifier},${assessment.assetClass},${assessment.mappingRevisionId},${assessment.sourceLineageId},${assessment.ruleSetVersion},${assessment.ruleSetFingerprint},${assessment.ruleSetAuthorityId ?? null},${assessment.coverageAuthorityId ?? null},${assessment.coverageFingerprint ?? null},${assessment.evaluatedRuleCount ?? null},${assessment.coverageStatus ?? null},${assessment.detectorVersion},${client.json(assessment.coveredRuleIds)},${assessment.result},${client.json(assessment.findingReferences)},${assessment.asOf},${assessment.observedAt},${assessment.availableAt},${client.json(assessment.sourceRecordIds)},${assessment.payloadFingerprint},${client.json(assessment.datasetPins)},${assessment.recordedAt}) on conflict (suspicious_assessment_id) do nothing`;
       const stored = await assessments.readById(assessment.suspiciousAssessmentId);
       if (!stored) throw new Error("M5_SUSPICIOUS_ASSESSMENT_REREAD_NOT_FOUND");
       if (stored.fingerprint !== assessment.fingerprint) throw new Error("M5_SUSPICIOUS_ASSESSMENT_CONFLICT");
@@ -105,7 +110,10 @@ function repositories(client: TransactionSql, ruleSets: M5SuspiciousRuleSetAutho
     if (JSON.stringify(members) !== JSON.stringify(assessment.findingReferences)) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MEMBER_SET_INVALID");
     return Object.freeze({ assessment, members });
   };
-  return Object.freeze({ assessments: { ...assessments, readSealedById }, memberships, findings, mappings: { readById: async (id: string) => { if (!mappingRepository.readById) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MAPPING_READER_INVALID"); return mappingRepository.readById(id); } }, lineages: { validateForRawEvidenceCreation: async (id: string) => { if (!lineageRepository.validateForRawEvidenceCreation) throw new Error("M5_SUSPICIOUS_ASSESSMENT_LINEAGE_READER_INVALID"); return lineageRepository.validateForRawEvidenceCreation(id); }, readMembers: lineageRepository.readMembers }, ruleSets });
+  const authorityRepositories = createM5SuspiciousCoverageRepositories(client);
+  const coverage = authorityRepositories.coverage;
+  const persistedRuleSets = Object.freeze({ ...ruleSets, readById: authorityRepositories.ruleSets.readById, save: authorityRepositories.ruleSets.save });
+  return Object.freeze({ assessments: { ...assessments, readSealedById }, memberships, findings, mappings: { readById: async (id: string) => { if (!mappingRepository.readById) throw new Error("M5_SUSPICIOUS_ASSESSMENT_MAPPING_READER_INVALID"); return mappingRepository.readById(id); } }, lineages: { validateForRawEvidenceCreation: async (id: string) => { if (!lineageRepository.validateForRawEvidenceCreation) throw new Error("M5_SUSPICIOUS_ASSESSMENT_LINEAGE_READER_INVALID"); return lineageRepository.validateForRawEvidenceCreation(id); }, readMembers: lineageRepository.readMembers, readMemberAuthorities: lineageRepository.readMemberAuthorities }, ruleSets: persistedRuleSets, coverage });
 }
 
 export function createM5SuspiciousAssessmentUnitOfWork(client: Sql, ruleSets: M5SuspiciousRuleSetAuthorityResolver): M5SuspiciousAssessmentUnitOfWork {

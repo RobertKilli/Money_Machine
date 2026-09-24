@@ -10,6 +10,6 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/financial/**/*.test.ts", "tests/diagnostics/**/*.test.ts"],
+    include: ["tests/financial/**/*.test.ts", "tests/diagnostics/**/*.test.ts", "tests/integration/m5-suspicious-coverage-authority.test.ts"],
   },
 });

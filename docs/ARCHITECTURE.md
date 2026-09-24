@@ -395,3 +395,16 @@ the existing manifest contract cannot distinguish it from missing evidence.
 This slice does not change evaluator thresholds or produce suspicious,
 canonical or scheduled output; provider completeness and legal approval remain
 external blockers.
+
+### M5 suspicious rule-set and coverage authority
+
+Suspicious assessment authority is separated into an immutable versioned rule
+set and an immutable coverage proof. A `NO_FINDINGS` or `FINDINGS_PRESENT`
+assessment is authoritative only when every required rule has been evaluated
+against an exact, sealed `COMPLETED` SourceLineage material set. Incomplete,
+unsupported or mixed coverage never becomes `CLEAN` and does not produce a
+provisional assessment in v1. Rule-set and coverage records are persisted
+server-side with deterministic fingerprints, authoritative rereads and
+append-only replay/conflict semantics in one transaction boundary. This slice
+does not add detection algorithms or live provider access; production and legal
+approval remain separate gates.
