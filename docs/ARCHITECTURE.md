@@ -417,3 +417,41 @@ authority keys and fingerprints; callers cannot substitute parallel arrays or
 unbound material. An assessment has a composite foreign key to the exact
 persisted `COMPLETE` coverage scope, so an application-side status declaration
 cannot turn incomplete coverage into an authoritative clean result.
+
+### M5 provider readiness gate
+
+`m5-provider-readiness-config/v1` is a strict, immutable, secret-safe
+configuration for one provider/dataset scope. It separates technical
+capability (`SUPPORTED` plus an explicit completeness level) from usage
+approval (`APPROVED`, `REQUIRES_APPROVAL`, `REJECTED` or `EXPIRED`). Network
+acquisition, raw payload processing/storage, normalized storage, authority
+persistence, redistribution and commercial use are independent decisions.
+Documentation is evidence for review, not an automatic legal approval.
+
+The pure evaluator is fail-closed: missing or partial daily/market/liquidity,
+holder, venue, suspicious or canonical-identity capability blocks readiness;
+top-N/sample material cannot prove a complete universe; and unapproved raw,
+commercial or redistribution use remains blocked. The current CoinGecko-like
+and Etherscan-like adapters are deterministic fixture parsers only. They do
+not prove live completeness, legal permission, canonical identity or
+redistribution rights. Holder and venue completeness, zero-venue semantics and
+complete suspicious coverage therefore remain explicit blockers.
+
+The readiness CLI is read-only and performs no provider, database or credential
+access. A future network executor must call the readiness guard before opening
+any request; `READY` is necessary but not sufficient for execution. Review
+references and terms must be revisited when provider documentation, plans or
+terms change or expire. The next separate slice is
+`feat/m5-provider-execution-boundary`.
+
+The readiness review performed 2026-09-25 used only official public sources:
+CoinGecko API documentation and market-data/pricing pages
+(`https://www.coingecko.com/en/api`,
+`https://www.coingecko.com/en/api/pricing`), CoinGecko API Terms
+(`https://www.coingecko.com/en/api_terms`), Etherscan API samples and limits
+(`https://api.etherscan.io/apis`, `https://info.etherscan.com/etherscan-developer-api-key/`),
+and Etherscan API Terms (`https://etherscan.io/apiterms`). These sources
+describe endpoints and plan/rate-limit or usage restrictions; they do not
+constitute a legal approval for this product. Commercial use, retention and
+redistribution remain `REQUIRES_APPROVAL` unless a human review records an
+applicable plan and written permission.
