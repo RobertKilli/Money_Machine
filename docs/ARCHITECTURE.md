@@ -486,19 +486,19 @@ plan must preserve the initial scope, request shape, credential reference,
 limits, retry policy, cursor key and maximum page count; only the page ordinal
 and the validated cursor query value may change.
 
-The current implementation has no live HTTP client, scheduler, credential store,
-database write path or provider approval. CoinGecko, Etherscan and holder
-integration is proven only through synthetic fixture transports and existing
-strict parsers. Live execution remains blocked until the readiness gates and a
-separate production execution review are approved.
+The implementation now includes a server-only bounded HTTP client and late
+credential resolver for the modeled CoinGecko and Etherscan calls, plus the
+existing synthetic fixture transport. It has no scheduler, database write
+path or production provider approval. Production live execution remains
+blocked by readiness and the empty approval registry.
 
 ### M5 provider fixture replay integration
 
 `m5-provider-fixture-replay/v1` composes the readiness-gated execution boundary,
 the existing CoinGecko/Etherscan fixture parsers, the normalized source-package
 projection and the manual-ingestion dry-run planner. The integration accepts
-only injected synthetic transport bytes. It performs no live HTTP setup,
-credential lookup implementation, database transaction or persistence write.
+only injected synthetic transport bytes. It performs no database transaction
+or persistence write.
 
 The transport receipt is authoritative for availability and must match the
 strict fixture receipt exactly. Provider, dataset, version, namespace, asset and
@@ -556,3 +556,51 @@ The config
 and aggregate config
 [`config/m5/provider-readiness.aggregate.production.json`](../config/m5/provider-readiness.aggregate.production.json)
 evaluate `BLOCKED`. No provider or combination is production READY.
+
+### M5 server-only live acquisition
+
+`executeM5ProviderLiveAcquisition()` composes the existing deterministic
+request plan, readiness aggregate, approval resolver and provider execution
+boundary. Its flow is request planning, readiness/approval authorization,
+credential resolution, bounded HTTP receipt, strict provider-response parsing,
+and projection through the existing fixture adapter into
+`m5-normalized-source-package/v1`. Persistence remains a separate future
+phase: this service has no repository, unit of work, database, scheduler or
+canonical production write path.
+
+The service accepts only modeled CoinGecko market-chart ranges and Etherscan
+V2 Ethereum contract-creation and verification requests. Plans contain fixed
+HTTPS hosts, paths, query fields and non-secret credential references. The
+CoinGecko adapter uses `/api/v3/coins/{id}/market_chart/range` with `vs_currency`,
+`from`, `to` and `interval`; it does not claim complete liquidity coverage or
+substitute FDV for market cap. Etherscan uses `/v2/api`, `chainid=1`, and only
+the `getcontractcreation` and `getsourcecode` contract actions. Empty/error
+status and ambiguous proxy outcomes remain UNKNOWN; this data does not establish
+holder completeness or finality. Contract references follow the official
+[CoinGecko market-chart range API](https://docs.coingecko.com/reference/coins-id-market-chart-range),
+[CoinGecko authentication guidance](https://docs.coingecko.com/reference/authentication),
+[Etherscan contract-creation API](https://docs.etherscan.io/api-reference/endpoint/getcontractcreation),
+[Etherscan source-code API](https://docs.etherscan.io/api-reference/endpoint/getsourcecode),
+and [Etherscan rate-limit guidance](https://docs.etherscan.io/rate-limits), but
+that documentation is not commercial approval.
+
+Only after an authentic aggregate READY and matching authenticated authority
+for `NETWORK_ACQUISITION` and `RAW_PAYLOAD_PROCESSING` at caller-supplied
+canonical `asOf` can execution resolve a credential. The resolver maps a
+non-secret reference to a server environment variable at that final boundary;
+credentials are never included in plans, fingerprints, logs or domain errors.
+Dry-run CLI mode parses configuration and reports the sanitized plan without
+opening the resolver or HTTP transport. `--execute` uses the same gates and
+fails before either boundary for the current production configuration because
+the production approval registry is empty and readiness is BLOCKED.
+
+HTTP is GET-only, HTTPS-only, pinned to allowlisted hosts and fixed request
+shapes, rejects redirects, bounds streamed response bytes and time, and applies
+deterministic retry, Retry-After limits, page limits and an in-process rate
+lease. Response bytes are untrusted, size/content type/UTF-8/JSON checked, and
+are not logged or persisted. Only strict parser output reaches the adapter
+projection. Payload fingerprints exclude receipt time; receipt and availability
+continue through provenance and lineage inputs. Current provider responses do
+not establish market/liquidity universe completeness, holder completeness,
+verification beyond the provider's classification, legal approval, or
+canonical M5 production readiness.

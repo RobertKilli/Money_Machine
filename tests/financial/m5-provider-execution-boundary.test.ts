@@ -43,7 +43,7 @@ function plan(overrides: Record<string, unknown> = {}): M5ProviderExecutionPlan 
     requiredCapabilities: [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }],
     requestedUsages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"],
     credential: { kind: "API_KEY", reference: "coingecko-primary" },
-    request: { method: "GET", hostname: "api.coingecko.com", path: "/api/v3/coins/ethereum/market_chart/range", query: [{ key: "contract_address", value: "0x1111111111111111111111111111111111111111" }, { key: "from", value: "1760000000" }, { key: "interval", value: "daily" }, { key: "to", value: "1760086400" }, { key: "vs_currency", value: "usd" }] },
+    request: { method: "GET", hostname: "pro-api.coingecko.com", path: "/api/v3/coins/ethereum/market_chart/range", query: [{ key: "from", value: "1760000000" }, { key: "interval", value: "daily" }, { key: "to", value: "1760086400" }, { key: "vs_currency", value: "usd" }] },
     limits: { timeoutMs: 10_000, maxResponseBytes: 1024 },
     retry: { maxAttempts: 3, totalBudgetMs: 10_000, maxRetryAfterMs: 500 },
     ...overrides,
@@ -179,7 +179,7 @@ describe("M5 provider execution boundary", () => {
   it("accepts existing adapter plans without creating a parallel request format", () => {
     const adapterPlan = buildCoinGeckoMarketRequestPlan({ coinId: "ethereum", contractAddress: "0x1111111111111111111111111111111111111111", from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z" });
     const executionPlan = requestPlanFromAdapterPlan({ plan: adapterPlan, requiredCapabilities: [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }], credential: { kind: "API_KEY", reference: "coingecko-fixture" } });
-    expect(executionPlan.request.hostname).toBe("api.coingecko.com");
+    expect(executionPlan.request.hostname).toBe("pro-api.coingecko.com");
     expect(executionPlan.request.method).toBe("GET");
     expect(() => parseCoinGeckoFixture({ providerId: "coingecko", datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/v1", network: "eth", contractAddress: "0x1111111111111111111111111111111111111111", coinId: "ethereum", receipt: { receivedAt: "2026-01-02T00:00:00.000Z" }, prices: [{ timestamp: 1760000000000, price: "1" }], marketCaps: [{ timestamp: 1760000000000, price: "2" }], totalVolumes: [{ timestamp: 1760000000000, price: "3" }], pools: [] })).not.toThrow();
     expect(parseEtherscanFixture({ providerId: "etherscan", datasetId: "etherscan-contract-authority", datasetVersion: "etherscan-api-v2/v1", chainid: "1", address: "0x1111111111111111111111111111111111111111", receipt: { receivedAt: "2026-01-02T00:00:00.000Z" }, creation: { blockNumber: "100", blockHash: `0x${"a".repeat(64)}`, timestamp: 1760000000000 }, sourceCode: { status: "VERIFIED", proxy: false }, apiStatus: "1", apiMessage: "OK" }).verification.state).toBe("VERIFIED");

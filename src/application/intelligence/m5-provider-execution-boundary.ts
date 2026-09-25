@@ -208,8 +208,8 @@ const exact = (value: Obj, allowed: readonly string[], code: string): void => {
 };
 
 const allowlistFor = (providerId: string): Readonly<{ host: string; pathPrefix: string; queryKeys: readonly string[] }> => {
-  if (providerId === "coingecko") return { host: "api.coingecko.com", pathPrefix: "/api/v3/coins/", queryKeys: ["contract_address", "cursor", "from", "interval", "to", "vs_currency"] };
-  if (providerId === "etherscan") return { host: "api.etherscan.io", pathPrefix: "/v2/api", queryKeys: ["action", "address", "chainid", "module"] };
+  if (providerId === "coingecko") return { host: "pro-api.coingecko.com", pathPrefix: "/api/v3/coins/", queryKeys: ["contract_address", "cursor", "from", "interval", "to", "vs_currency"] };
+  if (providerId === "etherscan") return { host: "api.etherscan.io", pathPrefix: "/v2/api", queryKeys: ["action", "address", "chainid", "contractaddresses", "module"] };
   throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PROVIDER_UNREGISTERED");
 };
 
@@ -244,6 +244,30 @@ const validateCursor = (value: unknown): string => {
   if (typeof value !== "string" || value.length === 0 || value.length > 512 || value.trim() !== value || /[\u0000-\u001f\u007f?&#=]/.test(value) || /^https?:\/\//i.test(value)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CURSOR_INVALID");
   return value;
 };
+
+function validateProviderRequestShape(providerId: string, path: string, query: readonly M5ProviderQueryParameter[], pagination: unknown): void {
+  const values = new Map(query.map(item => [item.key, item.value]));
+  const page = pagination === undefined ? undefined : pagination as Record<string, unknown>;
+  if (providerId === "coingecko") {
+    if (!/^\/api\/v3\/coins\/[a-z0-9][a-z0-9-]{0,127}\/market_chart\/range$/.test(path) || values.get("vs_currency") !== "usd" || values.get("interval") !== "daily" || !/^\d+$/.test(values.get("from") ?? "") || !/^\d+$/.test(values.get("to") ?? "")) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_REQUEST_SCOPE_INVALID");
+    const base = ["from", "interval", "to", "vs_currency"];
+    const keys = query.map(item => item.key).sort(stableCompare);
+    const initialKeys = [...base].sort(stableCompare);
+    const pagedKeys = page === undefined ? [] : [...base, String(page.cursorKey)].sort(stableCompare);
+    if (keys.join("\u0000") !== initialKeys.join("\u0000") && keys.join("\u0000") !== pagedKeys.join("\u0000")) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_QUERY_SCOPE_INVALID");
+    if (page && page.cursorKey !== "cursor") throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGINATION_INVALID");
+    return;
+  }
+  if (providerId === "etherscan") {
+    if (path !== "/v2/api" || values.get("chainid") !== "1" || values.get("module") !== "contract") throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_REQUEST_SCOPE_INVALID");
+    const action = values.get("action");
+    const creation = action === "getcontractcreation" && values.has("contractaddresses") && !values.has("address");
+    const source = action === "getsourcecode" && values.has("address") && !values.has("contractaddresses");
+    const addressValue = values.get(creation ? "contractaddresses" : "address");
+    const expected = creation ? ["action", "chainid", "contractaddresses", "module"] : ["action", "address", "chainid", "module"];
+    if ((!creation && !source) || !/^0x[0-9a-f]{40}$/.test(addressValue ?? "") || query.map(item => item.key).sort(stableCompare).join("\u0000") !== expected.sort(stableCompare).join("\u0000")) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_QUERY_SCOPE_INVALID");
+  }
+}
 
 export function validateM5ProviderExecutionPlan(input: unknown): M5ProviderExecutionPlan {
   try {
@@ -296,6 +320,7 @@ export function validateM5ProviderExecutionPlan(input: unknown): M5ProviderExecu
       exact(item, ["pageOrdinal", "maxPages", "cursorKey"], "M5_PROVIDER_EXECUTION_PAGINATION_INVALID");
       return freeze({ pageOrdinal: integer(item.pageOrdinal, "M5_PROVIDER_EXECUTION_PAGINATION_INVALID", 0, 10_000), maxPages: integer(item.maxPages, "M5_PROVIDER_EXECUTION_PAGINATION_INVALID", 1, 100), cursorKey: nonBlank(item.cursorKey, "M5_PROVIDER_EXECUTION_PAGINATION_INVALID", 64) });
     })();
+    validateProviderRequestShape(providerId, path, query, pagination);
     return freeze({ planVersion: M5_PROVIDER_EXECUTION_PLAN_VERSION, policyVersion: M5_PROVIDER_EXECUTION_POLICY_VERSION, providerId, datasetId, datasetVersion, providerSourceNamespace, adapterContractVersion, parserContractVersion, requiredCapabilities: freeze(stableSort(capabilities, item => `${item.capability}:${item.completeness}`)), requestedUsages: freeze([...usages].sort(stableCompare)), credential: freeze({ kind: credential.kind, reference: credentialReference }), request: freeze({ method: "GET" as const, hostname, path, query }), limits: freeze({ timeoutMs, maxResponseBytes }), retry: retryPolicy, ...(pagination === undefined ? {} : { pagination }) });
   } catch (error) {
     if (error instanceof M5ProviderInfrastructureError) throw error;
@@ -323,7 +348,7 @@ export function providerPlanFingerprint(plan: M5ProviderExecutionPlan): string {
 }
 
 export function requestPlanFromAdapterPlan(input: Readonly<{ plan: Readonly<{ providerId: string; datasetId: string; datasetVersion: string; providerSourceNamespace: string; adapterContractVersion: string; parserContractVersion: string; endpointPath: string; query: Readonly<Record<string, string>> }>; requiredCapabilities: readonly ProviderCapabilityRequirement[]; credential: M5CredentialReference; limits?: Partial<M5ProviderExecutionPlan["limits"]>; retry?: Partial<M5RetryPolicy> }>): M5ProviderExecutionPlan {
-  return validateM5ProviderExecutionPlan({ planVersion: M5_PROVIDER_EXECUTION_PLAN_VERSION, policyVersion: M5_PROVIDER_EXECUTION_POLICY_VERSION, providerId: input.plan.providerId, datasetId: input.plan.datasetId, datasetVersion: input.plan.datasetVersion, providerSourceNamespace: input.plan.providerSourceNamespace, adapterContractVersion: input.plan.adapterContractVersion, parserContractVersion: input.plan.parserContractVersion, requiredCapabilities: input.requiredCapabilities, requestedUsages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"], credential: input.credential, request: { method: "GET", hostname: input.plan.providerId === "coingecko" ? "api.coingecko.com" : "api.etherscan.io", path: input.plan.endpointPath, query: Object.entries(input.plan.query).map(([key, value]) => ({ key, value })) }, limits: { timeoutMs: input.limits?.timeoutMs ?? 30_000, maxResponseBytes: input.limits?.maxResponseBytes ?? 1_000_000 }, retry: { maxAttempts: input.retry?.maxAttempts ?? 3, totalBudgetMs: input.retry?.totalBudgetMs ?? 30_000, maxRetryAfterMs: input.retry?.maxRetryAfterMs ?? 10_000 } });
+  return validateM5ProviderExecutionPlan({ planVersion: M5_PROVIDER_EXECUTION_PLAN_VERSION, policyVersion: M5_PROVIDER_EXECUTION_POLICY_VERSION, providerId: input.plan.providerId, datasetId: input.plan.datasetId, datasetVersion: input.plan.datasetVersion, providerSourceNamespace: input.plan.providerSourceNamespace, adapterContractVersion: input.plan.adapterContractVersion, parserContractVersion: input.plan.parserContractVersion, requiredCapabilities: input.requiredCapabilities, requestedUsages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"], credential: input.credential, request: { method: "GET", hostname: input.plan.providerId === "coingecko" ? "pro-api.coingecko.com" : "api.etherscan.io", path: input.plan.endpointPath, query: Object.entries(input.plan.query).map(([key, value]) => ({ key, value })) }, limits: { timeoutMs: input.limits?.timeoutMs ?? 30_000, maxResponseBytes: input.limits?.maxResponseBytes ?? 1_000_000 }, retry: { maxAttempts: input.retry?.maxAttempts ?? 3, totalBudgetMs: input.retry?.totalBudgetMs ?? 30_000, maxRetryAfterMs: input.retry?.maxRetryAfterMs ?? 10_000 } });
 }
 
 async function boundedBody(body: Uint8Array | AsyncIterable<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
@@ -346,12 +371,14 @@ async function boundedBody(body: Uint8Array | AsyncIterable<Uint8Array>, maxByte
 
 const header = (headers: Readonly<Record<string, string>>, key: string): string | undefined => Object.entries(headers).find(([name]) => name.toLowerCase() === key)?.[1];
 
-function retryAfterMs(headers: Readonly<Record<string, string>>, max: number): number {
+function retryAfterMs(headers: Readonly<Record<string, string>>, max: number, nowMs: number): number {
   const value = header(headers, "retry-after");
   if (value === undefined) return 0;
   const seconds = Number(value);
-  if (!Number.isFinite(seconds) || seconds < 0) return 0;
-  return Math.min(Math.floor(seconds * 1000), max);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(Math.floor(seconds * 1000), max);
+  const retryAt = Date.parse(value);
+  if (!Number.isFinite(retryAt) || !Number.isFinite(nowMs)) return 0;
+  return Math.min(Math.max(0, retryAt - nowMs), max);
 }
 
 export function createNoopM5ProviderRateLimitLease(): M5ProviderRateLimitLease {
@@ -397,7 +424,7 @@ export async function executeM5ProviderPlan(input: Readonly<{
       throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_TRANSPORT_FAILED");
     }
     if (response.status >= 300 && response.status < 400) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_REDIRECT_REJECTED");
-    if (RETRY_STATUSES.has(response.status) && attempt < plan.retry.maxAttempts) { lastRetryable = `HTTP_${response.status}`; await sleep(retryAfterMs(response.headers, plan.retry.maxRetryAfterMs)); continue; }
+    if (RETRY_STATUSES.has(response.status) && attempt < plan.retry.maxAttempts) { lastRetryable = `HTTP_${response.status}`; await sleep(retryAfterMs(response.headers, plan.retry.maxRetryAfterMs, Date.parse(now()))); continue; }
     if (response.status < 200 || response.status >= 300) throw new M5ProviderInfrastructureError(`M5_PROVIDER_HTTP_${response.status}`);
     const contentType = header(response.headers, "content-type");
     if (response.status !== 204 && (contentType === undefined || !/^application\/json(?:\s*;|$)/i.test(contentType))) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CONTENT_TYPE_REJECTED");
