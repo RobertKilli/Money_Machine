@@ -29,6 +29,7 @@ const idPattern = /^[a-z0-9][a-z0-9._:/-]{0,255}$/;
 const shaPattern = /^[a-f0-9]{64}$/;
 const timePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const badText = /(?:https?:\/\/|[?#]|api[-_]?key|authorization|cookie|credential|password|secret|token|private[-_]?key|email|phone|address|raw[-_]?payload|terms[-_]?text)/i;
+const hostLike = /(?:^|\/)(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/|$)/i;
 const material = (a: Omit<M5ProviderApprovalAuthority, "approvalAuthorityId" | "approvalAuthorityFingerprint" | "recordedAt">) => a;
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 const freeze = <T>(value: T): T => {
@@ -45,6 +46,7 @@ function dataTree(value: unknown, seen = new WeakSet<object>()): void {
   seen.add(value);
   if (Object.getOwnPropertySymbols(value).length) fail("M5_APPROVAL_SYMBOL_FIELD");
   if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) fail("M5_APPROVAL_ARRAY_SHAPE_INVALID");
     const names = Object.getOwnPropertyNames(value);
     if (names.length !== value.length + 1 || names.some(k => k !== "length" && (!/^(0|[1-9]\d*)$/.test(k) || Number(k) >= value.length))) fail("M5_APPROVAL_ARRAY_SHAPE_INVALID");
     for (let i = 0; i < value.length; i++) {
@@ -71,7 +73,7 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 function text(value: unknown, pattern: RegExp = idPattern): string {
-  if (typeof value !== "string" || value.trim() !== value || !pattern.test(value) || badText.test(value)) fail("M5_APPROVAL_TEXT_INVALID");
+  if (typeof value !== "string" || value.trim() !== value || !pattern.test(value) || badText.test(value) || hostLike.test(value)) fail("M5_APPROVAL_TEXT_INVALID");
   return value;
 }
 function time(value: unknown): string {
@@ -82,7 +84,7 @@ function parseEvidence(value: unknown): readonly M5ProviderApprovalReference[] {
   if (!Array.isArray(value)) fail("M5_APPROVAL_EVIDENCE_INVALID");
   const rows = value.map(item => {
     const row = record(item); exact(row, ["kind", "value"]);
-    if (row.kind === "IDENTIFIER" && typeof row.value === "string" && /^(?:review|evidence)\/[a-z0-9._/-]{1,240}$/.test(row.value) && !badText.test(row.value)) return freeze({ kind: "IDENTIFIER" as const, value: row.value });
+    if (row.kind === "IDENTIFIER" && typeof row.value === "string" && /^(?:review|evidence)\/[a-z0-9._/-]{1,240}$/.test(row.value) && !badText.test(row.value) && !hostLike.test(row.value)) return freeze({ kind: "IDENTIFIER" as const, value: row.value });
     if (row.kind === "SHA256" && typeof row.value === "string" && shaPattern.test(row.value)) return freeze({ kind: "SHA256" as const, value: row.value });
     return fail("M5_APPROVAL_EVIDENCE_INVALID");
   }).sort((a, b) => cmp(`${a.kind}:${a.value}`, `${b.kind}:${b.value}`));

@@ -136,6 +136,7 @@ function assertAggregateEvaluationInput(input: unknown, fields: readonly string[
   const value = input as Record<string, unknown>;
   if (typeof value.evaluatedAt !== "string" || !Array.isArray(value.sources)) throw new Error("M5_AGGREGATE_EVALUATION_INPUT_INVALID");
   const sources = value.sources as unknown[];
+  if (Object.getPrototypeOf(sources) !== Array.prototype) throw new Error("M5_AGGREGATE_EVALUATION_INPUT_INVALID");
   const names = Object.getOwnPropertyNames(sources);
   if (Object.getOwnPropertySymbols(sources).length || names.length !== sources.length + 1 || names.some(key => key !== "length" && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= sources.length))) throw new Error("M5_AGGREGATE_EVALUATION_INPUT_INVALID");
   for (let index = 0; index < sources.length; index += 1) {

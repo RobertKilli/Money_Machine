@@ -171,6 +171,7 @@ describe("M5 provider readiness aggregate", () => {
     expect(() => parseM5ProviderApprovalAuthority({ ...row, usageDecisions: decisions.map((item, index) => index ? item : { ...item, evidence: [] }) })).toThrow("M5_APPROVAL_EVIDENCE_REQUIRED");
     expect(() => parseM5ProviderApprovalAuthority({ ...row, retentionDecision: { decision: "APPROVED", evidence: [{ kind: "IDENTIFIER", value: "review/license clause: copied full text" }] } })).toThrow("M5_APPROVAL_EVIDENCE_INVALID");
     expect(() => parseM5ProviderApprovalAuthority({ ...row, retentionDecision: { decision: "APPROVED", evidence: [{ kind: "IDENTIFIER", value: "review/https://vendor.example/license" }] } })).toThrow("M5_APPROVAL_EVIDENCE_INVALID");
+    expect(() => parseM5ProviderApprovalAuthority({ ...row, retentionDecision: { decision: "APPROVED", evidence: [{ kind: "IDENTIFIER", value: "review/vendor.example/license" }] } })).toThrow("M5_APPROVAL_EVIDENCE_INVALID");
     expect(() => parseM5ProviderApprovalAuthority({ ...row, retentionDecision: { decision: "APPROVED", evidence: [{ kind: "SHA256", value: "A".repeat(64) }] } })).toThrow("M5_APPROVAL_EVIDENCE_INVALID");
     const sparseEvidence = new Array(1);
     expect(() => parseM5ProviderApprovalAuthority({ ...row, retentionDecision: { decision: "UNKNOWN", evidence: sparseEvidence } })).toThrow("M5_APPROVAL_ARRAY_SHAPE_INVALID");
@@ -219,8 +220,24 @@ describe("M5 provider readiness aggregate", () => {
     expect(resolver.isTrusted(structuredClone(resolution))).toBe(false);
     expect(otherResolver.isTrusted(resolution)).toBe(false);
     expect(Object.isFrozen(resolution)).toBe(true);
+    const alteredArrayPrototype = [entry]; Object.setPrototypeOf(alteredArrayPrototype, { map: Array.prototype.map });
+    expect(() => createM5ProviderApprovalAuthorityResolver({ contractVersion: "m5-provider-approval-authority-registry/v1", entries: alteredArrayPrototype, authorities: [authority] })).toThrow("M5_APPROVAL_REGISTRY_INVALID");
     expect(resolver.resolve({ approvalAuthorityId: authority.approvalAuthorityId, approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint,
       providerId: authority.providerId, datasetId: authority.datasetId, datasetVersion: authority.datasetVersion, asOf: "2026-09-25T11:59:59.999Z" }).result).toBe("BLOCKED");
+    const futureReviewed = createM5ProviderApprovalAuthority({
+      contractVersion: "m5-provider-approval-authority/v1", policyVersion: "m5-provider-approval-policy/v1", authorityVersion: "review/v2",
+      providerId: authority.providerId, datasetId: authority.datasetId, datasetVersion: authority.datasetVersion,
+      reviewedAt: "2026-09-26T12:00:00.000Z", effectiveFrom: "2026-09-26T12:00:00.000Z", expiresAt: expiry,
+      recordedAt: now, usageDecisions: authority.usageDecisions, retentionDecision: authority.retentionDecision,
+    });
+    const futureReviewedResolver = createM5ProviderApprovalAuthorityResolver({ contractVersion: "m5-provider-approval-authority-registry/v1",
+      entries: [{ approvalAuthorityId: futureReviewed.approvalAuthorityId, approvalAuthorityFingerprint: futureReviewed.approvalAuthorityFingerprint,
+        providerId: futureReviewed.providerId, datasetId: futureReviewed.datasetId, datasetVersion: futureReviewed.datasetVersion }], authorities: [futureReviewed] });
+    expect(futureReviewedResolver.resolve({ approvalAuthorityId: futureReviewed.approvalAuthorityId,
+      approvalAuthorityFingerprint: futureReviewed.approvalAuthorityFingerprint, providerId: futureReviewed.providerId,
+      datasetId: futureReviewed.datasetId, datasetVersion: futureReviewed.datasetVersion, asOf: now })).toMatchObject({
+        result: "BLOCKED", blockers: ["M5_APPROVAL_AUTHORITY_NOT_REVIEWED"],
+      });
     expect(resolver.resolve({ approvalAuthorityId: authority.approvalAuthorityId, approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint,
       providerId: authority.providerId, datasetId: authority.datasetId, datasetVersion: authority.datasetVersion, asOf: expiry }).result).toBe("BLOCKED");
     expect(resolver.resolve({ approvalAuthorityId: authority.approvalAuthorityId, approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint,

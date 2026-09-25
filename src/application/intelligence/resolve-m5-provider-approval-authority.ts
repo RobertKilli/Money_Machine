@@ -26,7 +26,7 @@ export type M5ProviderApprovalAuthorityRequest = Readonly<{
 
 const cmp = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 const timestamp = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-const safeId = (value: unknown): value is string => typeof value === "string" && /^[a-z0-9][a-z0-9._:/-]{0,255}$/.test(value) && !/(?:api[-_]?key|credential|password|secret|token|private[-_]?key|email|phone)/i.test(value);
+const safeId = (value: unknown): value is string => typeof value === "string" && /^[a-z0-9][a-z0-9._:/-]{0,255}$/.test(value) && !/(?:api[-_]?key|credential|password|secret|token|private[-_]?key|email|phone)/i.test(value) && !/(?:^|\/)(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/|$)/i.test(value);
 const sha = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const freeze = <T>(value: T): T => {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -51,7 +51,7 @@ function exact(record: Record<string, unknown>, fields: readonly string[]): void
   if (Object.keys(record).some(key => !fields.includes(key)) || fields.some(key => key in record && !Object.hasOwn(record, key))) fail("M5_APPROVAL_REGISTRY_INVALID");
 }
 function safeArray(value: unknown): value is readonly unknown[] {
-  if (!Array.isArray(value) || Object.getOwnPropertySymbols(value).length) return false;
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length) return false;
   const names = Object.getOwnPropertyNames(value);
   if (names.length !== value.length + 1 || names.some(k => k !== "length" && (!/^(0|[1-9]\d*)$/.test(k) || Number(k) >= value.length))) return false;
   for (let i = 0; i < value.length; i++) { const d = Object.getOwnPropertyDescriptor(value, String(i)); if (!d?.enumerable || !("value" in d)) return false; }
@@ -116,7 +116,9 @@ export function createM5ProviderApprovalAuthorityResolver(registryInput: unknown
       else {
         authority = registry.authorities.find(item => item.approvalAuthorityId === entry.approvalAuthorityId);
         if (!authority) blockers.add("M5_APPROVAL_AUTHORITY_MISSING");
-        else if (authority.effectiveFrom > asOf || (authority.expiresAt !== undefined && authority.expiresAt <= asOf)) blockers.add("M5_APPROVAL_AUTHORITY_EXPIRED");
+        else if (asOf < authority.reviewedAt) blockers.add("M5_APPROVAL_AUTHORITY_NOT_REVIEWED");
+        else if (asOf < authority.effectiveFrom) blockers.add("M5_APPROVAL_AUTHORITY_NOT_YET_EFFECTIVE");
+        else if (authority.expiresAt !== undefined && authority.expiresAt <= asOf) blockers.add("M5_APPROVAL_AUTHORITY_EXPIRED");
         else result = "RESOLVED";
       }
     } catch { authority = undefined; result = "INVALID"; blockers.add("M5_APPROVAL_AUTHORITY_INVALID"); }
