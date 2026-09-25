@@ -522,9 +522,16 @@ The official-source assessment, capability matrix, candidate-stack costs and
 remaining technical/legal decisions are maintained in
 [`M5_PROVIDER_SOURCE_DECISION.md`](M5_PROVIDER_SOURCE_DECISION.md). The current
 machine-readable decision is scoped only to CoinGecko's market-chart
-provider/dataset/version; it is not a combined stack config. The existing
-readiness contract is single-scope, so system-wide production readiness stays
-blocked until a reviewed aggregate contract composes provider-specific results.
+provider/dataset/version; it remains the single-scope contract. The separate
+`m5-provider-readiness-aggregate/v1` contract binds exact authenticated
+single-scope evaluations to provider/dataset/version references, composes
+capabilities only with explicit `ALL_OF` assignments, and reviews eight usage
+permissions independently for each source. Capability availability,
+completeness authority, usage/legal approval and execution authorization are
+separate decisions. Aggregate READY requires complete evidence and approvals
+for every source in the composed stack; it cannot promote partial evidence.
 The config
 [`config/m5/provider-readiness.production.json`](../config/m5/provider-readiness.production.json)
-evaluates `BLOCKED`; it contains no usage approvals.
+and aggregate config
+[`config/m5/provider-readiness.aggregate.production.json`](../config/m5/provider-readiness.aggregate.production.json)
+evaluate `BLOCKED`. No provider or combination is production READY.

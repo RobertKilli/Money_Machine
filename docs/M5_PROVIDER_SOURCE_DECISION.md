@@ -133,9 +133,20 @@ Every item below must be completed in a separately scoped, approved phase:
 3. M5 adapters exist for the selected provider data and pass strict fixture tests, malformed/unknown-field rejection, scope/version binding, replay determinism and lineage tests.
 4. Robert records explicit, unexpired approval for `NETWORK_ACQUISITION`, `RAW_PAYLOAD_PROCESSING`, and every intended storage, authority persistence, redistribution and commercial usage. Written provider permissions are attached/referenced where required. Never put terms text or secrets in config.
 5. An operator approves credentials, secret handling, budgets, request limits, monitoring, retention/deletion, incident handling and rollback. These are not performed in this slice.
-6. Each provider/dataset config evaluates against its own exact scope. A separately designed, reviewed aggregate readiness contract must compose trusted scope-matched evaluations across all required capabilities and usages; no such aggregate evaluator is present in this slice. Execution still requires the authenticated scope-matched gate.
+6. Each `m5-provider-readiness-config/v1` evaluates one provider/dataset/version scope. The separate `m5-provider-readiness-aggregate/v1` decision references exact config and authentic evaluator-result fingerprints, then assigns each required capability explicitly using `ALL_OF` and records each of the eight usage decisions separately for each provider source. It does not merge single-scope configs or infer fallback behavior. The execution guard accepts only an authentic aggregate `READY` result with an exact request match, and performs no transport or persistence operation.
 
 Until then, no live request, credential, scheduler or production persistence path is authorized. Current posture is **BLOCKED** because capabilities remain partial/unknown and all usage approvals are `REQUIRES_APPROVAL`.
+
+The checked-in aggregate production decision is
+[`provider-readiness.aggregate.production.json`](../config/m5/provider-readiness.aggregate.production.json).
+It references the existing CoinGecko market-chart scope only: daily series,
+market cap and 24-hour volume are documented as partial, the remaining eight
+capabilities have no assigned source, and each aggregate usage is unresolved
+(seven require approval and retention is unknown). This configuration is an
+explicit system-level decision; it does not change the provider-specific
+readiness contract. Capability availability is not completeness authority,
+completeness is not permission to use or persist data, and neither decision by
+itself grants execution authorization.
 
 ## Research source register
 
