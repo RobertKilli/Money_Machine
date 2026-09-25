@@ -105,7 +105,9 @@ For exact source, completeness, time/block, paging, M5-consumer and blocker mapp
 | `SUSPICIOUS_RULE_COVERAGE` | No provider documents evaluation of every pinned M5 rule against exact SourceLineage. UNKNOWN. | Exact as-of and lineage binding required; no provider completeness assertion found. | `m5-suspicious-coverage-authority/v1` and `m5-suspicious-assessment/v1`. | Security flags/scores cannot substitute for rule-by-rule coverage. | Derived assessments and data use require provider-specific approval. |
 | `CANONICAL_ASSET_IDENTITY` | CoinGecko IDs and Etherscan chain/address metadata can assist; neither is Money Machine's canonical authority. PARTIAL. | Internal mapping has its own review/validity time; no provider finality applies. | `m5-provider-asset-identity-assertion/v1` and mapping revision. | Human-reviewed chain/address mapping and audit trail are missing. | Input use, attribution and derived record rights require review. |
 
-The single-scope config represents only CoinGecko `coingecko-market-chart/range-v1`. The separate aggregate config binds that exact source config and authentic evaluation, assigns all 11 capabilities explicitly, and keeps seven source usages plus retention per source. The production aggregate evaluates BLOCKED: three assigned CoinGecko capabilities remain PARTIAL, the other eight have no source assignment, seven source usages require approval, and retention is UNKNOWN.
+The single-scope config represents only CoinGecko `coingecko-market-chart/range-v1`. The separate aggregate config binds that exact source config and authentic evaluation, assigns all 11 capabilities explicitly, and keeps the seven inherited source usages plus retention per source. `m5-provider-approval-authority/v1` records a human decision bound to exact provider/dataset/version scope and effective/expiry times. It records sanitized review identifiers or SHA-256 evidence fingerprints; it contains no agreement text or credentials. The production evaluator uses only the statically imported, strict-parsed registry snapshot; callers cannot replace or mutate it at runtime. Resolver trust is isolated per resolver instance. An APPROVED technical readiness status is not a usage approval, and retention is independently decided and never implies storage, redistribution or commercial use. The production registry in [`provider-approval-authorities.production.json`](../config/m5/provider-approval-authorities.production.json) is empty, with all usages unapproved and retention unknown. The synthetic review evaluator is limited to offline fixtures, and its READY result cannot pass the execution guard.
+
+The production aggregate evaluates BLOCKED: three assigned CoinGecko capabilities remain PARTIAL, the other eight have no source assignment, all seven usages require approval, and retention is UNKNOWN. Adding a status string to readiness or aggregate configuration cannot establish usage authority. Robert must supply reviewed provider-specific authority records through the separately managed approval process; this code stores decision evidence but performs no legal review and accepts no provider terms.
 
 ## Recommended provider stack
 
@@ -137,14 +139,14 @@ Every item below must be completed in a separately scoped, approved phase:
 5. An operator approves credentials, secret handling, budgets, request limits, monitoring, retention/deletion, incident handling and rollback. These are not performed in this slice.
 6. Each `m5-provider-readiness-config/v1` evaluates one provider/dataset/version scope and exactly the seven usages listed above. The separate `m5-provider-readiness-aggregate/v1` decision references exact config and authentic evaluator-result fingerprints, assigns each required capability explicitly using `ALL_OF`, and records those seven usages plus retention separately for each provider source. It does not merge single-scope configs or infer fallback behavior. The execution guard accepts only an authentic aggregate `READY` result with an exact request and explicit canonical `asOf`, and performs no transport or persistence operation.
 
-Until then, no live request, credential, scheduler or production persistence path is authorized. Current posture is **BLOCKED** because capabilities remain partial/unknown and all usage approvals are `REQUIRES_APPROVAL`.
+Until then, no live request, credential, scheduler or production persistence path is authorized. Current posture is **BLOCKED** because capabilities remain partial/unknown, the production approval registry is empty, all seven usages require approval and retention is unknown.
 
 The checked-in aggregate production decision is
 [`provider-readiness.aggregate.production.json`](../config/m5/provider-readiness.aggregate.production.json).
 It references the existing CoinGecko market-chart scope only: daily series,
 market cap and 24-hour volume are documented as partial, the remaining eight
 capabilities have no assigned source, the seven inherited source usages require
-approval and the separate retention decision is unknown. This configuration is an
+approval, no source has a separately configured usage authority and the separate retention decision is unknown. This configuration is an
 explicit system-level decision; it does not change the provider-specific
 readiness contract. Capability availability is not completeness authority,
 completeness is not permission to use or persist data, and neither decision by

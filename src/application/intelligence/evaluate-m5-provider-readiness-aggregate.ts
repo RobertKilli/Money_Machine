@@ -6,6 +6,8 @@ import {
   type ProviderReadinessEvaluation,
 } from "@/domain/intelligence/m5-provider-readiness";
 import { M5_DEFAULT_REQUESTED_USAGES } from "@/application/intelligence/evaluate-m5-provider-readiness";
+import { resolveConfiguredM5ProviderApprovalAuthority, isTrustedConfiguredM5ProviderApprovalAuthorityResolution,
+  type M5ProviderApprovalAuthorityRequest, type M5ProviderApprovalAuthorityResolution, type M5ProviderApprovalAuthorityResolver } from "@/application/intelligence/resolve-m5-provider-approval-authority";
 import {
   M5_AGGREGATE_CAPABILITIES,
   m5ProviderReadinessAggregateConfigFingerprint,
@@ -68,6 +70,17 @@ const oldUsage: Readonly<Record<M5AggregateUsage, string | undefined>> = {
   REDISTRIBUTION: "REDISTRIBUTION", COMMERCIAL_USE: "COMMERCIAL_USE",
 };
 const timestampIsCanonical = (value: string): boolean => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
+const hasExactOwnDataFields = (value: unknown, fields: readonly string[]): boolean => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length) return false;
+  const keys = Object.getOwnPropertyNames(value);
+  return keys.length === fields.length && keys.every(key => {
+    if (!fields.includes(key)) return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return Boolean(descriptor?.enumerable && "value" in descriptor);
+  });
+};
 const exactDefaultRequest = (evaluation: ProviderReadinessEvaluation): boolean =>
   canonical(evaluation.requiredCapabilities) === canonical(requirement) && canonical(evaluation.requestedUsages) === canonical([...M5_DEFAULT_REQUESTED_USAGES].sort(compare));
 
@@ -92,16 +105,43 @@ export function evaluateM5ProviderReadinessAggregate(input: Readonly<{
   sources: readonly Readonly<{ sourceId: string; config: unknown; evaluation: ProviderReadinessEvaluation }>[];
   evaluatedAt: string;
 }>): M5ProviderReadinessAggregateResult {
-  try { return evaluateM5ProviderReadinessAggregateInternal(input); }
+  try {
+    assertAggregateEvaluationInput(input);
+    return evaluateM5ProviderReadinessAggregateInternal(input, resolveConfiguredM5ProviderApprovalAuthority, isTrustedConfiguredM5ProviderApprovalAuthorityResolution, true);
+  }
   catch {
-    let evaluatedAt = "";
-    try { if (typeof input?.evaluatedAt === "string" && timestampIsCanonical(input.evaluatedAt)) evaluatedAt = input.evaluatedAt; } catch { /* sanitized invalid result */ }
     const fingerprint = hash({ contractVersion: "m5-provider-readiness-aggregate/v1", status: "INVALID", blocker: "M5_AGGREGATE_CONFIG_INVALID" });
-    const invalid = freeze({ contractVersion: "m5-provider-readiness-aggregate/v1" as const, result: "INVALID" as const, evaluatedAt,
+    const invalid = freeze({ contractVersion: "m5-provider-readiness-aggregate/v1" as const, result: "INVALID" as const, evaluatedAt: "",
       aggregateId: "invalid", aggregateFingerprint: fingerprint, aggregateResultId: `m5-provider-readiness-aggregate-result:${fingerprint}`,
       aggregateResultFingerprint: fingerprint, sources: [], capabilityAssignments: [], usageDecisions: [], blockers: ["M5_AGGREGATE_CONFIG_INVALID"] as const }) as M5ProviderReadinessAggregateResult;
-    trusted.add(invalid);
     return invalid;
+  }
+}
+
+/** Offline synthetic composition for tests/review fixtures. Results are deliberately untrusted by the execution guard. */
+export function evaluateM5ProviderReadinessAggregateForSyntheticReview(input: Readonly<{
+  config: unknown;
+  sources: readonly Readonly<{ sourceId: string; config: unknown; evaluation: ProviderReadinessEvaluation }>[];
+  evaluatedAt: string;
+  approvalResolver: M5ProviderApprovalAuthorityResolver;
+}>): M5ProviderReadinessAggregateResult {
+  assertAggregateEvaluationInput(input, ["config", "sources", "evaluatedAt", "approvalResolver"]);
+  return evaluateM5ProviderReadinessAggregateInternal(input, input.approvalResolver.resolve, input.approvalResolver.isTrusted, false);
+}
+
+function assertAggregateEvaluationInput(input: unknown, fields: readonly string[] = ["config", "sources", "evaluatedAt"]): asserts input is Readonly<{
+  config: unknown; sources: readonly Readonly<{ sourceId: string; config: unknown; evaluation: ProviderReadinessEvaluation }>[]; evaluatedAt: string;
+}> {
+  if (!hasExactOwnDataFields(input, fields)) throw new Error("M5_AGGREGATE_EVALUATION_INPUT_INVALID");
+  const value = input as Record<string, unknown>;
+  if (typeof value.evaluatedAt !== "string" || !Array.isArray(value.sources)) throw new Error("M5_AGGREGATE_EVALUATION_INPUT_INVALID");
+  const sources = value.sources as unknown[];
+  if (Object.getPrototypeOf(sources) !== Array.prototype) throw new Error("M5_AGGREGATE_EVALUATION_INPUT_INVALID");
+  const names = Object.getOwnPropertyNames(sources);
+  if (Object.getOwnPropertySymbols(sources).length || names.length !== sources.length + 1 || names.some(key => key !== "length" && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= sources.length))) throw new Error("M5_AGGREGATE_EVALUATION_INPUT_INVALID");
+  for (let index = 0; index < sources.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(sources, String(index));
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor) || !hasExactOwnDataFields(descriptor.value, ["sourceId", "config", "evaluation"])) throw new Error("M5_AGGREGATE_EVALUATION_INPUT_INVALID");
   }
 }
 
@@ -109,7 +149,8 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
   config: unknown;
   sources: readonly Readonly<{ sourceId: string; config: unknown; evaluation: ProviderReadinessEvaluation }>[];
   evaluatedAt: string;
-}>): M5ProviderReadinessAggregateResult {
+}>, resolveAuthority: (request: M5ProviderApprovalAuthorityRequest) => M5ProviderApprovalAuthorityResolution,
+isTrustedAuthority: (value: unknown) => boolean, markExecutionTrusted: boolean): M5ProviderReadinessAggregateResult {
   let config: M5ProviderReadinessAggregateConfig;
   try { config = parseM5ProviderReadinessAggregateConfig(input.config); }
   catch {
@@ -126,6 +167,7 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
   if (input.sources.some(binding => !config.sources.some(source => source.sourceId === binding.sourceId))) { blockers.add("M5_AGGREGATE_SOURCE_UNUSED"); invalid = true; }
   const references: M5AggregateSourceReference[] = [];
   const runtimes = new Map<string, ReturnType<typeof verifyAggregateSourceBinding>>();
+  const authorityResolutions = new Map<string, M5ProviderApprovalAuthorityResolution>();
   for (const source of config.sources) {
     const binding = bindings.get(source.sourceId);
     if (!binding) { blockers.add("M5_AGGREGATE_SOURCE_MISSING"); continue; }
@@ -135,6 +177,20 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
       if (!exactDefaultRequest(runtime.evaluation)) throw new Error("M5_AGGREGATE_SOURCE_SCOPE_MISMATCH");
       runtimes.set(source.sourceId, runtime);
       references.push(Object.freeze({ ...source, readinessResultId: runtime.readinessResultId, readinessResultFingerprint: runtime.readinessResultFingerprint }));
+      if (source.approvalAuthorityId && source.approvalAuthorityFingerprint) {
+        const resolution = resolveAuthority({
+          approvalAuthorityId: source.approvalAuthorityId, approvalAuthorityFingerprint: source.approvalAuthorityFingerprint,
+          providerId: source.providerId, datasetId: source.datasetId, datasetVersion: source.datasetVersion, asOf: evaluatedAt });
+        authorityResolutions.set(source.sourceId, resolution);
+        if (resolution.result === "INVALID") { blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_INVALID"); invalid = true; }
+        else if (resolution.result !== "RESOLVED" || !isTrustedAuthority(resolution)) {
+          if (resolution.blockers.includes("M5_APPROVAL_AUTHORITY_EXPIRED")) blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_EXPIRED");
+          else if (resolution.blockers.includes("M5_APPROVAL_AUTHORITY_SCOPE_MISMATCH")) blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_MISMATCH");
+          else blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING");
+        }
+        else references[references.length - 1] = Object.freeze({ ...source, readinessResultId: runtime.readinessResultId, readinessResultFingerprint: runtime.readinessResultFingerprint,
+          approvalAuthorityId: resolution.authority!.approvalAuthorityId, approvalAuthorityFingerprint: resolution.authority!.approvalAuthorityFingerprint });
+      } else blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING");
       if (runtime.evaluation.evaluatedAt > evaluatedAt || runtime.config.reviewedAt > evaluatedAt ||
         runtime.config.capabilities.some(decision => decision.reviewedAt > evaluatedAt) ||
         runtime.config.usageDecisions.some(decision => decision.reviewedAt > evaluatedAt)) {
@@ -169,6 +225,13 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
     if (decision.reviewedAt > evaluatedAt) { blockers.add("M5_AGGREGATE_CONFIG_INVALID"); invalid = true; }
     const mapped = oldUsage[decision.usage];
     const underlying = mapped ? runtime.config.usageDecisions.find(row => row.usage === mapped) : undefined;
+    const authorityResolution = authorityResolutions.get(decision.sourceId);
+    const authority = authorityResolution && isTrustedAuthority(authorityResolution) ? authorityResolution.authority : undefined;
+    const authorityDecision = decision.usage === "RETENTION" ? authority?.retentionDecision.decision : authority?.usageDecisions.find(row => row.usage === mapped)?.decision;
+    const expectedAuthorityStatus = decision.approval === "APPROVED" ? "APPROVED" : decision.approval === "REQUIRES_APPROVAL" ? "REQUIRES_APPROVAL" : decision.approval === "REJECTED" ? "DENIED" : decision.approval === "UNKNOWN" ? "UNKNOWN" : undefined;
+    if (!authority || !authorityDecision) blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING");
+    else if (authorityDecision !== expectedAuthorityStatus) blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_MISMATCH");
+    else if (authorityDecision !== "APPROVED") blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_NOT_APPROVED");
     const expired = decision.approval === "APPROVED" && decision.approvalExpiresAt !== undefined && decision.approvalExpiresAt <= evaluatedAt;
     if (expired || decision.approval === "EXPIRED") blockers.add("M5_AGGREGATE_USAGE_EXPIRED");
     else if (decision.approval === "REQUIRES_APPROVAL" || decision.approval === "UNKNOWN") blockers.add("M5_AGGREGATE_USAGE_REQUIRES_APPROVAL");
@@ -181,6 +244,7 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
   const expiryDates = [
     ...config.usageDecisions.flatMap(decision => decision.approval === "APPROVED" && decision.approvalExpiresAt ? [decision.approvalExpiresAt] : []),
     ...[...runtimes.values()].flatMap(runtime => runtime.config.approvalExpiresAt ? [runtime.config.approvalExpiresAt] : []),
+    ...[...authorityResolutions.values()].flatMap(resolution => resolution.authority?.expiresAt ? [resolution.authority.expiresAt] : []),
   ];
   const validUntil = expiryDates.sort(compare)[0];
   const status = invalid ? "INVALID" : ordered.length ? "BLOCKED" : "READY";
@@ -195,7 +259,7 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
     const value = freeze({ contractVersion: "m5-provider-readiness-aggregate/v1" as const, result: status, evaluatedAt, aggregateId, aggregateFingerprint,
       aggregateResultId: `m5-provider-readiness-aggregate-result:${resultFingerprint}`, aggregateResultFingerprint: resultFingerprint,
       ...(validUntil ? { validUntil } : {}), sources: [...sources], capabilityAssignments: [...assignments], usageDecisions: [...usages], blockers: [...blockers] }) as M5ProviderReadinessAggregateResult;
-    trusted.add(value);
+    if (markExecutionTrusted) trusted.add(value);
     return value;
   }
 }
@@ -210,8 +274,10 @@ export function assertM5ProviderReadinessAggregateForExecution(result: M5Provide
   usages: M5ProviderReadinessAggregateConfig["usageDecisions"];
 }>): void {
   if (!isTrustedM5ProviderReadinessAggregate(result) || result.result !== "READY") throw new Error("M5_PROVIDER_READINESS_AGGREGATE_BLOCKED");
+  if (!hasExactOwnDataFields(request, ["asOf", "aggregateId", "aggregateFingerprint", "sources", "capabilityAssignments", "usages"])) throw new Error("M5_PROVIDER_READINESS_AGGREGATE_SCOPE_MISMATCH");
   if (!timestampIsCanonical(request.asOf) || request.asOf < result.evaluatedAt) throw new Error("M5_PROVIDER_READINESS_AGGREGATE_AS_OF_INVALID");
   if (!result.validUntil || result.validUntil <= request.asOf) throw new Error("M5_PROVIDER_READINESS_AGGREGATE_EXPIRED");
+  if (result.sources.some(source => !source.approvalAuthorityId || !source.approvalAuthorityFingerprint)) throw new Error("M5_PROVIDER_READINESS_AGGREGATE_SCOPE_MISMATCH");
   if (request.aggregateId !== result.aggregateId || request.aggregateFingerprint !== result.aggregateFingerprint ||
     canonical(request.sources) !== canonical(result.sources) ||
     canonical(request.capabilityAssignments) !== canonical(result.capabilityAssignments) || canonical(request.usages) !== canonical(result.usageDecisions)) throw new Error("M5_PROVIDER_READINESS_AGGREGATE_SCOPE_MISMATCH");

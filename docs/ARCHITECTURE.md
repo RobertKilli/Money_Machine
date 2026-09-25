@@ -533,9 +533,23 @@ completeness authority, usage/legal approval and execution authorization are
 separate decisions. Aggregate READY requires complete evidence and approvals
 for every source in the composed stack and an explicit canonical `asOf` at the
 execution guard; it cannot promote partial evidence.
+The versioned `m5-provider-approval-authority/v1` records a human's seven
+provider-specific usage decisions and a separate retention decision. This is
+decision evidence, not legal review or acceptance of provider terms. An
+aggregate usage marked `APPROVED` is insufficient by itself: the production
+evaluator resolves only the statically imported, strict-parsed authority
+registry. Its registry and decisions are copied into a private immutable
+resolver at module initialization; callers cannot replace them with request
+input. Resolver trust is closure-local, so another resolver does not trust its
+results. Copies and serialized resolutions are untrusted. A separate synthetic
+review evaluator exists for offline fixtures; its READY results are never
+accepted by the execution guard. The checked-in production registry is empty,
+so production readiness stays BLOCKED. A technical capability does not grant
+usage approval, and retention cannot imply any storage or use permission.
 The result fingerprint binds the aggregate contract and policy versions,
 provider config and evaluator-result fingerprints, ordered assignments,
-per-source usage approvals and blockers. Evaluation time is diagnostic output,
+per-source approval-authority IDs/fingerprints, usage approvals and blockers.
+Evaluation time is diagnostic output,
 not material identity; the caller supplies canonical `asOf` for expiry checks.
 The config
 [`config/m5/provider-readiness.production.json`](../config/m5/provider-readiness.production.json)
