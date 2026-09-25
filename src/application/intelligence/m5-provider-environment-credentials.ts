@@ -12,6 +12,7 @@ export class M5ProviderEnvironmentCredentialResolver implements M5ProviderCreden
     if (typeof value !== "string" || value.trim() !== value || value.length === 0 || value.length > 8192 || /[\u0000-\u001f\u007f]/.test(value)) {
       throw new M5ProviderInfrastructureError("M5_PROVIDER_CREDENTIAL_MISSING");
     }
+    if (/(?:https?:\/\/|:\/\/|[\/?#&=])/i.test(value)) throw new M5ProviderInfrastructureError("M5_PROVIDER_CREDENTIAL_VALUE_REJECTED");
     return Object.freeze({ kind: "API_KEY", value });
   }
 }

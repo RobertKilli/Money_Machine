@@ -571,13 +571,16 @@ canonical production write path.
 The service accepts only modeled CoinGecko market-chart ranges and Etherscan
 V2 Ethereum contract-creation and verification requests. Plans contain fixed
 HTTPS hosts, paths, query fields and non-secret credential references. The
-CoinGecko adapter uses `/api/v3/coins/{id}/market_chart/range` with `vs_currency`,
-`from`, `to` and `interval`; it does not claim complete liquidity coverage or
+CoinGecko adapter uses `/api/v3/coins/ethereum/contract/{address}/market_chart/range`
+with `vs_currency`, `from`, `to` and `interval`, binding the Ethereum contract
+in the path. It uses the Pro host `pro-api.coingecko.com` with the
+`x-cg-pro-api-key` header, without mixing Demo host/auth settings; it does not
+claim complete liquidity coverage or
 substitute FDV for market cap. Etherscan uses `/v2/api`, `chainid=1`, and only
 the `getcontractcreation` and `getsourcecode` contract actions. Empty/error
 status and ambiguous proxy outcomes remain UNKNOWN; this data does not establish
 holder completeness or finality. Contract references follow the official
-[CoinGecko market-chart range API](https://docs.coingecko.com/reference/coins-id-market-chart-range),
+[CoinGecko token-address market-chart range API](https://docs.coingecko.com/reference/contract-address-market-chart-range),
 [CoinGecko authentication guidance](https://docs.coingecko.com/reference/authentication),
 [Etherscan contract-creation API](https://docs.etherscan.io/api-reference/endpoint/getcontractcreation),
 [Etherscan source-code API](https://docs.etherscan.io/api-reference/endpoint/getsourcecode),
@@ -589,10 +592,11 @@ for `NETWORK_ACQUISITION` and `RAW_PAYLOAD_PROCESSING` at caller-supplied
 canonical `asOf` can execution resolve a credential. The resolver maps a
 non-secret reference to a server environment variable at that final boundary;
 credentials are never included in plans, fingerprints, logs or domain errors.
-Dry-run CLI mode parses configuration and reports the sanitized plan without
-opening the resolver or HTTP transport. `--execute` uses the same gates and
-fails before either boundary for the current production configuration because
-the production approval registry is empty and readiness is BLOCKED.
+This CLI pins `--config` to the checked-in production readiness file, preventing
+alternate-config approval bypass. Dry-run parses that configuration and
+reports the sanitized plan without opening the resolver or HTTP transport.
+`--execute` uses the same gates and fails before either boundary because the
+production approval registry is empty and readiness is BLOCKED.
 
 HTTP is GET-only, HTTPS-only, pinned to allowlisted hosts and fixed request
 shapes, rejects redirects, bounds streamed response bytes and time, and applies
@@ -604,3 +608,9 @@ continue through provenance and lineage inputs. Current provider responses do
 not establish market/liquidity universe completeness, holder completeness,
 verification beyond the provider's classification, legal approval, or
 canonical M5 production readiness.
+
+CoinGecko numeric tokens are parsed losslessly as decimal text, then normalized
+directly to the adapter's fixed-point `bigint` representation. Exponent forms,
+negative values, scale above 18, and values outside the adapter's signed 64-bit
+atom bound are rejected; no `Number` conversion or implicit rounding occurs.
+Trailing decimal zeroes normalize to the same fixed-point value and fingerprint.

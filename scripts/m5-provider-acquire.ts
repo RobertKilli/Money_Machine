@@ -10,9 +10,14 @@ import type { ProviderDatasetReadiness } from "@/domain/intelligence/m5-provider
 import { parseM5ProviderReadinessAggregateConfig } from "@/domain/intelligence/m5-provider-readiness-aggregate";
 
 const AGGREGATE_CONFIG = "config/m5/provider-readiness.aggregate.production.json";
+const PROVIDER_CONFIG = "config/m5/provider-readiness.production.json";
 const usage = "Usage: m5:provider:acquire --config <path> --provider <coingecko|etherscan> [--coin-id <id> --contract-address <0x...> --from <ISO> --to <ISO>] [--execute]";
 type Args = { help: boolean; execute: boolean; config?: string; provider?: string; coinId?: string; contractAddress?: string; from?: string; to?: string };
 const valueArgs = new Set(["--config", "--provider", "--coin-id", "--contract-address", "--from", "--to"]);
+
+export function isProductionM5ProviderReadinessConfigPath(path: string): boolean {
+  return resolve(path) === resolve(PROVIDER_CONFIG);
+}
 
 export function parseM5ProviderAcquireArgs(argv: readonly string[]): Args {
   const result: Args = { help: false, execute: false };
@@ -50,6 +55,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   try { args = parseM5ProviderAcquireArgs(argv); }
   catch (error) { console.error(JSON.stringify({ status: "INVALID", code: error instanceof Error ? error.message : "M5_PROVIDER_ACQUIRE_ARGUMENT_INVALID" })); process.exitCode = 2; return; }
   if (args.help) { console.log(usage); return; }
+  if (!isProductionM5ProviderReadinessConfigPath(args.config!)) { console.error(JSON.stringify({ status: "INVALID", code: "M5_PROVIDER_ACQUIRE_CONFIG_SCOPE_INVALID" })); process.exitCode = 2; return; }
   let rawConfig: unknown; let aggregateRaw: unknown;
   try { [rawConfig, aggregateRaw] = await Promise.all([jsonFile(args.config!), jsonFile(AGGREGATE_CONFIG)]); }
   catch { console.error(JSON.stringify({ status: "INVALID", code: "M5_PROVIDER_ACQUIRE_CONFIG_IO_FAILED" })); process.exitCode = 2; return; }
@@ -84,10 +90,9 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     console.log(JSON.stringify({ status: "BLOCKED", mode: "EXECUTE", asOf, plan, aggregateResult: aggregate.result, blockers: [...aggregate.blockers] }));
     process.exitCode = 2; return;
   }
-  const result = await executeM5ProviderLiveAcquisition({ aggregate, readiness, request, asOf,
+  const result = await executeM5ProviderLiveAcquisition({ aggregate, readiness, request, asOf, currentTime: () => new Date().toISOString(),
     credential: { kind: "API_KEY", reference: args.provider === "coingecko" ? "env:coingecko-pro-api-key" : "env:etherscan-api-key" },
     credentials: new M5ProviderEnvironmentCredentialResolver(), transport: new M5NodeProviderHttpTransport(), rateLimit: new M5InProcessProviderRateLimitLease(),
-    idempotencyKey: "live-acquisition:" + args.provider + ":" + readiness.datasetId + ":" + readiness.datasetVersion + ":" + asOf,
     requestedAt: asOf, startedAt: asOf, recordedAt: asOf });
   console.log(JSON.stringify({ status: result.status, ...(result.status === "READY" ? { scope: result.scope, payloadFingerprint: result.payloadFingerprint, recordCount: result.normalizedPackage.records.length } : { code: result.code }) }));
   if (result.status === "BLOCKED" || result.status === "INVALID") process.exitCode = 2;

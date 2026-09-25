@@ -5,6 +5,7 @@ import { buildCoinGeckoMarketRequestPlan, parseCoinGeckoFixture, parseEtherscanF
 import {
   M5_PROVIDER_EXECUTION_PLAN_VERSION,
   M5_PROVIDER_EXECUTION_POLICY_VERSION,
+  M5ProviderInfrastructureError,
   executeM5ProviderPagination,
   executeM5ProviderPlan,
   providerPlanFingerprint,
@@ -43,7 +44,7 @@ function plan(overrides: Record<string, unknown> = {}): M5ProviderExecutionPlan 
     requiredCapabilities: [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }],
     requestedUsages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"],
     credential: { kind: "API_KEY", reference: "coingecko-primary" },
-    request: { method: "GET", hostname: "pro-api.coingecko.com", path: "/api/v3/coins/ethereum/market_chart/range", query: [{ key: "from", value: "1760000000" }, { key: "interval", value: "daily" }, { key: "to", value: "1760086400" }, { key: "vs_currency", value: "usd" }] },
+    request: { method: "GET", hostname: "pro-api.coingecko.com", path: "/api/v3/coins/ethereum/contract/0x1111111111111111111111111111111111111111/market_chart/range", query: [{ key: "from", value: "1760000000" }, { key: "interval", value: "daily" }, { key: "to", value: "1760086400" }, { key: "vs_currency", value: "usd" }] },
     limits: { timeoutMs: 10_000, maxResponseBytes: 1024 },
     retry: { maxAttempts: 3, totalBudgetMs: 10_000, maxRetryAfterMs: 500 },
     ...overrides,
@@ -125,6 +126,11 @@ describe("M5 provider execution boundary", () => {
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "{}" }], [], []), credentials: { resolve: async () => ({ kind: "NONE", value: "unexpected" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_CREDENTIAL_KIND_MISMATCH");
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "{}" }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "{}" }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: " secret " }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
+    const urlCredentialCalls: Parameters<M5ProviderHttpTransport["send"]>[0][] = [];
+    let urlCredentialError: unknown;
+    try { await executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200 }], urlCredentialCalls, []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "https://canary-secret.invalid/?key=hidden" }) }, parser }); } catch (error) { urlCredentialError = error; }
+    expect(urlCredentialCalls).toHaveLength(0);
+    expect(String(urlCredentialError)).not.toContain("canary-secret");
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "{}" }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, rateLimit: { acquire: async () => { throw new Error("secret-rate-limit-detail"); } }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_RATE_LIMIT_FAILED");
     const invalidUtf8: M5ProviderHttpTransport = { send: async () => ({ status: 200, headers: { "content-type": "application/json" }, body: new Uint8Array([0xff]), retrievedAt: "2026-09-25T13:00:00.000Z" }) };
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: invalidUtf8, credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_UTF8_INVALID");
@@ -142,8 +148,40 @@ describe("M5 provider execution boundary", () => {
     expect(seen).toHaveLength(2);
     expect(leases).toBe(2);
     expect(sleeps).toEqual([500]);
+    const datedSleeps: number[] = [];
+    await executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 429, headers: { "retry-after": "Fri, 25 Sep 2026 13:00:00 GMT" } }, { status: 200, body: "{}" }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, now: () => "2026-09-25T12:59:59.750Z", rateLimit: { acquire: async () => true }, sleep: async milliseconds => { datedSleeps.push(milliseconds); }, parser });
+    expect(datedSleeps).toEqual([250]);
+    let monotonic = 0;
+    const budgetCalls: Parameters<M5ProviderHttpTransport["send"]>[0][] = [];
+    let budgetCredentials = 0;
+    let budgetLeases = 0;
+    await expect(executeM5ProviderPlan({ plan: plan({ limits: { timeoutMs: 100, maxResponseBytes: 1024 }, retry: { maxAttempts: 2, totalBudgetMs: 100, maxRetryAfterMs: 100 } }), readiness: auth,
+      transport: transport([{ status: 503, headers: { "retry-after": "1" } }, { status: 200 }], budgetCalls, []), credentials: { resolve: async () => { budgetCredentials += 1; return { kind: "API_KEY", value: "secret" }; } },
+      rateLimit: { acquire: async () => { budgetLeases += 1; return true; } }, now: () => "2026-09-25T12:00:00.000Z", monotonicNow: () => monotonic,
+      sleep: async milliseconds => { monotonic += milliseconds + 1; }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_RETRY_BUDGET_EXCEEDED");
+    expect(budgetCalls).toHaveLength(1);
+    expect(budgetCredentials).toBe(1);
+    expect(budgetLeases).toBe(1);
+    const monotonicReads = [0, 0, 80, 80, 101];
+    const attemptTimeouts: number[] = [];
+    await expect(executeM5ProviderPlan({ plan: plan({ limits: { timeoutMs: 100, maxResponseBytes: 1024 }, retry: { maxAttempts: 2, totalBudgetMs: 100, maxRetryAfterMs: 100 } }), readiness: auth,
+      transport: { send: async request => { attemptTimeouts.push(request.timeoutMs); throw new M5ProviderInfrastructureError("M5_PROVIDER_TRANSPORT_TIMEOUT"); } },
+      credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, rateLimit: { acquire: async () => true },
+      monotonicNow: () => monotonicReads.shift() ?? 101, sleep: async () => undefined, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_RETRY_BUDGET_EXCEEDED");
+    expect(attemptTimeouts).toEqual([20]);
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 400 }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, sleep: async () => { throw new Error("must not sleep"); }, parser })).rejects.toThrow("M5_PROVIDER_HTTP_400");
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 503 }, { status: 400 }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, sleep: async () => undefined, parser })).rejects.toThrow("M5_PROVIDER_HTTP_400");
+  });
+
+  it("acquires each rate lease before resolving the credential or sending HTTP", async () => {
+    const currentPlan = plan();
+    const auth = readiness("coingecko", "coingecko-market-chart", "coingecko-market-chart/v1", [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }]);
+    const deniedOrder: string[] = [];
+    await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: { send: async () => { deniedOrder.push("http"); throw new Error("not expected"); } }, credentials: { resolve: async () => { deniedOrder.push("credential"); return { kind: "API_KEY", value: "test-canary-secret" }; } }, rateLimit: { acquire: async () => { deniedOrder.push("lease"); return false; } }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_RATE_LIMITED");
+    expect(deniedOrder).toEqual(["lease"]);
+    const successOrder: string[] = [];
+    await executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: { send: async () => { successOrder.push("http"); return { status: 200, headers: { "content-type": "application/json" }, body: new TextEncoder().encode("{}"), retrievedAt: "2026-09-25T13:00:00.000Z" }; } }, credentials: { resolve: async () => { successOrder.push("credential"); return { kind: "API_KEY", value: "test-canary-secret" }; } }, rateLimit: { acquire: async () => { successOrder.push("lease"); return true; } }, parser });
+    expect(successOrder).toEqual(["lease", "credential", "http"]);
   });
 
   it("bounds streaming responses and validates pagination cursors", async () => {
