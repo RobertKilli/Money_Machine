@@ -52,7 +52,15 @@ function plan(overrides: Record<string, unknown> = {}): M5ProviderExecutionPlan 
 
 function parser(input: Parameters<NonNullable<Parameters<typeof executeM5ProviderPlan>[0]["parser"]>>[0]) {
   const text = new TextDecoder().decode(input.body);
-  return { projection: JSON.parse(text || "null") as unknown, payloadFingerprint: canonicalSha256({ bytes: [...input.body] }), effectiveAvailableAt: input.retrievedAt };
+  const projection = JSON.parse(text || "null") as unknown;
+  const pagination = projection && typeof projection === "object" && !Array.isArray(projection) ? projection as { nextCursor?: unknown; isFinal?: unknown } : {};
+  return {
+    projection,
+    payloadFingerprint: canonicalSha256({ bytes: [...input.body] }),
+    effectiveAvailableAt: input.retrievedAt,
+    ...(typeof pagination.nextCursor === "string" ? { nextCursor: pagination.nextCursor } : {}),
+    ...(typeof pagination.isFinal === "boolean" ? { isFinal: pagination.isFinal } : {}),
+  };
 }
 
 function transport(responses: readonly Readonly<{ status: number; body?: string; headers?: Record<string, string>; retrievedAt?: string }>[], seen: M5ProviderHttpTransport["send"] extends (request: infer R) => Promise<unknown> ? R[] : never, credentials: string[]) {
@@ -75,7 +83,10 @@ describe("M5 provider execution boundary", () => {
       expect(result.receipt).not.toHaveProperty("credential");
       expect(JSON.stringify(result)).not.toContain("synthetic-secret");
       expect(seen[0]!.credential.value).toBe("synthetic-secret");
+      expect(seen[0]!.request.protocol).toBe("https:");
       expect(providerPlanFingerprint(currentPlan)).toHaveLength(64);
+      expect(providerPlanFingerprint(validateM5ProviderExecutionPlan({ ...currentPlan, credential: { kind: "BEARER_TOKEN", reference: "rotated-reference" } }))).toBe(providerPlanFingerprint(currentPlan));
+      expect(providerPlanFingerprint(validateM5ProviderExecutionPlan({ ...currentPlan, request: { ...currentPlan.request, query: currentPlan.request.query.map(item => item.key === "from" ? { ...item, value: "1760000001" } : item) } }))).not.toBe(providerPlanFingerprint(currentPlan));
     }
     expect(await executeM5ProviderPlan({ plan: currentPlan, readiness: { ...auth }, transport: transport([{ status: 200 }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser })).toEqual({ status: "BLOCKED", code: "M5_PROVIDER_READINESS_BLOCKED" });
   });
@@ -98,6 +109,9 @@ describe("M5 provider execution boundary", () => {
     ["duplicate query", { request: { ...plan().request, query: [...plan().request.query, { key: "from", value: "1760000001" }] } }, "M5_PROVIDER_EXECUTION_QUERY_DUPLICATE"],
     ["secret query", { request: { ...plan().request, query: [...plan().request.query, { key: "api_key", value: "x" }] } }, "M5_PROVIDER_EXECUTION_SECRET_QUERY_REJECTED"],
     ["oversized limit", { limits: { timeoutMs: 10_000, maxResponseBytes: 20_000_000 } }, "M5_PROVIDER_EXECUTION_LIMITS_INVALID"],
+    ["unknown capability", { requiredCapabilities: [{ capability: "UNKNOWN_CAPABILITY", completeness: "COMPLETE" }] }, "M5_PROVIDER_EXECUTION_CAPABILITY_INVALID"],
+    ["unknown usage", { requestedUsages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING", "RAW_PAYLOAD_STORAGE"] }, "M5_PROVIDER_EXECUTION_USAGE_INVALID"],
+    ["timeout beyond retry budget", { limits: { timeoutMs: 10_001, maxResponseBytes: 1024 }, retry: { maxAttempts: 3, totalBudgetMs: 10_000, maxRetryAfterMs: 500 } }, "M5_PROVIDER_EXECUTION_RETRY_INVALID"],
   ] as const)("rejects SSRF and unsafe request plan: %s", (_name, override, code) => {
     expect(() => validateM5ProviderExecutionPlan(override === undefined ? plan() : { ...plan(), ...override })).toThrow(code);
   });
@@ -110,8 +124,11 @@ describe("M5 provider execution boundary", () => {
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "x".repeat(2048) }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_RESPONSE_TOO_LARGE");
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "{}" }], [], []), credentials: { resolve: async () => ({ kind: "NONE", value: "unexpected" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_CREDENTIAL_KIND_MISMATCH");
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "{}" }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
+    await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "{}" }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: " secret " }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
+    await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "{}" }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, rateLimit: { acquire: async () => { throw new Error("secret-rate-limit-detail"); } }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_RATE_LIMIT_FAILED");
     const invalidUtf8: M5ProviderHttpTransport = { send: async () => ({ status: 200, headers: { "content-type": "application/json" }, body: new Uint8Array([0xff]), retrievedAt: "2026-09-25T13:00:00.000Z" }) };
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: invalidUtf8, credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_UTF8_INVALID");
+    await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 200, body: "{}", retrievedAt: "2026-09-25T13:00:00.000Z" }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser: input => ({ ...parser(input), effectiveAvailableAt: "2026-09-25T13:00:00.001Z" }) })).rejects.toThrow("M5_PROVIDER_EXECUTION_AVAILABILITY_INVALID");
   });
 
   it("retries only transient responses with bounded injected sleep and rate leases", async () => {
@@ -126,16 +143,37 @@ describe("M5 provider execution boundary", () => {
     expect(leases).toBe(2);
     expect(sleeps).toEqual([500]);
     await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 400 }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, sleep: async () => { throw new Error("must not sleep"); }, parser })).rejects.toThrow("M5_PROVIDER_HTTP_400");
+    await expect(executeM5ProviderPlan({ plan: currentPlan, readiness: auth, transport: transport([{ status: 503 }, { status: 400 }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, sleep: async () => undefined, parser })).rejects.toThrow("M5_PROVIDER_HTTP_400");
   });
 
   it("bounds streaming responses and validates pagination cursors", async () => {
     const first = plan({ pagination: { pageOrdinal: 0, maxPages: 2, cursorKey: "cursor" } });
     const auth = readiness("coingecko", "coingecko-market-chart", "coingecko-market-chart/v1", [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }]);
-    const pages = await executeM5ProviderPagination({ initialPlan: first, nextPlan: (cursor, pageOrdinal) => plan({ pagination: { pageOrdinal, maxPages: 2, cursorKey: "cursor" }, request: { ...first.request, query: [...first.request.query.filter(item => item.key !== "cursor"), { key: "cursor", value: cursor }] } }), readiness: auth, transport: { send: async request => { const hasCursor = request.request.query.some(item => item.key === "cursor"); return { status: 200, headers: { "content-type": "application/json" }, body: new TextEncoder().encode(hasCursor ? '{"isFinal":true}' : '{"nextCursor":"next"}'), retrievedAt: hasCursor ? "2026-09-25T13:01:00.000Z" : "2026-09-25T13:00:00.000Z" }; } }, credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser });
+    const pages = await executeM5ProviderPagination({ initialPlan: first, nextPlan: (cursor, pageOrdinal) => plan({ pagination: { pageOrdinal, maxPages: 2, cursorKey: "cursor" }, request: { ...first.request, query: [...first.request.query.filter(item => item.key !== "cursor"), { key: "cursor", value: cursor }] } }), readiness: auth, transport: { send: async request => { const hasCursor = request.request.query.some(item => item.key === "cursor"); return { status: 200, headers: { "content-type": "application/json" }, body: new TextEncoder().encode(hasCursor ? '{"isFinal":true}' : '{"isFinal":false,"nextCursor":"next"}'), retrievedAt: hasCursor ? "2026-09-25T13:01:00.000Z" : "2026-09-25T13:00:00.000Z" }; } }, credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser });
     expect(pages.pages).toHaveLength(2);
     expect(pages.effectiveAvailableAt).toBe("2026-09-25T13:01:00.000Z");
-    await expect(executeM5ProviderPagination({ initialPlan: first, nextPlan: () => first, readiness: auth, transport: transport([{ status: 200, body: '{"nextCursor":"same"}' }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_PAGE_ORDINAL_INVALID");
-    await expect(executeM5ProviderPagination({ initialPlan: first, nextPlan: (cursor, pageOrdinal) => plan({ pagination: { pageOrdinal, maxPages: 2, cursorKey: "cursor" }, request: { ...first.request, query: [...first.request.query.filter(item => item.key !== "cursor"), { key: "cursor", value: cursor }] } }), readiness: auth, transport: transport([{ status: 200, body: '{"nextCursor":"https://evil.invalid/next"}' }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_CURSOR_INVALID");
+    await expect(executeM5ProviderPagination({ initialPlan: first, nextPlan: () => first, readiness: auth, transport: transport([{ status: 200, body: '{"isFinal":false,"nextCursor":"same"}' }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_PAGINATION_PLAN_MISMATCH");
+    await expect(executeM5ProviderPagination({ initialPlan: first, nextPlan: (cursor, pageOrdinal) => plan({ pagination: { pageOrdinal, maxPages: 2, cursorKey: "cursor" }, request: { ...first.request, query: [...first.request.query.filter(item => item.key !== "cursor"), { key: "cursor", value: cursor }] } }), readiness: auth, transport: transport([{ status: 200, body: '{"isFinal":false,"nextCursor":"https://evil.invalid/next"}' }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_CURSOR_INVALID");
+    await expect(executeM5ProviderPagination({ initialPlan: first, nextPlan: (cursor, pageOrdinal) => plan({ pagination: { pageOrdinal, maxPages: 3, cursorKey: "cursor" }, request: { ...first.request, query: [...first.request.query, { key: "cursor", value: cursor }] } }), readiness: auth, transport: transport([{ status: 200, body: '{"isFinal":false,"nextCursor":"next"}' }], [], []), credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) }, parser })).rejects.toThrow("M5_PROVIDER_EXECUTION_PAGINATION_PLAN_MISMATCH");
+  });
+
+  it("uses parser pagination metadata rather than projection fields", async () => {
+    const first = plan({ pagination: { pageOrdinal: 0, maxPages: 2, cursorKey: "cursor" } });
+    const auth = readiness("coingecko", "coingecko-market-chart", "coingecko-market-chart/v1", [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }]);
+    let page = 0;
+    const pages = await executeM5ProviderPagination({
+      initialPlan: first,
+      nextPlan: (cursor, pageOrdinal) => plan({ pagination: { pageOrdinal, maxPages: 2, cursorKey: "cursor" }, request: { ...first.request, query: [...first.request.query, { key: "cursor", value: cursor }] } }),
+      readiness: auth,
+      transport: transport([{ status: 200 }, { status: 200, retrievedAt: "2026-09-25T13:01:00.000Z" }], [], []),
+      credentials: { resolve: async () => ({ kind: "API_KEY", value: "secret" }) },
+      parser: input => page++ === 0
+        ? { ...parser(input), projection: { isFinal: true, nextCursor: "untrusted" }, isFinal: false, nextCursor: "trusted-next" }
+        : { ...parser(input), projection: { isFinal: false, nextCursor: "untrusted" }, isFinal: true },
+    });
+    expect(pages.pages).toHaveLength(2);
+    expect(pages.pages[0]!.pagination).toEqual({ isFinal: false, nextCursor: "trusted-next" });
+    expect(pages.pages[1]!.pagination).toEqual({ isFinal: true });
   });
 
   it("accepts existing adapter plans without creating a parallel request format", () => {

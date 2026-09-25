@@ -2,7 +2,7 @@ import { canonicalSha256, normalizeIngestionTimestamp } from "@/domain/intellige
 import {
   assertM5ProviderReadinessForExecution,
 } from "./evaluate-m5-provider-readiness";
-import type { ProviderCapabilityRequirement, ProviderReadinessEvaluation, ProviderReadinessExecutionRequest } from "@/domain/intelligence/m5-provider-readiness";
+import { M5_PROVIDER_CAPABILITIES, type ProviderCapabilityRequirement, type ProviderReadinessEvaluation, type ProviderReadinessExecutionRequest } from "@/domain/intelligence/m5-provider-readiness";
 
 export const M5_PROVIDER_EXECUTION_PLAN_VERSION = "m5-provider-execution-plan/v1" as const;
 export const M5_PROVIDER_EXECUTION_POLICY_VERSION = "m5-provider-execution-policy/v1" as const;
@@ -55,6 +55,7 @@ export type M5ProviderExecutionPlan = Readonly<{
 }>;
 
 export type M5StructuredProviderRequest = Readonly<{
+  protocol: "https:";
   method: M5HttpMethod;
   hostname: string;
   path: string;
@@ -130,6 +131,10 @@ export type M5ProviderExecutionSuccess = Readonly<{
   receipt: M5ProviderExecutionReceipt;
   projection: unknown;
   payloadFingerprint: string;
+  pagination?: Readonly<{
+    isFinal: boolean;
+    nextCursor?: string;
+  }>;
 }>;
 
 export type M5ProviderExecutionBlocked = Readonly<{
@@ -159,6 +164,8 @@ const HOST = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9]
 const CONTROL = /[\u0000-\u001f\u007f]/;
 const SECRET_KEY = /(?:api[-_]?key|authorization|cookie|credential|password|secret|token|private[-_]?key)/i;
 const RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const CAPABILITIES = new Set<string>(M5_PROVIDER_CAPABILITIES);
+const EXECUTION_USAGES = new Set(["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"]);
 const MAX_TIMEOUT_MS = 120_000;
 const MAX_TOTAL_BUDGET_MS = 300_000;
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
@@ -233,6 +240,11 @@ const validateQuery = (query: readonly M5ProviderQueryParameter[], allowed: read
   return freeze(stableSort(result, item => item.key));
 };
 
+const validateCursor = (value: unknown): string => {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512 || value.trim() !== value || /[\u0000-\u001f\u007f?&#=]/.test(value) || /^https?:\/\//i.test(value)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CURSOR_INVALID");
+  return value;
+};
+
 export function validateM5ProviderExecutionPlan(input: unknown): M5ProviderExecutionPlan {
   try {
     const root = object(input, "M5_PROVIDER_EXECUTION_PLAN_INVALID");
@@ -249,11 +261,16 @@ export function validateM5ProviderExecutionPlan(input: unknown): M5ProviderExecu
       const item = object(value, "M5_PROVIDER_EXECUTION_CAPABILITY_INVALID");
       exact(item, ["capability", "completeness"], "M5_PROVIDER_EXECUTION_CAPABILITY_INVALID");
       const capability = nonBlank(item.capability, "M5_PROVIDER_EXECUTION_CAPABILITY_INVALID", 128) as ProviderCapabilityRequirement["capability"];
+      if (!CAPABILITIES.has(capability)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CAPABILITY_INVALID");
       if (item.completeness !== "ANY" && item.completeness !== "COMPLETE") throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CAPABILITY_INVALID");
       return freeze({ capability, completeness: item.completeness as "ANY" | "COMPLETE" });
     }) : (() => { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CAPABILITY_INVALID"); })();
     if (new Set(capabilities.map(item => `${item.capability}:${item.completeness}`)).size !== capabilities.length) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CAPABILITY_DUPLICATE");
-    const usages = Array.isArray(root.requestedUsages) ? root.requestedUsages.map(value => nonBlank(value, "M5_PROVIDER_EXECUTION_USAGE_INVALID", 64) as "NETWORK_ACQUISITION" | "RAW_PAYLOAD_PROCESSING") : (() => { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_USAGE_INVALID"); })();
+    const usages = Array.isArray(root.requestedUsages) ? root.requestedUsages.map(value => {
+      const usage = nonBlank(value, "M5_PROVIDER_EXECUTION_USAGE_INVALID", 64);
+      if (!EXECUTION_USAGES.has(usage)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_USAGE_INVALID");
+      return usage as "NETWORK_ACQUISITION" | "RAW_PAYLOAD_PROCESSING";
+    }) : (() => { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_USAGE_INVALID"); })();
     if (!usages.includes("NETWORK_ACQUISITION") || !usages.includes("RAW_PAYLOAD_PROCESSING") || new Set(usages).size !== usages.length) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_USAGE_INVALID");
     const credential = object(root.credential, "M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
     exact(credential, ["kind", "reference"], "M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
@@ -273,6 +290,7 @@ export function validateM5ProviderExecutionPlan(input: unknown): M5ProviderExecu
     const retry = object(root.retry, "M5_PROVIDER_EXECUTION_RETRY_INVALID");
     exact(retry, ["maxAttempts", "totalBudgetMs", "maxRetryAfterMs"], "M5_PROVIDER_EXECUTION_RETRY_INVALID");
     const retryPolicy = freeze({ maxAttempts: integer(retry.maxAttempts, "M5_PROVIDER_EXECUTION_RETRY_INVALID", 1, 5), totalBudgetMs: integer(retry.totalBudgetMs, "M5_PROVIDER_EXECUTION_RETRY_INVALID", 1, MAX_TOTAL_BUDGET_MS), maxRetryAfterMs: integer(retry.maxRetryAfterMs, "M5_PROVIDER_EXECUTION_RETRY_INVALID", 0, MAX_RETRY_AFTER_MS) });
+    if (timeoutMs > retryPolicy.totalBudgetMs) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RETRY_INVALID");
     const pagination = root.pagination === undefined ? undefined : (() => {
       const item = object(root.pagination, "M5_PROVIDER_EXECUTION_PAGINATION_INVALID");
       exact(item, ["pageOrdinal", "maxPages", "cursorKey"], "M5_PROVIDER_EXECUTION_PAGINATION_INVALID");
@@ -286,7 +304,22 @@ export function validateM5ProviderExecutionPlan(input: unknown): M5ProviderExecu
 }
 
 export function providerPlanFingerprint(plan: M5ProviderExecutionPlan): string {
-  return canonicalSha256({ ...plan, credential: { kind: plan.credential.kind, reference: plan.credential.reference } });
+  return canonicalSha256({
+    planVersion: plan.planVersion,
+    policyVersion: plan.policyVersion,
+    providerId: plan.providerId,
+    datasetId: plan.datasetId,
+    datasetVersion: plan.datasetVersion,
+    providerSourceNamespace: plan.providerSourceNamespace,
+    adapterContractVersion: plan.adapterContractVersion,
+    parserContractVersion: plan.parserContractVersion,
+    requiredCapabilities: plan.requiredCapabilities,
+    requestedUsages: plan.requestedUsages,
+    request: plan.request,
+    limits: plan.limits,
+    retry: plan.retry,
+    ...(plan.pagination === undefined ? {} : { pagination: plan.pagination }),
+  });
 }
 
 export function requestPlanFromAdapterPlan(input: Readonly<{ plan: Readonly<{ providerId: string; datasetId: string; datasetVersion: string; providerSourceNamespace: string; adapterContractVersion: string; parserContractVersion: string; endpointPath: string; query: Readonly<Record<string, string>> }>; requiredCapabilities: readonly ProviderCapabilityRequirement[]; credential: M5CredentialReference; limits?: Partial<M5ProviderExecutionPlan["limits"]>; retry?: Partial<M5RetryPolicy> }>): M5ProviderExecutionPlan {
@@ -346,17 +379,18 @@ export async function executeM5ProviderPlan(input: Readonly<{
   let credential: M5EphemeralCredential;
   try { credential = await input.credentials.resolve(plan.credential); } catch { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_FAILED"); }
   if (credential.kind !== plan.credential.kind) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_KIND_MISMATCH");
-  if ((credential.kind === "NONE" && credential.value !== undefined) || (credential.kind !== "NONE" && (credential.value === undefined || credential.value.length === 0))) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
+  if ((credential.kind === "NONE" && credential.value !== undefined) || (credential.kind !== "NONE" && (credential.value === undefined || credential.value.length === 0 || credential.value.trim() !== credential.value || credential.value.length > 8192 || CONTROL.test(credential.value)))) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
   const startedAt = Date.parse(now());
   if (!Number.isFinite(startedAt)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CLOCK_INVALID");
   let lastRetryable: string | undefined;
   for (let attempt = 1; attempt <= plan.retry.maxAttempts; attempt += 1) {
     if (Date.parse(now()) - startedAt > plan.retry.totalBudgetMs) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RETRY_BUDGET_EXCEEDED");
-    const lease = await (input.rateLimit ?? createNoopM5ProviderRateLimitLease()).acquire({ providerId: plan.providerId, datasetId: plan.datasetId, credentialReference: plan.credential.reference });
+    let lease: boolean;
+    try { lease = await (input.rateLimit ?? createNoopM5ProviderRateLimitLease()).acquire({ providerId: plan.providerId, datasetId: plan.datasetId, credentialReference: plan.credential.reference }); } catch { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RATE_LIMIT_FAILED"); }
     if (!lease) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RATE_LIMITED");
     let response: M5ProviderHttpTransportResponse;
     try {
-      response = await input.transport.send({ request: plan.request, credential, timeoutMs: plan.limits.timeoutMs, maxResponseBytes: plan.limits.maxResponseBytes, redirectPolicy: "ERROR", signal: input.signal, attemptOrdinal: attempt });
+      response = await input.transport.send({ request: freeze({ protocol: "https:" as const, ...plan.request }), credential, timeoutMs: plan.limits.timeoutMs, maxResponseBytes: plan.limits.maxResponseBytes, redirectPolicy: "ERROR", signal: input.signal, attemptOrdinal: attempt });
     } catch (error) {
       if (attempt < plan.retry.maxAttempts && error instanceof M5ProviderInfrastructureError && error.code === "M5_PROVIDER_TRANSPORT_TIMEOUT") { lastRetryable = error.code; await sleep(0); continue; }
       if (error instanceof M5ProviderInfrastructureError) throw error;
@@ -364,7 +398,7 @@ export async function executeM5ProviderPlan(input: Readonly<{
     }
     if (response.status >= 300 && response.status < 400) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_REDIRECT_REJECTED");
     if (RETRY_STATUSES.has(response.status) && attempt < plan.retry.maxAttempts) { lastRetryable = `HTTP_${response.status}`; await sleep(retryAfterMs(response.headers, plan.retry.maxRetryAfterMs)); continue; }
-    if (response.status < 200 || response.status >= 300) throw new M5ProviderInfrastructureError(lastRetryable ?? `M5_PROVIDER_HTTP_${response.status}`);
+    if (response.status < 200 || response.status >= 300) throw new M5ProviderInfrastructureError(`M5_PROVIDER_HTTP_${response.status}`);
     const contentType = header(response.headers, "content-type");
     if (response.status !== 204 && (contentType === undefined || !/^application\/json(?:\s*;|$)/i.test(contentType))) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CONTENT_TYPE_REJECTED");
     const body = await boundedBody(response.body, plan.limits.maxResponseBytes);
@@ -379,9 +413,21 @@ export async function executeM5ProviderPlan(input: Readonly<{
       receivedAt = normalizeIngestionTimestamp(response.retrievedAt, "M5_PROVIDER_EXECUTION_RECEIPT_TIME_INVALID");
       effectiveAvailableAt = normalizeIngestionTimestamp(parsed.effectiveAvailableAt, "M5_PROVIDER_EXECUTION_AVAILABILITY_INVALID");
     } catch { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RECEIPT_INVALID"); }
+    if (effectiveAvailableAt > receivedAt) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_AVAILABILITY_INVALID");
     const payloadFingerprint = nonBlank(parsed.payloadFingerprint, "M5_PROVIDER_EXECUTION_PAYLOAD_FINGERPRINT_INVALID", 64);
     if (!/^[a-f0-9]{64}$/.test(payloadFingerprint)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAYLOAD_FINGERPRINT_INVALID");
-    return freeze({ status: "EXECUTED", planFingerprint, scope: freeze({ providerId: plan.providerId, datasetId: plan.datasetId, datasetVersion: plan.datasetVersion }), receipt: freeze({ providerId: plan.providerId, datasetId: plan.datasetId, datasetVersion: plan.datasetVersion, planFingerprint, receivedAt, effectiveAvailableAt, attemptCount: attempt, ...(response.providerRequestId === undefined ? {} : { providerRequestId: nonBlank(response.providerRequestId, "M5_PROVIDER_EXECUTION_RECEIPT_INVALID", 256) }) }), projection: parsed.projection, payloadFingerprint });
+    const pagination = plan.pagination === undefined ? (() => {
+      if (parsed.nextCursor !== undefined || parsed.isFinal !== undefined) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGINATION_UNEXPECTED");
+      return undefined;
+    })() : (() => {
+      if (parsed.isFinal !== true && parsed.isFinal !== false) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGINATION_INVALID");
+      if (parsed.isFinal) {
+        if (parsed.nextCursor !== undefined) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGINATION_INVALID");
+        return freeze({ isFinal: true as const });
+      }
+      return freeze({ isFinal: false as const, nextCursor: validateCursor(parsed.nextCursor) });
+    })();
+    return freeze({ status: "EXECUTED", planFingerprint, scope: freeze({ providerId: plan.providerId, datasetId: plan.datasetId, datasetVersion: plan.datasetVersion }), receipt: freeze({ providerId: plan.providerId, datasetId: plan.datasetId, datasetVersion: plan.datasetVersion, planFingerprint, receivedAt, effectiveAvailableAt, attemptCount: attempt, ...(response.providerRequestId === undefined ? {} : { providerRequestId: nonBlank(response.providerRequestId, "M5_PROVIDER_EXECUTION_RECEIPT_INVALID", 256) }) }), projection: parsed.projection, payloadFingerprint, ...(pagination === undefined ? {} : { pagination }) });
   }
   throw new M5ProviderInfrastructureError(lastRetryable ?? "M5_PROVIDER_EXECUTION_RETRY_EXHAUSTED");
 }
@@ -400,17 +446,28 @@ export async function executeM5ProviderPagination(input: Readonly<{
   const pages: M5ProviderExecutionSuccess[] = [];
   const cursors = new Set<string>();
   let plan = validateM5ProviderExecutionPlan(input.initialPlan);
+  if (plan.pagination === undefined || plan.pagination.pageOrdinal !== 0 || plan.request.query.some(item => item.key === plan.pagination!.cursorKey)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGINATION_INVALID");
+  const maxPages = plan.pagination.maxPages;
+  const cursorKey = plan.pagination.cursorKey;
+  const paginationBinding = (value: M5ProviderExecutionPlan): string => canonicalSha256({
+    ...value,
+    request: { ...value.request, query: value.request.query.filter(item => item.key !== cursorKey) },
+    pagination: value.pagination === undefined ? undefined : { maxPages: value.pagination.maxPages, cursorKey: value.pagination.cursorKey },
+  });
+  const initialBinding = paginationBinding(plan);
   let finished = false;
-  for (let ordinal = 0; ordinal < (plan.pagination?.maxPages ?? 1); ordinal += 1) {
-    if (plan.pagination && plan.pagination.pageOrdinal !== ordinal) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGE_ORDINAL_INVALID");
+  for (let ordinal = 0; ordinal < maxPages; ordinal += 1) {
+    if (plan.pagination?.pageOrdinal !== ordinal) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGE_ORDINAL_INVALID");
     const result = await executeM5ProviderPlan({ ...input, plan });
     if (result.status !== "EXECUTED") throw new M5ProviderInfrastructureError(result.code);
     pages.push(result);
-    const parsed = result.projection as { nextCursor?: unknown; isFinal?: unknown };
-    if (parsed.isFinal === true || parsed.nextCursor === undefined || parsed.nextCursor === null) { finished = true; break; }
-    if (typeof parsed.nextCursor !== "string" || parsed.nextCursor.length === 0 || parsed.nextCursor.length > 512 || /[\u0000-\u001f\u007f?#]/.test(parsed.nextCursor) || /^https?:\/\//i.test(parsed.nextCursor) || cursors.has(parsed.nextCursor)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CURSOR_INVALID");
-    cursors.add(parsed.nextCursor);
-    plan = validateM5ProviderExecutionPlan(input.nextPlan(parsed.nextCursor, ordinal + 1));
+    if (result.pagination?.isFinal === true) { finished = true; break; }
+    const nextCursor = result.pagination?.nextCursor;
+    if (nextCursor === undefined || cursors.has(nextCursor)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CURSOR_INVALID");
+    cursors.add(nextCursor);
+    const next = validateM5ProviderExecutionPlan(input.nextPlan(nextCursor, ordinal + 1));
+    if (next.pagination?.pageOrdinal !== ordinal + 1 || paginationBinding(next) !== initialBinding || next.request.query.find(item => item.key === cursorKey)?.value !== nextCursor) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGINATION_PLAN_MISMATCH");
+    plan = next;
   }
   if (!finished) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGE_LIMIT_EXCEEDED");
   if (pages.length === 0) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_EMPTY_PAGINATION");

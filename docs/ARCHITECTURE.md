@@ -480,7 +480,11 @@ never leave that callback. Receipt/retrieved time affects availability and
 provenance, not payload identity. Retries are limited to idempotent GET transient
 conditions with injected sleep/clock controls, per-attempt rate-limit leases and
 a total budget. Pagination requires contiguous ordinals, a maximum page count,
-validated cursors and no arbitrary provider-returned next URL.
+validated parser-returned cursor metadata and no arbitrary provider-returned
+next URL. Projection fields are never pagination authority. Every continuation
+plan must preserve the initial scope, request shape, credential reference,
+limits, retry policy, cursor key and maximum page count; only the page ordinal
+and the validated cursor query value may change.
 
 The current implementation has no live HTTP client, scheduler, credential store,
 database write path or provider approval. CoinGecko, Etherscan and holder
