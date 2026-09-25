@@ -10,18 +10,12 @@ import {
 } from "./m5-provider-readiness";
 
 export const M5_PROVIDER_READINESS_AGGREGATE_VERSION = "m5-provider-readiness-aggregate/v1" as const;
+export const M5_PROVIDER_READINESS_AGGREGATE_POLICY_VERSION = "m5-provider-readiness-aggregate-policy/v1" as const;
 export const M5_AGGREGATE_CAPABILITIES = M5_PROVIDER_CAPABILITIES;
-export const M5_AGGREGATE_USAGES = [
-  "PROVIDER_ACCESS",
-  "RAW_PAYLOAD_PROCESSING",
-  "RAW_STORAGE",
-  "NORMALIZED_STORAGE",
-  "AUTHORITY_PERSISTENCE",
-  "RETENTION",
-  "REDISTRIBUTION",
-  "COMMERCIAL_USE",
-] as const;
-export type M5AggregateUsage = typeof M5_AGGREGATE_USAGES[number];
+const compareText = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
+export type M5AggregateUsage = M5ProviderUsage | "RETENTION";
+const aggregateUsages: readonly M5AggregateUsage[] = [...M5_PROVIDER_USAGES, "RETENTION"];
+export const M5_AGGREGATE_USAGES: readonly M5AggregateUsage[] = Object.freeze([...aggregateUsages].sort(compareText));
 export type M5AggregateApproval = "APPROVED" | "REQUIRES_APPROVAL" | "REJECTED" | "EXPIRED" | "UNKNOWN";
 export type M5AggregateMode = "ALL_OF";
 
@@ -58,6 +52,7 @@ export type M5AggregateUsageDecision = Readonly<{
 
 export type M5ProviderReadinessAggregateConfig = Readonly<{
   contractVersion: typeof M5_PROVIDER_READINESS_AGGREGATE_VERSION;
+  policyVersion: typeof M5_PROVIDER_READINESS_AGGREGATE_POLICY_VERSION;
   aggregateId: string;
   reviewedAt: string;
   reviewReference: string;
@@ -83,6 +78,7 @@ export type M5AggregateBlockerCode =
 export type M5ProviderReadinessAggregateResult = Readonly<{
   contractVersion: typeof M5_PROVIDER_READINESS_AGGREGATE_VERSION;
   result: "READY" | "BLOCKED" | "INVALID";
+  evaluatedAt: string;
   aggregateId: string;
   aggregateFingerprint: string;
   aggregateResultId: string;
@@ -99,7 +95,7 @@ const URLISH = /(?:https?:\/\/|[?#])/i;
 const ID = /^[a-z0-9][a-z0-9._:/-]{0,255}$/;
 const SHA = /^[a-f0-9]{64}$/;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const cmp = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
+const cmp = compareText;
 const freeze = <T>(value: T): T => {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -139,6 +135,9 @@ function assertDataTree(value: unknown, path = "root", seen = new WeakSet<object
   }
 }
 function exact(value: Record<string, unknown>, fields: readonly string[]): void {
+  for (const key of fields) {
+    if (key in value && !Object.prototype.hasOwnProperty.call(value, key)) throw new Error("M5_AGGREGATE_INHERITED_FIELD_REJECTED");
+  }
   for (const key of Object.keys(value)) {
     if (!fields.includes(key)) throw new Error(SECRET.test(key) ? "M5_AGGREGATE_SECRET_FIELD_REJECTED" : "M5_AGGREGATE_UNKNOWN_FIELD");
   }
@@ -205,15 +204,25 @@ function parseUsageDecision(value: unknown): M5AggregateUsageDecision {
 }
 
 export function parseM5ProviderReadinessAggregateConfig(input: unknown): M5ProviderReadinessAggregateConfig {
+  try { return parseAggregateConfig(input); }
+  catch (error) {
+    if (error instanceof Error && error.message.startsWith("M5_AGGREGATE_")) throw new Error(error.message);
+    throw new Error("M5_AGGREGATE_CONFIG_INVALID");
+  }
+}
+
+function parseAggregateConfig(input: unknown): M5ProviderReadinessAggregateConfig {
   assertDataTree(input);
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("M5_AGGREGATE_CONFIG_INVALID");
   const root = input as Record<string, unknown>;
-  exact(root, ["contractVersion", "aggregateId", "reviewedAt", "reviewReference", "sources", "capabilityAssignments", "usageDecisions"]);
+  exact(root, ["contractVersion", "policyVersion", "aggregateId", "reviewedAt", "reviewReference", "sources", "capabilityAssignments", "usageDecisions"]);
   if (root.contractVersion !== M5_PROVIDER_READINESS_AGGREGATE_VERSION) throw new Error("M5_AGGREGATE_VERSION_INVALID");
+  if (root.policyVersion !== M5_PROVIDER_READINESS_AGGREGATE_POLICY_VERSION) throw new Error("M5_AGGREGATE_POLICY_VERSION_INVALID");
   if (!Array.isArray(root.sources) || !root.sources.length) throw new Error("M5_AGGREGATE_SOURCES_INVALID");
   if (!Array.isArray(root.capabilityAssignments) || !Array.isArray(root.usageDecisions)) throw new Error("M5_AGGREGATE_CONFIG_INVALID");
   const sources = root.sources.map(parseSource).sort((a, b) => cmp(a.sourceId, b.sourceId));
   if (new Set(sources.map(source => source.sourceId)).size !== sources.length) throw new Error("M5_AGGREGATE_DUPLICATE_SOURCE");
+  if (new Set(sources.map(source => JSON.stringify([source.providerId, source.datasetId, source.datasetVersion]))).size !== sources.length) throw new Error("M5_AGGREGATE_DUPLICATE_SOURCE_SCOPE");
   const assignments = root.capabilityAssignments.map(parseAssignment).sort((a, b) => cmp(a.capability, b.capability));
   if (new Set(assignments.map(item => item.capability)).size !== assignments.length) throw new Error("M5_AGGREGATE_DUPLICATE_CAPABILITY_ASSIGNMENT");
   if (assignments.length !== M5_PROVIDER_CAPABILITIES.length || assignments.some((item, index) => item.capability !== [...M5_PROVIDER_CAPABILITIES].sort(cmp)[index])) throw new Error("M5_AGGREGATE_CAPABILITY_COVERAGE_INVALID");
@@ -222,7 +231,7 @@ export function parseM5ProviderReadinessAggregateConfig(input: unknown): M5Provi
   const expectedUsageKeys = sources.flatMap(source => M5_AGGREGATE_USAGES.map(usage => `${source.sourceId}:${usage}`)).sort(cmp);
   if (JSON.stringify(usages.map(item => `${item.sourceId}:${item.usage}`)) !== JSON.stringify(expectedUsageKeys)) throw new Error("M5_AGGREGATE_USAGE_COVERAGE_INVALID");
   if (usages.some(item => !sources.some(source => source.sourceId === item.sourceId))) throw new Error("M5_AGGREGATE_USAGE_SCOPE_MISMATCH");
-  return freeze({ contractVersion: M5_PROVIDER_READINESS_AGGREGATE_VERSION, aggregateId: id(root.aggregateId), reviewedAt: timestamp(root.reviewedAt),
+  return freeze({ contractVersion: M5_PROVIDER_READINESS_AGGREGATE_VERSION, policyVersion: M5_PROVIDER_READINESS_AGGREGATE_POLICY_VERSION, aggregateId: id(root.aggregateId), reviewedAt: timestamp(root.reviewedAt),
     reviewReference: id(root.reviewReference), sources: Object.freeze(sources), capabilityAssignments: Object.freeze(assignments), usageDecisions: Object.freeze(usages) });
 }
 
@@ -238,8 +247,8 @@ export function m5ProviderReadinessEvaluationIdentity(evaluation: ProviderReadin
   return freeze({ readinessResultId: `m5-provider-readiness-result:${readinessResultFingerprint}`, readinessResultFingerprint });
 }
 
-export function m5ProviderReadinessAggregateFingerprint(config: M5ProviderReadinessAggregateConfig): string {
-  return digest({ contractVersion: config.contractVersion, aggregateId: config.aggregateId, reviewedAt: config.reviewedAt, reviewReference: config.reviewReference,
+export function m5ProviderReadinessAggregateConfigFingerprint(config: M5ProviderReadinessAggregateConfig): string {
+  return digest({ contractVersion: config.contractVersion, policyVersion: config.policyVersion, aggregateId: config.aggregateId, reviewedAt: config.reviewedAt, reviewReference: config.reviewReference,
     sources: config.sources, capabilityAssignments: config.capabilityAssignments, usageDecisions: config.usageDecisions });
 }
 

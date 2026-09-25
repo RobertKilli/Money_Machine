@@ -1,5 +1,6 @@
 {
   "contractVersion": "m5-provider-readiness-aggregate/v1",
+  "policyVersion": "m5-provider-readiness-aggregate-policy/v1",
   "aggregateId": "m5-production-provider-stack",
   "reviewedAt": "2026-09-25T00:00:00.000Z",
   "reviewReference": "review/m5-provider-source-decision/2026-09-25",
@@ -29,13 +30,13 @@
     {"capability":"CANONICAL_ASSET_IDENTITY","mode":"ALL_OF","sourceIds":[]}
   ],
   "usageDecisions": [
-    {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"PROVIDER_ACCESS","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"},
     {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"RAW_PAYLOAD_PROCESSING","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"},
-    {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"RAW_STORAGE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"},
+    {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"RAW_PAYLOAD_STORAGE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"},
     {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"NORMALIZED_STORAGE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"},
     {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"AUTHORITY_PERSISTENCE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"},
     {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"RETENTION","approval":"UNKNOWN","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"},
     {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"REDISTRIBUTION","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"},
-    {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"COMMERCIAL_USE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"}
+    {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"COMMERCIAL_USE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"},
+    {"sourceId":"m5-provider-source:cd556a5e114d233e725cc66ae877643d69641bb0d118be326dd46dceac326b48","usage":"NETWORK_ACQUISITION","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25"}
   ]
 }

@@ -525,11 +525,18 @@ machine-readable decision is scoped only to CoinGecko's market-chart
 provider/dataset/version; it remains the single-scope contract. The separate
 `m5-provider-readiness-aggregate/v1` contract binds exact authenticated
 single-scope evaluations to provider/dataset/version references, composes
-capabilities only with explicit `ALL_OF` assignments, and reviews eight usage
-permissions independently for each source. Capability availability,
+capabilities only with explicit `ALL_OF` assignments, and carries the seven
+existing source usages independently per provider plus a separate retention
+decision for data lifecycle. Retention does not alter the single-scope usage
+enum and cannot authorize storage. Capability availability,
 completeness authority, usage/legal approval and execution authorization are
 separate decisions. Aggregate READY requires complete evidence and approvals
-for every source in the composed stack; it cannot promote partial evidence.
+for every source in the composed stack and an explicit canonical `asOf` at the
+execution guard; it cannot promote partial evidence.
+The result fingerprint binds the aggregate contract and policy versions,
+provider config and evaluator-result fingerprints, ordered assignments,
+per-source usage approvals and blockers. Evaluation time is diagnostic output,
+not material identity; the caller supplies canonical `asOf` for expiry checks.
 The config
 [`config/m5/provider-readiness.production.json`](../config/m5/provider-readiness.production.json)
 and aggregate config
