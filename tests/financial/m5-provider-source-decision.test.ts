@@ -5,7 +5,7 @@ import {
   M5_DEFAULT_REQUESTED_USAGES,
   M5_DEFAULT_REQUIRED_CAPABILITIES,
 } from "@/application/intelligence/evaluate-m5-provider-readiness";
-import { parseM5ProviderReadinessConfig } from "@/domain/intelligence/m5-provider-readiness";
+import { M5_PROVIDER_CAPABILITIES, M5_PROVIDER_USAGES, parseM5ProviderReadinessConfig } from "@/domain/intelligence/m5-provider-readiness";
 
 const productionConfig = (): Record<string, unknown> => JSON.parse(
   readFileSync(new URL("../../config/m5/provider-readiness.production.json", import.meta.url), "utf8"),
@@ -24,11 +24,17 @@ describe("M5 production provider source decision", () => {
   it("strictly parses the versioned production config with deterministic order and deep immutability", () => {
     const parsed = parseM5ProviderReadinessConfig(productionConfig());
     expect(parsed.configVersion).toBe("m5-provider-readiness-config/v1");
+    expect(parsed.providerId).toBe("coingecko");
+    expect(parsed.datasetId).toBe("coingecko-market-chart");
+    expect(parsed.datasetVersion).toBe("coingecko-market-chart/range-v1");
+    expect(parsed.capabilities.map(({ capability }) => capability)).toEqual(["DAILY_CLOSE_SERIES", "MARKET_CAP", "VOLUME_24H"]);
+    expect(parsed.capabilities.map(({ capability }) => capability)).not.toContain("LIQUIDITY_COMPLETE_SET");
     expect(parsed.capabilities.map(({ capability }) => capability)).toEqual([...parsed.capabilities.map(({ capability }) => capability)].sort());
     expect(parsed.usageDecisions.map(({ usage }) => usage)).toEqual([...parsed.usageDecisions.map(({ usage }) => usage)].sort());
     expect(Object.isFrozen(parsed)).toBe(true);
     expect(Object.isFrozen(parsed.capabilities)).toBe(true);
     expect(Object.isFrozen(parsed.capabilities[0])).toBe(true);
+    expect(parsed.usageDecisions.map(({ usage }) => usage)).toEqual([...M5_PROVIDER_USAGES]);
     expect(parsed.usageDecisions.every(({ approval }) => approval === "REQUIRES_APPROVAL")).toBe(true);
     expect(JSON.stringify(productionConfig())).not.toMatch(/api[_-]?key|access[_-]?token|termsText|"approval"\s*:\s*"APPROVED"/i);
   });
@@ -47,23 +53,61 @@ describe("M5 production provider source decision", () => {
     expect(() => parseM5ProviderReadinessConfig(termsText)).toThrow("M5_PROVIDER_READINESS_SECRET_FIELD_REJECTED");
   });
 
+  it("rejects unsafe URLs and duplicate capability or usage decisions", () => {
+    const unsafe = productionConfig();
+    unsafe.documentationUrls = ["https://docs.coingecko.com/path?token=secret"];
+    expect(() => parseM5ProviderReadinessConfig(unsafe)).toThrow("M5_PROVIDER_READINESS_URL_UNSAFE");
+
+    const duplicateCapability = productionConfig();
+    duplicateCapability.capabilities = [...duplicateCapability.capabilities as unknown[], (duplicateCapability.capabilities as unknown[])[0]];
+    expect(() => parseM5ProviderReadinessConfig(duplicateCapability)).toThrow("M5_PROVIDER_READINESS_DUPLICATE_CAPABILITY");
+
+    const duplicateUsage = productionConfig();
+    duplicateUsage.usageDecisions = [...duplicateUsage.usageDecisions as unknown[], (duplicateUsage.usageDecisions as unknown[])[0]];
+    expect(() => parseM5ProviderReadinessConfig(duplicateUsage)).toThrow("M5_PROVIDER_READINESS_DUPLICATE_USAGE");
+  });
+
   it("evaluates the current production posture as BLOCKED for all complete M5 requirements", () => {
     const result = evaluate();
     expect(result.result).toBe("BLOCKED");
     expect(result.requiredCapabilities).toHaveLength(11);
     expect(result.requestedUsages).toHaveLength(7);
     expect(result.blockers.some(({ code }) => code === "M5_READINESS_CAPABILITY_INCOMPLETE")).toBe(true);
-    expect(result.blockers.some(({ code }) => code === "M5_READINESS_HOLDER_FINALITY_UNPROVEN")).toBe(true);
-    expect(result.blockers.some(({ code }) => code === "M5_READINESS_SUSPICIOUS_COVERAGE_INCOMPLETE")).toBe(true);
+    expect(result.blockers.some(({ code, capability }) => code === "M5_READINESS_CAPABILITY_MISSING" && capability === "HOLDER_FINALITY")).toBe(true);
+    expect(result.blockers.some(({ code, capability }) => code === "M5_READINESS_CAPABILITY_MISSING" && capability === "SUSPICIOUS_RULE_COVERAGE")).toBe(true);
     expect(result.blockers.some(({ code }) => code === "M5_READINESS_RAW_STORAGE_NOT_APPROVED")).toBe(true);
     expect(result.blockers.some(({ code }) => code === "M5_READINESS_REDISTRIBUTION_NOT_APPROVED")).toBe(true);
     expect(result.blockers.some(({ code }) => code === "M5_READINESS_COMMERCIAL_USE_NOT_APPROVED")).toBe(true);
   });
 
+  it("does not declare completeness without a reviewed provider-specific decision", () => {
+    const config = productionConfig();
+    const capabilities = config.capabilities as Array<Record<string, unknown>>;
+    expect(capabilities.every(({ completeness }) => completeness !== "COMPLETE")).toBe(true);
+    expect(config.providerId).toBe("coingecko");
+    expect(config.datasetId).toBe("coingecko-market-chart");
+    expect(capabilities.every(({ documentationUrls, reviewReference }) =>
+      Array.isArray(documentationUrls) && documentationUrls.length > 0 && typeof reviewReference === "string" && reviewReference.length > 0,
+    )).toBe(true);
+  });
+
+  it("does not claim cross-provider capabilities in a single-scope config", () => {
+    const config = productionConfig();
+    expect(config.providerId).toBe("coingecko");
+    expect(config.datasetId).toBe("coingecko-market-chart");
+    expect(config.datasetVersion).toBe("coingecko-market-chart/range-v1");
+    const represented = (config.capabilities as Array<{ capability: string }>).map(item => item.capability);
+    expect(represented.every(capability => ["DAILY_CLOSE_SERIES", "MARKET_CAP", "VOLUME_24H"].includes(capability))).toBe(true);
+    const evaluation = evaluate(config);
+    expect(evaluation.result).toBe("BLOCKED");
+    expect(evaluation.blockers.some(({ code, capability }) => code === "M5_READINESS_CAPABILITY_MISSING" && capability === "HOLDER_COMPLETE_UNIVERSE")).toBe(true);
+    expect(evaluation.blockers.some(({ code, capability }) => code === "M5_READINESS_CAPABILITY_MISSING" && capability === "LIQUIDITY_COMPLETE_SET")).toBe(true);
+  });
+
   it("binds the decision to provider, dataset, and exact version", () => {
     const result = evaluate(productionConfig(), {
-      providerId: "m5-production-stack",
-      datasetId: "m5-production-inputs",
+      providerId: "coingecko",
+      datasetId: "coingecko-market-chart",
       datasetVersion: "m5-provider-source-decision/other",
     });
     expect(result.result).toBe("BLOCKED");
@@ -72,12 +116,24 @@ describe("M5 production provider source decision", () => {
 
   it("treats TOP_N_ONLY and UNKNOWN capabilities as blockers", () => {
     const config = productionConfig();
-    const capabilities = config.capabilities as Array<Record<string, unknown>>;
-    expect(capabilities.find(({ capability }) => capability === "LIQUIDITY_COMPLETE_SET")).toMatchObject({ status: "PARTIAL", completeness: "TOP_N_ONLY" });
-    expect(capabilities.find(({ capability }) => capability === "HOLDER_FINALITY")).toMatchObject({ status: "UNKNOWN", completeness: "UNKNOWN" });
+    const capability = (config.capabilities as Array<Record<string, unknown>>)
+      .find(({ capability }) => capability === "DAILY_CLOSE_SERIES");
+    expect(capability).toMatchObject({ status: "SUPPORTED", completeness: "PARTIAL" });
+    if (capability) capability.completeness = "TOP_N_ONLY";
     const result = evaluate(config);
     expect(result.result).toBe("BLOCKED");
-    expect(result.blockers.some(({ capability, code }) => capability === "LIQUIDITY_COMPLETE_SET" && code === "M5_READINESS_CAPABILITY_NOT_SUPPORTED")).toBe(true);
+    expect(result.blockers.some(({ capability: blocked, code }) => blocked === "DAILY_CLOSE_SERIES" && code === "M5_READINESS_CAPABILITY_INCOMPLETE")).toBe(true);
+
+    const unknown = productionConfig();
+    const unknownCapability = (unknown.capabilities as Array<Record<string, unknown>>)
+      .find(({ capability }) => capability === "MARKET_CAP");
+    if (unknownCapability) {
+      unknownCapability.status = "UNKNOWN";
+      unknownCapability.completeness = "UNKNOWN";
+    }
+    const unknownResult = evaluate(unknown);
+    expect(unknownResult.result).toBe("BLOCKED");
+    expect(unknownResult.blockers.some(({ capability: blocked, code }) => blocked === "MARKET_CAP" && code === "M5_READINESS_CAPABILITY_NOT_SUPPORTED")).toBe(true);
   });
 
   it("blocks missing capabilities and PARTIAL completeness", () => {
@@ -121,6 +177,12 @@ describe("M5 production provider source decision", () => {
     } finally {
       fetch.mockRestore();
     }
+  });
+
+  it("covers all eleven capabilities in the decision report", () => {
+    const report = readFileSync(new URL("../../docs/M5_PROVIDER_SOURCE_DECISION.md", import.meta.url), "utf8");
+    expect(M5_PROVIDER_CAPABILITIES).toHaveLength(11);
+    for (const capability of M5_PROVIDER_CAPABILITIES) expect(report).toContain(`\`${capability}\``);
   });
 
   it("returns deterministic, deeply frozen readiness evaluations", () => {

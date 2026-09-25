@@ -521,6 +521,10 @@ gates.
 The official-source assessment, capability matrix, candidate-stack costs and
 remaining technical/legal decisions are maintained in
 [`M5_PROVIDER_SOURCE_DECISION.md`](M5_PROVIDER_SOURCE_DECISION.md). The current
-machine-readable production posture is
+machine-readable decision is scoped only to CoinGecko's market-chart
+provider/dataset/version; it is not a combined stack config. The existing
+readiness contract is single-scope, so system-wide production readiness stays
+blocked until a reviewed aggregate contract composes provider-specific results.
+The config
 [`config/m5/provider-readiness.production.json`](../config/m5/provider-readiness.production.json)
-and must evaluate `BLOCKED`; it contains no production usage approvals.
+evaluates `BLOCKED`; it contains no usage approvals.
