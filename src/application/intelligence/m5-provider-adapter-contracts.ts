@@ -22,13 +22,23 @@ const freeze = <T>(value: T): T => {
 };
 const object = (value: unknown, code: string): Obj => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(code);
+  // Provider fixtures are JSON data, never executable object graphs. Reject
+  // symbol keys and accessors so direct parser callers cannot hide fields or
+  // trigger code while a fixture is inspected.
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new Error(code);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new Error(code);
+  }
   return value as Obj;
 };
 const exact = (value: Obj, keys: readonly string[], code: string): void => {
   const allowed = new Set(keys);
-  const unexpected = Object.keys(value).find(key => !allowed.has(key));
+  const unexpected = Reflect.ownKeys(value).find(key => typeof key !== "string" || !allowed.has(key));
   if (unexpected) {
-    if (/(?:api[-_]?key|authorization|cookie|password|secret|token|credential|signature|url)/i.test(unexpected)) {
+    if (typeof unexpected === "string" && /(?:api[-_]?key|authorization|cookie|password|secret|token|credential|signature|url)/i.test(unexpected)) {
       throw new Error("M5_PROVIDER_SECRET_FIELD_REJECTED");
     }
     throw new Error(code);

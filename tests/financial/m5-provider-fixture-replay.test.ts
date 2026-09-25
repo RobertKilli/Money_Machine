@@ -6,6 +6,8 @@ import {
 import type { M5ProviderHttpTransport } from "@/application/intelligence/m5-provider-execution-boundary";
 import { evaluateM5ProviderReadinessConfig } from "@/application/intelligence/evaluate-m5-provider-readiness";
 import type { M5ProviderCapability, ProviderCapabilityRequirement } from "@/domain/intelligence/m5-provider-readiness";
+import { parseCoinGeckoFixture, parseEtherscanFixture } from "@/application/intelligence/m5-provider-adapter-contracts";
+import { assertSourceEnvelope } from "@/domain/intelligence/ingestion-provenance";
 
 const contractAddress = "0xabcdef0123456789abcdef0123456789abcdef01";
 const requestedAt = "2026-01-31T23:59:00.000Z";
@@ -96,6 +98,10 @@ function etherscanBody() {
     apiStatus: "1",
     apiMessage: "OK",
   };
+}
+
+function etherscanBodyWith(overrides: Record<string, unknown> = {}) {
+  return { ...etherscanBody(), ...overrides };
 }
 
 function transport(body: unknown, retrievedAt = receiptAt, send = vi.fn()): M5ProviderHttpTransport {
@@ -225,5 +231,73 @@ describe("M5 provider fixture replay integration", () => {
     await expect(executeM5CoinGeckoFixtureReplay({ ...common, transport: transport(coinGeckoBody("2026-02-01T00:00:01.000Z")) })).rejects.toThrow("M5_PROVIDER_EXECUTION_PARSER_FAILED");
     await expect(executeM5CoinGeckoFixtureReplay({ ...common, transport: transport(coinGeckoBody(receiptAt, { contractAddress: "0x1111111111111111111111111111111111111111" })) })).rejects.toThrow("M5_PROVIDER_EXECUTION_PARSER_FAILED");
     await expect(executeM5CoinGeckoFixtureReplay({ ...common, transport: transport("{") })).rejects.toThrow("M5_PROVIDER_EXECUTION_PARSER_FAILED");
+  });
+
+  it("rejects non-plain objects, symbols, unknown fields, and secret-like keys in strict parsers", () => {
+    expect(() => parseCoinGeckoFixture(Object.assign(Object.create({ inherited: true }), coinGeckoBody()))).toThrow();
+    const symbolFixture = coinGeckoBody();
+    Object.defineProperty(symbolFixture, Symbol("hidden"), { value: "secret" });
+    expect(() => parseCoinGeckoFixture(symbolFixture)).toThrow();
+    expect(() => parseCoinGeckoFixture(coinGeckoBody(receiptAt, { accessToken: "do-not-echo" }))).toThrow();
+    expect(() => parseEtherscanFixture(etherscanBodyWith({ unexpected: "value" }))).toThrow();
+  });
+
+  it("fails closed on Etherscan address, chain, dataset/version, receipt, and future timestamps", async () => {
+    const common = {
+      contractAddress, idempotencyKey: "etherscan-invalid", requestedAt, startedAt: requestedAt, recordedAt,
+      credential: { kind: "NONE" as const, reference: "fixture-none" },
+      readiness: readiness("etherscan", "etherscan-contract-authority", "etherscan-api-v2/v1", etherscanCapabilities),
+      credentials: noCredentials,
+    };
+    for (const body of [
+      etherscanBodyWith({ address: "0x1111111111111111111111111111111111111111" }),
+      etherscanBodyWith({ chainid: "5" }),
+      etherscanBodyWith({ datasetId: "other" }),
+      etherscanBodyWith({ datasetVersion: "other/v2" }),
+      etherscanBodyWith({ receipt: { receivedAt: "2026-02-01T00:00:02.000Z" } }),
+      etherscanBodyWith({ receipt: { receivedAt: "2026-02-01T00:00:00.000Z", providerPublishedAt: "2026-02-01T00:00:01.000Z" } }),
+    ]) {
+      await expect(executeM5EtherscanFixtureReplay({ ...common, transport: transport(body) })).rejects.toThrow("M5_PROVIDER_EXECUTION_PARSER_FAILED");
+    }
+  });
+
+  it("keeps Etherscan content fingerprints stable across receipt changes and changes them for semantic changes", async () => {
+    const base = etherscanBody();
+    const later = { ...base, receipt: { receivedAt: "2026-02-01T00:05:00.000Z" } };
+    expect(parseEtherscanFixture(base).payloadFingerprint).toBe(parseEtherscanFixture(later).payloadFingerprint);
+    for (const changed of [
+      { ...base, creation: { ...base.creation, blockNumber: "19000001" } },
+      { ...base, creation: { ...base.creation, blockHash: `0x${"b".repeat(64)}` } },
+      { ...base, sourceCode: { status: "UNVERIFIED", proxy: false } },
+      { ...base, datasetVersion: "etherscan-api-v2/v2" },
+      { ...base, address: "0x1111111111111111111111111111111111111111" },
+    ]) expect(parseEtherscanFixture(changed).payloadFingerprint).not.toBe(parseEtherscanFixture(base).payloadFingerprint);
+  });
+
+  it("produces deeply immutable results and never exposes raw bytes or credential material", async () => {
+    const result = await executeM5CoinGeckoFixtureReplay({
+      coinId: "synthetic-asset", contractAddress, from: "2026-01-01T00:00:00.000Z", to: receiptAt,
+      idempotencyKey: "immutable-replay", requestedAt, startedAt: requestedAt, recordedAt,
+      credential: { kind: "NONE", reference: "fixture-none" },
+      readiness: readiness("coingecko", "coingecko-market-chart", "coingecko-market-chart/v1", coinGeckoCapabilities),
+      transport: transport(coinGeckoBody()), credentials: noCredentials, now: () => receiptAt,
+    });
+    expect(result.status).toBe("DRY_RUN_READY");
+    if (result.status !== "DRY_RUN_READY") return;
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.normalizedPackage.records)).toBe(true);
+    expect(Object.isFrozen(result.normalizedPackage.records[0])).toBe(true);
+    expect(Object.isFrozen(result.normalizedPackage.records[0]?.normalizedEnvelope)).toBe(true);
+    const serialized = JSON.stringify(result, (_key, value) => typeof value === "bigint" ? value.toString() : value);
+    expect(serialized).not.toContain("rawPayload");
+    expect(serialized).not.toContain("do-not-echo");
+    expect(serialized).not.toContain("body");
+    expect(result).not.toHaveProperty("apply");
+    expect(result).not.toHaveProperty("persist");
+    const envelope = result.ingestionPlan.records[0]?.envelope;
+    expect(envelope).toBeDefined();
+    if (envelope) {
+      expect(() => assertSourceEnvelope({ ...envelope, selectedAuditableFields: { ...envelope.selectedAuditableFields, metric: "TAMPERED" } })).toThrow("M5_SOURCE_ENVELOPE_FINGERPRINT_MISMATCH");
+    }
   });
 });
