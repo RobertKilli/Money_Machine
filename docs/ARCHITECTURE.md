@@ -491,3 +491,27 @@ database write path or provider approval. CoinGecko, Etherscan and holder
 integration is proven only through synthetic fixture transports and existing
 strict parsers. Live execution remains blocked until the readiness gates and a
 separate production execution review are approved.
+
+### M5 provider fixture replay integration
+
+`m5-provider-fixture-replay/v1` composes the readiness-gated execution boundary,
+the existing CoinGecko/Etherscan fixture parsers, the normalized source-package
+projection and the manual-ingestion dry-run planner. The integration accepts
+only injected synthetic transport bytes. It performs no live HTTP setup,
+credential lookup implementation, database transaction or persistence write.
+
+The transport receipt is authoritative for availability and must match the
+strict fixture receipt exactly. Provider, dataset, version, namespace, asset and
+contract scope are reconstructed from the adapter request plan and checked again
+after parsing. Raw response bytes do not escape the parser callback. A successful
+replay returns the execution receipt, a strict
+`m5-normalized-source-package/v1`, and its deterministic ingestion/SourceLineage
+dry-run plan; it cannot apply that plan.
+
+Payload identity excludes receipt, availability and recording timestamps. The
+same response material received later therefore keeps the provider payload,
+normalized record and source-artifact identities, while the observation,
+availability claim and SourceLineage material can change. This layering prevents
+network timing from masquerading as new provider content. Live provider
+execution, commercial/legal approval, persistence and scheduling remain separate
+gates.
