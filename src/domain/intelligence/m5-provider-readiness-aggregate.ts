@@ -78,6 +78,7 @@ export type M5AggregateBlockerCode =
   | "M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING"
   | "M5_AGGREGATE_APPROVAL_AUTHORITY_INVALID"
   | "M5_AGGREGATE_APPROVAL_AUTHORITY_MISMATCH"
+  | "M5_AGGREGATE_APPROVAL_AUTHORITY_EXPIRED"
   | "M5_AGGREGATE_APPROVAL_AUTHORITY_NOT_APPROVED"
   | "M5_AGGREGATE_CONFIG_INVALID";
 
@@ -184,8 +185,11 @@ function parseSource(value: unknown): M5AggregateSource {
   const sourceId = id(row.sourceId);
   if (sourceId !== expectedSourceId) throw new Error("M5_AGGREGATE_SOURCE_SCOPE_MISMATCH");
   if ((row.approvalAuthorityId === undefined) !== (row.approvalAuthorityFingerprint === undefined)) throw new Error("M5_AGGREGATE_APPROVAL_AUTHORITY_INVALID");
+  const approvalAuthorityId = row.approvalAuthorityId === undefined ? undefined : id(row.approvalAuthorityId);
+  const approvalAuthorityFingerprint = row.approvalAuthorityFingerprint === undefined ? undefined : fingerprint(row.approvalAuthorityFingerprint);
+  if (approvalAuthorityId && approvalAuthorityFingerprint !== undefined && approvalAuthorityId !== `m5-provider-approval-authority:${approvalAuthorityFingerprint}`) throw new Error("M5_AGGREGATE_APPROVAL_AUTHORITY_INVALID");
   return freeze({ sourceId, providerId, datasetId, datasetVersion, readinessConfigId, readinessConfigFingerprint,
-    ...(row.approvalAuthorityId === undefined ? {} : { approvalAuthorityId: id(row.approvalAuthorityId), approvalAuthorityFingerprint: fingerprint(row.approvalAuthorityFingerprint) }),
+    ...(approvalAuthorityId === undefined ? {} : { approvalAuthorityId, approvalAuthorityFingerprint: approvalAuthorityFingerprint! }),
     capabilities: enumArray(row.capabilities, M5_PROVIDER_CAPABILITIES, "M5_AGGREGATE_SOURCE_CAPABILITIES_INVALID"),
     usages: enumArray(row.usages, M5_PROVIDER_USAGES, "M5_AGGREGATE_SOURCE_USAGES_INVALID") });
 }

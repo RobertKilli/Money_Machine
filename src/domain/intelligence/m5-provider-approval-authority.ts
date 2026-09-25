@@ -64,7 +64,7 @@ function dataTree(value: unknown, seen = new WeakSet<object>()): void {
 }
 function exact(row: Record<string, unknown>, fields: readonly string[]): void {
   for (const key of fields) if (key in row && !Object.hasOwn(row, key)) fail("M5_APPROVAL_INHERITED_FIELD");
-  for (const key of Object.keys(row)) if (!fields.includes(key)) fail(/secret|token|credential|key|password/i.test(key) ? "M5_APPROVAL_SECRET_FIELD" : "M5_APPROVAL_UNKNOWN_FIELD");
+  for (const key of Object.keys(row)) if (!fields.includes(key)) fail(/secret|token|credential|authorization|cookie|private[-_]?key|api[-_]?key|password/i.test(key) ? "M5_APPROVAL_SECRET_FIELD" : "M5_APPROVAL_UNKNOWN_FIELD");
 }
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("M5_APPROVAL_OBJECT_INVALID");
@@ -102,7 +102,9 @@ function authorityMaterial(value: unknown): Omit<M5ProviderApprovalAuthority, "a
   const usageDecisions = usages.map(value => {
     const item = record(value); exact(item, ["usage", "decision", "evidence"]);
     if (typeof item.usage !== "string" || !M5_PROVIDER_USAGES.includes(item.usage as M5ProviderUsage)) fail("M5_APPROVAL_USAGE_INVALID");
-    return freeze({ usage: item.usage as M5ProviderUsage, decision: parseDecision(item.decision), evidence: parseEvidence(item.evidence) });
+    const decision = parseDecision(item.decision); const evidence = parseEvidence(item.evidence);
+    if (decision === "APPROVED" && evidence.length === 0) fail("M5_APPROVAL_EVIDENCE_REQUIRED");
+    return freeze({ usage: item.usage as M5ProviderUsage, decision, evidence });
   }).sort((a, b) => cmp(a.usage, b.usage));
   const exactUsages = [...M5_PROVIDER_USAGES].sort(cmp);
   if (usageDecisions.length !== exactUsages.length || new Set(usageDecisions.map(x => x.usage)).size !== exactUsages.length || usageDecisions.some((x, i) => x.usage !== exactUsages[i])) fail("M5_APPROVAL_USAGE_SET_INVALID");
@@ -113,7 +115,11 @@ function authorityMaterial(value: unknown): Omit<M5ProviderApprovalAuthority, "a
   return freeze({ contractVersion: M5_PROVIDER_APPROVAL_AUTHORITY_VERSION, policyVersion: M5_PROVIDER_APPROVAL_POLICY_VERSION,
     authorityVersion: text(row.authorityVersion), providerId: text(row.providerId), datasetId: text(row.datasetId), datasetVersion: text(row.datasetVersion),
     reviewedAt, effectiveFrom, ...(expiresAt ? { expiresAt } : {}), usageDecisions: Object.freeze(usageDecisions),
-    retentionDecision: freeze({ decision: parseDecision(retention.decision), evidence: parseEvidence(retention.evidence) }) });
+    retentionDecision: (() => {
+      const decision = parseDecision(retention.decision); const evidence = parseEvidence(retention.evidence);
+      if (decision === "APPROVED" && evidence.length === 0) fail("M5_APPROVAL_EVIDENCE_REQUIRED");
+      return freeze({ decision, evidence });
+    })() });
 }
 
 export function parseM5ProviderApprovalAuthority(input: unknown): M5ProviderApprovalAuthority {
