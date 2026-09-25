@@ -213,7 +213,7 @@ export function parseCoinGeckoFixture(input: unknown): ParsedCoinGeckoFixture {
   const datasetId = text(root.datasetId, "M5_COINGECKO_DATASET_INVALID");
   if (datasetId !== "coingecko-market-chart") throw new Error("M5_COINGECKO_SCOPE_INVALID");
   const datasetVersion = text(root.datasetVersion, "M5_COINGECKO_DATASET_VERSION_INVALID");
-  const payloadFingerprint = canonicalSha256({ identityFingerprint, providerId: "coingecko", datasetId, datasetVersion, providerSourceNamespace: "coingecko:eth", receipt, daily, pools });
+  const payloadFingerprint = canonicalSha256({ identityFingerprint, providerId: "coingecko", datasetId, datasetVersion, providerSourceNamespace: "coingecko:eth", daily, pools });
   return freeze({ providerId: "coingecko", datasetId, datasetVersion, providerSourceNamespace: "coingecko:eth", contractAddress, coinId, receipt, identityFingerprint, payloadFingerprint, daily, pools: freeze(pools), capabilities: freeze({ concentration: "UNSUPPORTED", suspicious: "UNSUPPORTED", canonicalIdentity: "UNSUPPORTED", commercialStorage: "BLOCKED_UNTIL_LEGAL_APPROVAL" }) });
 }
 
@@ -246,7 +246,7 @@ export function parseEtherscanFixture(input: unknown): ParsedEtherscanFixture {
   const datasetId = text(root.datasetId, "M5_ETHERSCAN_DATASET_INVALID");
   if (datasetId !== "etherscan-contract-authority") throw new Error("M5_ETHERSCAN_SCOPE_INVALID");
   const datasetVersion = text(root.datasetVersion, "M5_ETHERSCAN_DATASET_VERSION_INVALID");
-  const payloadFingerprint = canonicalSha256({ chainNamespace: M5_ETHEREUM_CHAIN_NAMESPACE, providerId: "etherscan", datasetId, datasetVersion, providerSourceNamespace: "etherscan:api-v2:1", contractAddress, receipt, creation: { blockNumber: blockNumber.toString(), blockHash, observedAt }, verification });
+  const payloadFingerprint = canonicalSha256({ chainNamespace: M5_ETHEREUM_CHAIN_NAMESPACE, providerId: "etherscan", datasetId, datasetVersion, providerSourceNamespace: "etherscan:api-v2:1", contractAddress, creation: { blockNumber: blockNumber.toString(), blockHash, observedAt }, verification });
   return freeze({ providerId: "etherscan", datasetId, datasetVersion, providerSourceNamespace: "etherscan:api-v2:1", contractAddress, chainNamespace: M5_ETHEREUM_CHAIN_NAMESPACE, receipt, creation: freeze({ blockNumber, blockHash, observedAt }), verification: freeze(verification), payloadFingerprint, capabilities: freeze({ concentration: "UNSUPPORTED", suspicious: "UNSUPPORTED", canonicalIdentity: "UNSUPPORTED", commercialStorage: "BLOCKED_UNTIL_LEGAL_APPROVAL" }) });
 }
 
@@ -256,7 +256,7 @@ function receiptAt(receipt: M5ProviderReceipt): string {
 
 function packageRecord(input: Readonly<{ providerExternalRecordId: string; providerRevision: string; observedAt: string; retrievedAt: string; recordedAt: string; providerPublishedAt?: string; envelope: Obj; selected: Obj; pageOrdinal: number; itemOrdinal: number; responsePath: string }>): Obj {
   if (input.observedAt > input.retrievedAt) throw new Error("M5_PROVIDER_AVAILABILITY_INVALID");
-  const payloadFingerprint = canonicalSha256({ envelope: input.envelope, selected: input.selected, providerRevision: input.providerRevision });
+  const payloadFingerprint = canonicalSha256({ envelope: input.envelope, providerRevision: input.providerRevision });
   return { providerExternalRecordId: input.providerExternalRecordId, providerRevision: input.providerRevision, payloadFingerprint, pageOrdinal: input.pageOrdinal, itemOrdinal: input.itemOrdinal, retrievedAt: input.retrievedAt, recordedAt: input.recordedAt, ...(input.providerPublishedAt ? { providerPublishedAt: input.providerPublishedAt } : {}), observedAt: input.observedAt, normalizedEnvelope: input.envelope, selectedAuditableFields: input.selected, metadata: { cursorSafety: "NONE", responseHostPath: input.responsePath } };
 }
 
@@ -268,7 +268,7 @@ export function validateM5ProviderNormalizedPackage(value: ManualNormalizedSourc
     const expectedId = value.providerId === "coingecko" ? `${text(envelope.coinId, "M5_PROVIDER_PACKAGE_ID_INVALID")}:daily:${timestamp(envelope.observedAt, "M5_PROVIDER_PACKAGE_ID_INVALID")}` : `${address(envelope.contractAddress, "M5_PROVIDER_PACKAGE_ID_INVALID")}:${envelope.observationType === "CONTRACT_CREATION" ? "creation" : envelope.observationType === "CONTRACT_VERIFICATION" ? "verification" : (() => { throw new Error("M5_PROVIDER_PACKAGE_ID_INVALID"); })()}`;
     if (record.providerExternalRecordId !== expectedId) throw new Error("M5_PROVIDER_PACKAGE_ID_INVALID");
     if (record.providerRevision === undefined) throw new Error("M5_PROVIDER_PACKAGE_REVISION_INVALID");
-    const expectedFingerprint = canonicalSha256({ envelope: record.normalizedEnvelope, selected: record.selectedAuditableFields, providerRevision: record.providerRevision });
+    const expectedFingerprint = canonicalSha256({ envelope: record.normalizedEnvelope, providerRevision: record.providerRevision });
     if (record.payloadFingerprint !== expectedFingerprint) throw new Error("M5_PROVIDER_PACKAGE_FINGERPRINT_INVALID");
   }
   return value;
