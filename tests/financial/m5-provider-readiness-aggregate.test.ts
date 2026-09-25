@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { M5_PROVIDER_READINESS_CONFIG_VERSION, M5_PROVIDER_USAGES } from "@/domain/intelligence/m5-provider-readiness";
+import { createM5ProviderApprovalAuthority, parseM5ProviderApprovalAuthority } from "@/domain/intelligence/m5-provider-approval-authority";
+import { isTrustedM5ProviderApprovalAuthorityResolution, resolveM5ProviderApprovalAuthority } from "@/application/intelligence/resolve-m5-provider-approval-authority";
 import { evaluateM5ProviderReadinessConfig, M5_DEFAULT_REQUIRED_CAPABILITIES, M5_DEFAULT_REQUESTED_USAGES } from "@/application/intelligence/evaluate-m5-provider-readiness";
 import {
   assertM5ProviderReadinessAggregateForExecution,
@@ -13,6 +15,14 @@ const now = "2026-09-25T12:00:00.000Z";
 const expiry = "2027-09-25T12:00:00.000Z";
 const refs = "review/synthetic-aggregate/v1";
 const docs = ["https://docs.example.test/source"];
+function approvalAuthority(providerId = "synthetic-provider", datasetId = "synthetic-dataset", datasetVersion = "synthetic-dataset/v1", retention = "APPROVED") {
+  return createM5ProviderApprovalAuthority({
+    contractVersion: "m5-provider-approval-authority/v1", policyVersion: "m5-provider-approval-policy/v1", authorityVersion: "review/v1",
+    providerId, datasetId, datasetVersion, reviewedAt: now, effectiveFrom: now, expiresAt: expiry, recordedAt: now,
+    usageDecisions: M5_PROVIDER_USAGES.map(usage => ({ usage, decision: "APPROVED", evidence: [{ kind: "IDENTIFIER", value: "review/synthetic-approval/v1" }] })),
+    retentionDecision: { decision: retention, evidence: [{ kind: "SHA256", value: "a".repeat(64) }] },
+  });
+}
 type TestAssignment = { capability: string; mode: string; sourceIds: string[] };
 type TestUsageDecision = { sourceId: string; usage: string; approval: string; reviewedAt: string; reviewReference: string; approvalExpiresAt?: string };
 function providerConfig(overrides: Record<string, unknown> = {}) {
@@ -30,14 +40,17 @@ function providerConfig(overrides: Record<string, unknown> = {}) {
 function build(override: Record<string, unknown> = {}, evaluationTime = now) {
   const raw = providerConfig();
   const evaluation = evaluateM5ProviderReadinessConfig({ config: raw, evaluatedAt: evaluationTime });
-  const source = bindM5ProviderReadinessAggregateSource(raw, evaluation);
+  const baseSource = bindM5ProviderReadinessAggregateSource(raw, evaluation);
+  const authority = approvalAuthority();
+  const source = { ...baseSource, approvalAuthorityId: authority.approvalAuthorityId, approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint };
   const config = {
     contractVersion: "m5-provider-readiness-aggregate/v1", policyVersion: M5_PROVIDER_READINESS_AGGREGATE_POLICY_VERSION, aggregateId: "m5-synthetic-stack", reviewedAt: now, reviewReference: refs,
     sources: [source], capabilityAssignments: M5_DEFAULT_REQUIRED_CAPABILITIES.map(({ capability }) => ({ capability, mode: "ALL_OF", sourceIds: [source.sourceId] })),
     usageDecisions: M5_AGGREGATE_USAGES.map(usage => ({ sourceId: source.sourceId, usage, approval: "APPROVED", reviewedAt: now, reviewReference: refs, approvalExpiresAt: expiry })),
     ...override,
   };
-  return { raw, evaluation, source, config, run: () => evaluateM5ProviderReadinessAggregate({ config, sources: [{ sourceId: source.sourceId, config: raw, evaluation }], evaluatedAt: evaluationTime }) };
+  const registry = [{ approvalAuthorityId: authority.approvalAuthorityId, approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint, providerId: authority.providerId, datasetId: authority.datasetId, datasetVersion: authority.datasetVersion }];
+  return { raw, evaluation, source, authority, registry, config, run: () => evaluateM5ProviderReadinessAggregate({ config, sources: [{ sourceId: source.sourceId, config: raw, evaluation }], approvalAuthorityRegistry: registry, approvalAuthorities: [authority], evaluatedAt: evaluationTime }) };
 }
 
 describe("M5 provider readiness aggregate", () => {
@@ -69,7 +82,7 @@ describe("M5 provider readiness aggregate", () => {
     expect(JSON.stringify(result)).not.toContain("https://");
     expect(JSON.stringify(result)).not.toContain("secret");
     const shuffled = { ...state.config, capabilityAssignments: [...(state.config as { capabilityAssignments: TestAssignment[] }).capabilityAssignments].reverse(), usageDecisions: [...(state.config as { usageDecisions: TestUsageDecision[] }).usageDecisions].reverse() };
-    const replay = evaluateM5ProviderReadinessAggregate({ config: shuffled, sources: [{ sourceId: state.source.sourceId, config: state.raw, evaluation: state.evaluation }], evaluatedAt: now });
+    const replay = evaluateM5ProviderReadinessAggregate({ config: shuffled, sources: [{ sourceId: state.source.sourceId, config: state.raw, evaluation: state.evaluation }], approvalAuthorityRegistry: state.registry, approvalAuthorities: [state.authority], evaluatedAt: now });
     expect(replay.aggregateFingerprint).toBe(result.aggregateFingerprint);
   });
 
@@ -80,6 +93,74 @@ describe("M5 provider readiness aggregate", () => {
     assertM5ProviderReadinessAggregateForExecution(result, request);
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
+  });
+
+  it("requires resolver-backed exact authority for every usage and separate retention", () => {
+    const state = build();
+    const withoutAuthority = evaluateM5ProviderReadinessAggregate({ config: state.config, sources: [{ sourceId: state.source.sourceId, config: state.raw, evaluation: state.evaluation }], evaluatedAt: now });
+    expect(withoutAuthority.result).toBe("BLOCKED");
+    expect(withoutAuthority.blockers).toContain("M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING");
+    const wrongScope = evaluateM5ProviderReadinessAggregate({ config: state.config, sources: [{ sourceId: state.source.sourceId, config: state.raw, evaluation: state.evaluation }],
+      approvalAuthorityRegistry: state.registry.map(row => ({ ...row, datasetVersion: "other/v1" })), approvalAuthorities: [state.authority], evaluatedAt: now });
+    expect(wrongScope.result).toBe("BLOCKED");
+    const tampered = { ...state.authority, approvalAuthorityFingerprint: "0".repeat(64) };
+    const badAuthority = evaluateM5ProviderReadinessAggregate({ config: state.config, sources: [{ sourceId: state.source.sourceId, config: state.raw, evaluation: state.evaluation }], approvalAuthorityRegistry: state.registry, approvalAuthorities: [tampered], evaluatedAt: now });
+    expect(badAuthority.result).toBe("INVALID");
+    const retentionNotApproved = approvalAuthority("synthetic-provider", "synthetic-dataset", "synthetic-dataset/v1", "UNKNOWN");
+    expect(retentionNotApproved.retentionDecision.decision).toBe("UNKNOWN");
+    const conflict = createM5ProviderApprovalAuthority({ contractVersion: "m5-provider-approval-authority/v1", policyVersion: "m5-provider-approval-policy/v1", authorityVersion: "review/v2",
+      providerId: state.authority.providerId, datasetId: state.authority.datasetId, datasetVersion: state.authority.datasetVersion, reviewedAt: now, effectiveFrom: now, expiresAt: expiry, recordedAt: now,
+      usageDecisions: state.authority.usageDecisions, retentionDecision: state.authority.retentionDecision });
+    const conflictingResult = evaluateM5ProviderReadinessAggregate({ config: state.config, sources: [{ sourceId: state.source.sourceId, config: state.raw, evaluation: state.evaluation }], approvalAuthorityRegistry: state.registry, approvalAuthorities: [state.authority, conflict], evaluatedAt: now });
+    expect(conflictingResult.result).toBe("INVALID");
+  });
+
+  it("uses canonical approval authority identity, excludes recordedAt, and freezes nested evidence", () => {
+    const authority = approvalAuthority();
+    const laterRecorded = parseM5ProviderApprovalAuthority({ ...authority, recordedAt: "2026-09-26T00:00:00.000Z" });
+    expect(laterRecorded.approvalAuthorityFingerprint).toBe(authority.approvalAuthorityFingerprint);
+    expect(Object.isFrozen(authority.usageDecisions[0]!.evidence[0])).toBe(true);
+    expect(() => parseM5ProviderApprovalAuthority({ ...authority, surprise: true })).toThrow("M5_APPROVAL_UNKNOWN_FIELD");
+    expect(() => parseM5ProviderApprovalAuthority({ ...authority, apiKey: "never-print" })).toThrow("M5_APPROVAL_SECRET_FIELD");
+    expect(() => parseM5ProviderApprovalAuthority(Object.assign(Object.create({ polluted: true }), authority))).toThrow("M5_APPROVAL_NON_PLAIN_OBJECT");
+    const symbol = { ...authority, [Symbol("x")]: true };
+    expect(() => parseM5ProviderApprovalAuthority(symbol)).toThrow("M5_APPROVAL_SYMBOL_FIELD");
+    const accessor = Object.defineProperty({ ...authority }, "recordedAt", { get: () => now });
+    expect(() => parseM5ProviderApprovalAuthority(accessor)).toThrow("M5_APPROVAL_ACCESSOR_REJECTED");
+    expect(() => parseM5ProviderApprovalAuthority({ ...authority, effectiveFrom: expiry })).toThrow("M5_APPROVAL_TIME_RANGE_INVALID");
+    const material = { ...authority } as Record<string, unknown>;
+    delete material.approvalAuthorityId;
+    delete material.approvalAuthorityFingerprint;
+    const reordered = createM5ProviderApprovalAuthority({ ...material, recordedAt: "2026-09-26T00:00:00.000Z", usageDecisions: [...authority.usageDecisions].reverse() });
+    expect(reordered.approvalAuthorityFingerprint).toBe(authority.approvalAuthorityFingerprint);
+    const changedDecision = createM5ProviderApprovalAuthority({ ...material, usageDecisions: authority.usageDecisions.map(row => row.usage === "COMMERCIAL_USE" ? { ...row, decision: "UNKNOWN" } : row) });
+    expect(changedDecision.approvalAuthorityFingerprint).not.toBe(authority.approvalAuthorityFingerprint);
+    expect(() => parseM5ProviderApprovalAuthority({ ...authority, usageDecisions: [...authority.usageDecisions, JSON.parse(JSON.stringify(authority.usageDecisions[0]))] })).toThrow("M5_APPROVAL_USAGE_SET_INVALID");
+  });
+
+  it("trusts only a resolved allowlisted authority object and enforces exact time boundaries", () => {
+    const authority = approvalAuthority();
+    const registry = [{ approvalAuthorityId: authority.approvalAuthorityId, approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint,
+      providerId: authority.providerId, datasetId: authority.datasetId, datasetVersion: authority.datasetVersion }];
+    const resolution = resolveM5ProviderApprovalAuthority({ registry, authorities: [authority], approvalAuthorityId: authority.approvalAuthorityId,
+      approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint, providerId: authority.providerId, datasetId: authority.datasetId,
+      datasetVersion: authority.datasetVersion, asOf: now });
+    expect(resolution.result).toBe("RESOLVED");
+    expect(isTrustedM5ProviderApprovalAuthorityResolution(resolution)).toBe(true);
+    expect(isTrustedM5ProviderApprovalAuthorityResolution(JSON.parse(JSON.stringify(resolution)))).toBe(false);
+    expect(Object.isFrozen(resolution)).toBe(true);
+    expect(resolveM5ProviderApprovalAuthority({ registry, authorities: [authority], approvalAuthorityId: authority.approvalAuthorityId,
+      approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint, providerId: authority.providerId, datasetId: authority.datasetId,
+      datasetVersion: authority.datasetVersion, asOf: "2026-09-25T11:59:59.999Z" }).result).toBe("BLOCKED");
+    expect(resolveM5ProviderApprovalAuthority({ registry, authorities: [authority], approvalAuthorityId: authority.approvalAuthorityId,
+      approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint, providerId: authority.providerId, datasetId: authority.datasetId,
+      datasetVersion: authority.datasetVersion, asOf: expiry }).result).toBe("BLOCKED");
+    const getter = vi.fn(() => now);
+    const unsafeRequest = Object.defineProperty({ registry, authorities: [authority], approvalAuthorityId: authority.approvalAuthorityId,
+      approvalAuthorityFingerprint: authority.approvalAuthorityFingerprint, providerId: authority.providerId, datasetId: authority.datasetId,
+      datasetVersion: authority.datasetVersion, asOf: now }, "asOf", { enumerable: true, configurable: true, get: getter });
+    expect(resolveM5ProviderApprovalAuthority(unsafeRequest as Parameters<typeof resolveM5ProviderApprovalAuthority>[0]).result).toBe("INVALID");
+    expect(getter).not.toHaveBeenCalled();
   });
 
   it("execution guard refuses a formerly READY result after its approval expiry", () => {
@@ -239,12 +320,14 @@ describe("M5 provider readiness aggregate", () => {
   it("keeps the checked-in production aggregate blocked with concrete capability and usage blockers", () => {
     const config = JSON.parse(readFileSync("config/m5/provider-readiness.aggregate.production.json", "utf8"));
     const provider = JSON.parse(readFileSync("config/m5/provider-readiness.production.json", "utf8"));
+    const registry = JSON.parse(readFileSync("config/m5/provider-approval-authorities.production.json", "utf8")) as { authorities: [] };
     const evaluation = evaluateM5ProviderReadinessConfig({ config: provider, evaluatedAt: now });
     const sourceId = config.sources[0].sourceId as string;
-    const result = evaluateM5ProviderReadinessAggregate({ config, sources: [{ sourceId, config: provider, evaluation }], evaluatedAt: now });
+    const result = evaluateM5ProviderReadinessAggregate({ config, sources: [{ sourceId, config: provider, evaluation }], approvalAuthorityRegistry: registry.authorities, approvalAuthorities: [], evaluatedAt: now });
     expect(result.result).toBe("BLOCKED");
     expect(result.blockers).toContain("M5_AGGREGATE_CAPABILITY_INCOMPLETE");
     expect(result.blockers).toContain("M5_AGGREGATE_USAGE_REQUIRES_APPROVAL");
+    expect(result.blockers).toContain("M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING");
     expect(result.sources[0]?.providerId).toBe("coingecko");
   });
 

@@ -28,6 +28,8 @@ export type M5AggregateSource = Readonly<{
   readinessConfigFingerprint: string;
   capabilities: readonly M5ProviderCapability[];
   usages: readonly M5ProviderUsage[];
+  approvalAuthorityId?: string;
+  approvalAuthorityFingerprint?: string;
 }>;
 
 export type M5AggregateSourceReference = M5AggregateSource & Readonly<{
@@ -73,6 +75,10 @@ export type M5AggregateBlockerCode =
   | "M5_AGGREGATE_USAGE_REQUIRES_APPROVAL"
   | "M5_AGGREGATE_USAGE_NOT_APPROVED"
   | "M5_AGGREGATE_USAGE_EXPIRED"
+  | "M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING"
+  | "M5_AGGREGATE_APPROVAL_AUTHORITY_INVALID"
+  | "M5_AGGREGATE_APPROVAL_AUTHORITY_MISMATCH"
+  | "M5_AGGREGATE_APPROVAL_AUTHORITY_NOT_APPROVED"
   | "M5_AGGREGATE_CONFIG_INVALID";
 
 export type M5ProviderReadinessAggregateResult = Readonly<{
@@ -168,7 +174,7 @@ function enumArray<T extends string>(value: unknown, allowed: readonly T[], code
 
 function parseSource(value: unknown): M5AggregateSource {
   const row = value as Record<string, unknown>;
-  exact(row, ["sourceId", "providerId", "datasetId", "datasetVersion", "readinessConfigId", "readinessConfigFingerprint", "capabilities", "usages"]);
+  exact(row, ["sourceId", "providerId", "datasetId", "datasetVersion", "readinessConfigId", "readinessConfigFingerprint", "capabilities", "usages", "approvalAuthorityId", "approvalAuthorityFingerprint"]);
   const providerId = id(row.providerId); const datasetId = id(row.datasetId); const datasetVersion = id(row.datasetVersion);
   const readinessConfigFingerprint = fingerprint(row.readinessConfigFingerprint);
   const expectedConfigId = `m5-provider-readiness-config:${readinessConfigFingerprint}`;
@@ -177,7 +183,9 @@ function parseSource(value: unknown): M5AggregateSource {
   const expectedSourceId = `m5-provider-source:${digest({ providerId, datasetId, datasetVersion, readinessConfigFingerprint })}`;
   const sourceId = id(row.sourceId);
   if (sourceId !== expectedSourceId) throw new Error("M5_AGGREGATE_SOURCE_SCOPE_MISMATCH");
+  if ((row.approvalAuthorityId === undefined) !== (row.approvalAuthorityFingerprint === undefined)) throw new Error("M5_AGGREGATE_APPROVAL_AUTHORITY_INVALID");
   return freeze({ sourceId, providerId, datasetId, datasetVersion, readinessConfigId, readinessConfigFingerprint,
+    ...(row.approvalAuthorityId === undefined ? {} : { approvalAuthorityId: id(row.approvalAuthorityId), approvalAuthorityFingerprint: fingerprint(row.approvalAuthorityFingerprint) }),
     capabilities: enumArray(row.capabilities, M5_PROVIDER_CAPABILITIES, "M5_AGGREGATE_SOURCE_CAPABILITIES_INVALID"),
     usages: enumArray(row.usages, M5_PROVIDER_USAGES, "M5_AGGREGATE_SOURCE_USAGES_INVALID") });
 }

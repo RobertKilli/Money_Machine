@@ -6,6 +6,7 @@ import {
   type ProviderReadinessEvaluation,
 } from "@/domain/intelligence/m5-provider-readiness";
 import { M5_DEFAULT_REQUESTED_USAGES } from "@/application/intelligence/evaluate-m5-provider-readiness";
+import { resolveM5ProviderApprovalAuthority, isTrustedM5ProviderApprovalAuthorityResolution, type M5ProviderApprovalAuthorityRegistryEntry, type M5ProviderApprovalAuthorityResolution } from "@/application/intelligence/resolve-m5-provider-approval-authority";
 import {
   M5_AGGREGATE_CAPABILITIES,
   m5ProviderReadinessAggregateConfigFingerprint,
@@ -90,6 +91,8 @@ export function bindM5ProviderReadinessAggregateSource(configInput: unknown, eva
 export function evaluateM5ProviderReadinessAggregate(input: Readonly<{
   config: unknown;
   sources: readonly Readonly<{ sourceId: string; config: unknown; evaluation: ProviderReadinessEvaluation }>[];
+  approvalAuthorityRegistry?: readonly M5ProviderApprovalAuthorityRegistryEntry[];
+  approvalAuthorities?: readonly unknown[];
   evaluatedAt: string;
 }>): M5ProviderReadinessAggregateResult {
   try { return evaluateM5ProviderReadinessAggregateInternal(input); }
@@ -108,6 +111,8 @@ export function evaluateM5ProviderReadinessAggregate(input: Readonly<{
 function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
   config: unknown;
   sources: readonly Readonly<{ sourceId: string; config: unknown; evaluation: ProviderReadinessEvaluation }>[];
+  approvalAuthorityRegistry?: readonly M5ProviderApprovalAuthorityRegistryEntry[];
+  approvalAuthorities?: readonly unknown[];
   evaluatedAt: string;
 }>): M5ProviderReadinessAggregateResult {
   let config: M5ProviderReadinessAggregateConfig;
@@ -126,6 +131,7 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
   if (input.sources.some(binding => !config.sources.some(source => source.sourceId === binding.sourceId))) { blockers.add("M5_AGGREGATE_SOURCE_UNUSED"); invalid = true; }
   const references: M5AggregateSourceReference[] = [];
   const runtimes = new Map<string, ReturnType<typeof verifyAggregateSourceBinding>>();
+  const authorityResolutions = new Map<string, M5ProviderApprovalAuthorityResolution>();
   for (const source of config.sources) {
     const binding = bindings.get(source.sourceId);
     if (!binding) { blockers.add("M5_AGGREGATE_SOURCE_MISSING"); continue; }
@@ -135,6 +141,16 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
       if (!exactDefaultRequest(runtime.evaluation)) throw new Error("M5_AGGREGATE_SOURCE_SCOPE_MISMATCH");
       runtimes.set(source.sourceId, runtime);
       references.push(Object.freeze({ ...source, readinessResultId: runtime.readinessResultId, readinessResultFingerprint: runtime.readinessResultFingerprint }));
+      if (source.approvalAuthorityId && source.approvalAuthorityFingerprint) {
+        const resolution = resolveM5ProviderApprovalAuthority({ registry: input.approvalAuthorityRegistry ?? [], authorities: input.approvalAuthorities ?? [],
+          approvalAuthorityId: source.approvalAuthorityId, approvalAuthorityFingerprint: source.approvalAuthorityFingerprint,
+          providerId: source.providerId, datasetId: source.datasetId, datasetVersion: source.datasetVersion, asOf: evaluatedAt });
+        authorityResolutions.set(source.sourceId, resolution);
+        if (resolution.result === "INVALID") { blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_INVALID"); invalid = true; }
+        else if (resolution.result !== "RESOLVED" || !isTrustedM5ProviderApprovalAuthorityResolution(resolution)) blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING");
+        else references[references.length - 1] = Object.freeze({ ...source, readinessResultId: runtime.readinessResultId, readinessResultFingerprint: runtime.readinessResultFingerprint,
+          approvalAuthorityId: resolution.authority!.approvalAuthorityId, approvalAuthorityFingerprint: resolution.authority!.approvalAuthorityFingerprint });
+      } else blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING");
       if (runtime.evaluation.evaluatedAt > evaluatedAt || runtime.config.reviewedAt > evaluatedAt ||
         runtime.config.capabilities.some(decision => decision.reviewedAt > evaluatedAt) ||
         runtime.config.usageDecisions.some(decision => decision.reviewedAt > evaluatedAt)) {
@@ -169,6 +185,13 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
     if (decision.reviewedAt > evaluatedAt) { blockers.add("M5_AGGREGATE_CONFIG_INVALID"); invalid = true; }
     const mapped = oldUsage[decision.usage];
     const underlying = mapped ? runtime.config.usageDecisions.find(row => row.usage === mapped) : undefined;
+    const authorityResolution = authorityResolutions.get(decision.sourceId);
+    const authority = authorityResolution && isTrustedM5ProviderApprovalAuthorityResolution(authorityResolution) ? authorityResolution.authority : undefined;
+    const authorityDecision = decision.usage === "RETENTION" ? authority?.retentionDecision.decision : authority?.usageDecisions.find(row => row.usage === mapped)?.decision;
+    const expectedAuthorityStatus = decision.approval === "APPROVED" ? "APPROVED" : decision.approval === "REQUIRES_APPROVAL" ? "REQUIRES_APPROVAL" : decision.approval === "REJECTED" ? "DENIED" : decision.approval === "UNKNOWN" ? "UNKNOWN" : undefined;
+    if (!authority || !authorityDecision) blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_MISSING");
+    else if (authorityDecision !== expectedAuthorityStatus) blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_MISMATCH");
+    else if (authorityDecision !== "APPROVED") blockers.add("M5_AGGREGATE_APPROVAL_AUTHORITY_NOT_APPROVED");
     const expired = decision.approval === "APPROVED" && decision.approvalExpiresAt !== undefined && decision.approvalExpiresAt <= evaluatedAt;
     if (expired || decision.approval === "EXPIRED") blockers.add("M5_AGGREGATE_USAGE_EXPIRED");
     else if (decision.approval === "REQUIRES_APPROVAL" || decision.approval === "UNKNOWN") blockers.add("M5_AGGREGATE_USAGE_REQUIRES_APPROVAL");
@@ -181,6 +204,7 @@ function evaluateM5ProviderReadinessAggregateInternal(input: Readonly<{
   const expiryDates = [
     ...config.usageDecisions.flatMap(decision => decision.approval === "APPROVED" && decision.approvalExpiresAt ? [decision.approvalExpiresAt] : []),
     ...[...runtimes.values()].flatMap(runtime => runtime.config.approvalExpiresAt ? [runtime.config.approvalExpiresAt] : []),
+    ...[...authorityResolutions.values()].flatMap(resolution => resolution.authority?.expiresAt ? [resolution.authority.expiresAt] : []),
   ];
   const validUntil = expiryDates.sort(compare)[0];
   const status = invalid ? "INVALID" : ordered.length ? "BLOCKED" : "READY";
