@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   M5_PROVIDER_READINESS_CONFIG_VERSION,
@@ -5,7 +9,7 @@ import {
   parseM5ProviderReadinessConfig,
   type M5ProviderUsage,
 } from "@/domain/intelligence/m5-provider-readiness";
-import { evaluateM5ProviderReadinessConfig, M5_DEFAULT_REQUIRED_CAPABILITIES, M5_DEFAULT_REQUESTED_USAGES } from "@/application/intelligence/evaluate-m5-provider-readiness";
+import { assertM5ProviderReadinessForExecution, evaluateM5ProviderReadinessConfig, M5_DEFAULT_REQUIRED_CAPABILITIES, M5_DEFAULT_REQUESTED_USAGES } from "@/application/intelligence/evaluate-m5-provider-readiness";
 
 const reviewedAt = "2026-09-25T12:00:00.000Z";
 const expiry = "2027-09-25T12:00:00.000Z";
@@ -34,6 +38,21 @@ function config(overrides: Record<string, unknown> = {}): Record<string, unknown
   };
 }
 
+function runReadinessCli(raw: string | Record<string, unknown>, ...args: string[]): { status: number; stdout: string; stderr: string } {
+  const directory = mkdtempSync(join(tmpdir(), "m5-provider-readiness-"));
+  const configPath = join(directory, "config.json");
+  writeFileSync(configPath, typeof raw === "string" ? raw : JSON.stringify(raw), "utf8");
+  try {
+    const result = execFileSync(process.execPath, ["node_modules/tsx/dist/cli.mjs", "--tsconfig", "scripts/tsconfig.json", "scripts/m5-provider-readiness.ts", ...args, ...(args.includes("--config") ? [] : ["--config", configPath])], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return { status: 0, stdout: result, stderr: "" };
+  } catch (error) {
+    const failure = error as { status?: number; stdout?: Buffer | string; stderr?: Buffer | string };
+    return { status: failure.status ?? -1, stdout: String(failure.stdout ?? ""), stderr: String(failure.stderr ?? "") };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 describe("M5 provider readiness gate", () => {
   it("parses strict configs, normalizes permutations, and deep-freezes the result", () => {
     const raw = config({ capabilities: [...allCapabilities].reverse(), usageDecisions: [...allUsages].reverse(), documentationUrls: [...docs].reverse() });
@@ -43,6 +62,10 @@ describe("M5 provider readiness gate", () => {
     expect(Object.isFrozen(parsed)).toBe(true);
     expect(Object.isFrozen(parsed.capabilities)).toBe(true);
     expect(Object.isFrozen(parsed.capabilities[0])).toBe(true);
+    expect(() => parseM5ProviderReadinessConfig(Object.assign(Object.create(null), config()))).not.toThrow();
+    const original = config();
+    parseM5ProviderReadinessConfig(original);
+    expect(original.capabilities).toBe(allCapabilities);
   });
 
   it("rejects unknown, secret-like, and unsafe URL fields", () => {
@@ -65,6 +88,14 @@ describe("M5 provider readiness gate", () => {
     const result = evaluateM5ProviderReadinessConfig({ config: config(), evaluatedAt: "2026-09-25T13:00:00.000Z" });
     expect(result.result).toBe("READY");
     expect(result.blockers).toEqual([]);
+  });
+
+  it("requires a trusted, scope-matched READY result at the execution guard", () => {
+    const evaluation = evaluateM5ProviderReadinessConfig({ config: config(), evaluatedAt: "2026-09-25T13:00:00.000Z" });
+    const request = { providerId: "synthetic-provider", datasetId: "synthetic-dataset", datasetVersion: "synthetic-dataset/v1", requiredCapabilities: M5_DEFAULT_REQUIRED_CAPABILITIES, requestedUsages: M5_DEFAULT_REQUESTED_USAGES };
+    expect(() => assertM5ProviderReadinessForExecution(evaluation, request)).not.toThrow();
+    expect(() => assertM5ProviderReadinessForExecution({ ...evaluation })).toThrow("M5_PROVIDER_READINESS_BLOCKED");
+    expect(() => assertM5ProviderReadinessForExecution(evaluation, { ...request, datasetId: "other-dataset" })).toThrow("M5_PROVIDER_READINESS_SCOPE_MISMATCH");
   });
 
   it("represents the current fixture-provider posture as BLOCKED", () => {
@@ -151,5 +182,31 @@ describe("M5 provider readiness gate", () => {
   it("keeps the usage union exhaustive at the test boundary", () => {
     const usages: readonly M5ProviderUsage[] = M5_DEFAULT_REQUESTED_USAGES;
     expect(usages).toHaveLength(7);
+  });
+
+  it("keeps CLI exits and output secret-safe", () => {
+    const help = runReadinessCli({}, "--help");
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("--config <path>");
+    const invalidJson = runReadinessCli("{");
+    expect(invalidJson.status).toBe(2);
+    expect(invalidJson.stderr).toContain("M5_PROVIDER_READINESS_CONFIG_INVALID");
+    const invalidConfig = runReadinessCli({ nope: true });
+    expect(invalidConfig.status).toBe(2);
+    expect(invalidConfig.stdout).toContain("M5_READINESS_CONFIG_INVALID");
+    const blocked = runReadinessCli(config({ providerId: "coingecko", capabilities: allCapabilities.map(item => item.capability === "LIQUIDITY_COMPLETE_SET" ? { ...item, completeness: "TOP_N_ONLY" } : item) }));
+    expect(blocked.status).toBe(2);
+    expect(blocked.stdout).toContain("M5_READINESS_CAPABILITY_INCOMPLETE");
+    const ready = runReadinessCli(config());
+    expect(ready.status).toBe(0);
+    expect(JSON.parse(ready.stdout).result).toBe("READY");
+    expect(ready.stdout).not.toContain("reviewReference");
+    expect(ready.stdout).not.toContain("limitations");
+    const unknown = runReadinessCli({}, "--nope");
+    expect(unknown.status).toBe(2);
+    expect(unknown.stderr).toContain("M5_PROVIDER_READINESS_ARGUMENT_INVALID");
+    const missing = runReadinessCli({}, "--config", ".missing-readiness-config.json");
+    expect(missing.status).toBe(3);
+    expect(missing.stderr).toContain("M5_PROVIDER_READINESS_CONFIG_IO_FAILED");
   });
 });

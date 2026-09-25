@@ -100,9 +100,15 @@ export type ProviderReadinessEvaluation = Readonly<{
   datasetId: string;
   datasetVersion: string;
   evaluatedAt: string;
+  requiredCapabilities: readonly ProviderCapabilityRequirement[];
+  requestedUsages: readonly M5ProviderUsage[];
   blockers: readonly ProviderReadinessBlocker[];
 }>;
 export type ProviderReadinessScope = Readonly<{ providerId: string; datasetId: string; datasetVersion: string }>;
+export type ProviderReadinessExecutionRequest = Readonly<ProviderReadinessScope & {
+  requiredCapabilities: readonly ProviderCapabilityRequirement[];
+  requestedUsages: readonly M5ProviderUsage[];
+}>;
 
 type Obj = Record<string, unknown>;
 const SHA_SAFE_FIELD = /(?:api[-_]?key|authorization|cookie|credential|password|secret|token|private[-_]?key|raw[-_]?payload|terms[-_]?text)/i;
@@ -113,6 +119,9 @@ const USAGE_SET = new Set<string>(M5_PROVIDER_USAGES);
 const CAPABILITY_STATUS = new Set<M5CapabilityStatus>(["SUPPORTED", "PARTIAL", "UNSUPPORTED", "UNKNOWN"]);
 const APPROVAL_STATUS = new Set<M5ApprovalStatus>(["APPROVED", "REQUIRES_APPROVAL", "REJECTED", "EXPIRED"]);
 const COMPLETENESS = new Set<M5Completeness>(["COMPLETE", "PARTIAL", "SAMPLE", "TOP_N_ONLY", "UNKNOWN"]);
+const trustedEvaluations = new WeakSet<object>();
+
+const compareLexical = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0;
 
 const deepFreeze = <T>(value: T): T => {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -124,6 +133,8 @@ const deepFreeze = <T>(value: T): T => {
 
 const asObject = (value: unknown, code: string): Obj => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(code);
   return value as Obj;
 };
 
@@ -131,6 +142,7 @@ const exact = (value: Obj, allowed: readonly string[], code: string): void => {
   const keys = new Set(allowed);
   const unknown = Object.keys(value).find(key => !keys.has(key));
   if (unknown) throw new Error(SHA_SAFE_FIELD.test(unknown) ? "M5_PROVIDER_READINESS_SECRET_FIELD_REJECTED" : code);
+  if (Object.getOwnPropertySymbols(value).length > 0) throw new Error(code);
 };
 
 const text = (value: unknown, code: string, max = 512): string => {
@@ -162,7 +174,7 @@ const stringArray = (value: unknown, code: string, maxItems = 32): readonly stri
   if (!Array.isArray(value) || value.length > maxItems) throw new Error(code);
   const values = value.map(item => text(item, code, 2048));
   if (new Set(values).size !== values.length) throw new Error(code);
-  return Object.freeze([...values].sort((a, b) => a.localeCompare(b)));
+  return Object.freeze([...values].sort(compareLexical));
 };
 
 const urlArray = (value: unknown, code: string): readonly string[] => {
@@ -171,7 +183,7 @@ const urlArray = (value: unknown, code: string): readonly string[] => {
     try { return url(item, code); } catch (error) { if (error instanceof Error && error.message === "M5_PROVIDER_READINESS_URL_UNSAFE") throw error; throw new Error(code); }
   });
   if (new Set(values).size !== values.length) throw new Error(code);
-  return Object.freeze([...values].sort((a, b) => a.localeCompare(b)));
+  return Object.freeze([...values].sort(compareLexical));
 };
 
 const limitations = (value: unknown): readonly string[] => stringArray(value, "M5_PROVIDER_READINESS_LIMITATIONS_INVALID", 16);
@@ -215,10 +227,10 @@ export function parseM5ProviderReadinessConfig(input: unknown): ProviderReadines
   const documentationUrls = urlArray(root.documentationUrls, "M5_PROVIDER_READINESS_DOCUMENTATION_URLS_INVALID");
   const termsUrls = urlArray(root.termsUrls, "M5_PROVIDER_READINESS_TERMS_URLS_INVALID");
   if (!Array.isArray(root.capabilities) || root.capabilities.length === 0) throw new Error("M5_PROVIDER_READINESS_CAPABILITIES_INVALID");
-  const capabilities = root.capabilities.map(parseCapability).sort((a, b) => a.capability.localeCompare(b.capability));
+  const capabilities = root.capabilities.map(parseCapability).sort((a, b) => compareLexical(a.capability, b.capability));
   if (new Set(capabilities.map(item => item.capability)).size !== capabilities.length) throw new Error("M5_PROVIDER_READINESS_DUPLICATE_CAPABILITY");
   if (!Array.isArray(root.usageDecisions) || root.usageDecisions.length === 0) throw new Error("M5_PROVIDER_READINESS_USAGES_INVALID");
-  const usageDecisions = root.usageDecisions.map(parseUsage).sort((a, b) => a.usage.localeCompare(b.usage));
+  const usageDecisions = root.usageDecisions.map(parseUsage).sort((a, b) => compareLexical(a.usage, b.usage));
   if (new Set(usageDecisions.map(item => item.usage)).size !== usageDecisions.length) throw new Error("M5_PROVIDER_READINESS_DUPLICATE_USAGE");
   const approvalExpiresAt = root.approvalExpiresAt === undefined ? undefined : timestamp(root.approvalExpiresAt, "M5_PROVIDER_READINESS_APPROVAL_EXPIRY_INVALID");
   if (approvalExpiresAt !== undefined && approvalExpiresAt <= reviewedAt) throw new Error("M5_PROVIDER_READINESS_APPROVAL_EXPIRY_INVALID");
@@ -236,8 +248,8 @@ const requirementKey = (item: ProviderCapabilityRequirement): string => `${item.
 
 export function evaluateM5ProviderReadiness(input: Readonly<{ config: ProviderReadinessConfig; requiredCapabilities: readonly ProviderCapabilityRequirement[]; requestedUsages: readonly M5ProviderUsage[]; evaluatedAt: string; expectedScope?: ProviderReadinessScope }>): ProviderReadinessEvaluation {
   const evaluatedAt = timestamp(input.evaluatedAt, "M5_PROVIDER_READINESS_EVALUATED_AT_INVALID");
-  const capabilityRequirements = [...input.requiredCapabilities].sort((a, b) => requirementKey(a).localeCompare(requirementKey(b)));
-  const requestedUsages = [...input.requestedUsages].sort((a, b) => a.localeCompare(b));
+  const capabilityRequirements = [...input.requiredCapabilities].sort((a, b) => compareLexical(requirementKey(a), requirementKey(b)));
+  const requestedUsages = [...input.requestedUsages].sort(compareLexical);
   const blockers: ProviderReadinessBlocker[] = [];
   if (input.expectedScope !== undefined && (input.expectedScope.providerId !== input.config.providerId || input.expectedScope.datasetId !== input.config.datasetId || input.expectedScope.datasetVersion !== input.config.datasetVersion)) blockers.push({ code: "M5_READINESS_SCOPE_MISMATCH" });
   if (new Set(capabilityRequirements.map(requirementKey)).size !== capabilityRequirements.length || requestedUsages.some(usage => !USAGE_SET.has(usage)) || new Set(requestedUsages).size !== requestedUsages.length) blockers.push({ code: "M5_READINESS_INVALID_REQUIREMENTS" });
@@ -258,6 +270,12 @@ export function evaluateM5ProviderReadiness(input: Readonly<{ config: ProviderRe
     else if (decision.approval === "EXPIRED" || (decision.approval === "APPROVED" && input.config.approvalExpiresAt !== undefined && input.config.approvalExpiresAt <= evaluatedAt)) blockers.push({ code: "M5_READINESS_USAGE_EXPIRED", usage });
   }
   const unique = new Map(blockers.map(blocker => [`${blocker.code}:${blocker.capability ?? ""}:${blocker.usage ?? ""}`, blocker]));
-  const ordered = [...unique.values()].sort((a, b) => `${a.code}:${a.capability ?? ""}:${a.usage ?? ""}`.localeCompare(`${b.code}:${b.capability ?? ""}:${b.usage ?? ""}`));
-  return deepFreeze({ result: ordered.length === 0 ? "READY" : "BLOCKED", providerId: input.config.providerId, datasetId: input.config.datasetId, datasetVersion: input.config.datasetVersion, evaluatedAt, blockers: ordered });
+  const ordered = [...unique.values()].sort((a, b) => compareLexical(`${a.code}:${a.capability ?? ""}:${a.usage ?? ""}`, `${b.code}:${b.capability ?? ""}:${b.usage ?? ""}`));
+  const result: ProviderReadinessEvaluation = deepFreeze({ result: (ordered.length === 0 ? "READY" : "BLOCKED") as M5ReadinessResult, providerId: input.config.providerId, datasetId: input.config.datasetId, datasetVersion: input.config.datasetVersion, evaluatedAt, requiredCapabilities: capabilityRequirements, requestedUsages, blockers: ordered });
+  trustedEvaluations.add(result);
+  return result;
+}
+
+export function isTrustedM5ProviderReadinessEvaluation(value: ProviderReadinessEvaluation): boolean {
+  return typeof value === "object" && value !== null && trustedEvaluations.has(value);
 }
