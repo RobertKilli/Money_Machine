@@ -515,3 +515,12 @@ availability claim and SourceLineage material can change. This layering prevents
 network timing from masquerading as new provider content. Live provider
 execution, commercial/legal approval, persistence and scheduling remain separate
 gates.
+
+### M5 provider source selection and production posture
+
+The official-source assessment, capability matrix, candidate-stack costs and
+remaining technical/legal decisions are maintained in
+[`M5_PROVIDER_SOURCE_DECISION.md`](M5_PROVIDER_SOURCE_DECISION.md). The current
+machine-readable production posture is
+[`config/m5/provider-readiness.production.json`](../config/m5/provider-readiness.production.json)
+and must evaluate `BLOCKED`; it contains no production usage approvals.

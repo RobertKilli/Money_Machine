@@ -1,0 +1,148 @@
+{
+  "configVersion": "m5-provider-readiness-config/v1",
+  "providerNamespace": "m5:production",
+  "providerId": "m5-production-stack",
+  "datasetId": "m5-production-inputs",
+  "datasetVersion": "m5-provider-source-decision/2026-09-25",
+  "reviewedAt": "2026-09-25T00:00:00.000Z",
+  "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+  "documentationUrls": [
+    "https://docs.coingecko.com/",
+    "https://docs.etherscan.io/",
+    "https://docs.bitquery.io/",
+    "https://www.alchemy.com/docs/"
+  ],
+  "termsUrls": [
+    "https://www.coingecko.com/en/api_terms",
+    "https://etherscan.io/apiterms",
+    "https://bitquery.io/terms-of-service",
+    "https://legal.alchemy.com/"
+  ],
+  "capabilities": [
+    {
+      "capability": "DAILY_CLOSE_SERIES",
+      "status": "SUPPORTED",
+      "completeness": "PARTIAL",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.coingecko.com/"],
+      "termsUrls": ["https://www.coingecko.com/en/api_terms"],
+      "limitations": ["CoinGecko historikk er plan- og asset-avhengig; komplett daglig dekning per asset er ikke bevist."]
+    },
+    {
+      "capability": "MARKET_CAP",
+      "status": "SUPPORTED",
+      "completeness": "PARTIAL",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.coingecko.com/"],
+      "termsUrls": ["https://www.coingecko.com/en/api_terms"],
+      "limitations": ["Rapportert market cap kan mangle for uverifiserte assets og dekker ikke nødvendigvis alle M5-assets."]
+    },
+    {
+      "capability": "VOLUME_24H",
+      "status": "SUPPORTED",
+      "completeness": "PARTIAL",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.coingecko.com/"],
+      "termsUrls": ["https://www.coingecko.com/en/api_terms"],
+      "limitations": ["Markedsaggregert volum er estimert/aggregert providerdata; eksakt komplett 24-timers markedsunivers er ikke bevist."]
+    },
+    {
+      "capability": "LIQUIDITY_COMPLETE_SET",
+      "status": "PARTIAL",
+      "completeness": "TOP_N_ONLY",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.coingecko.com/reference/top-pools-contract-address"],
+      "termsUrls": ["https://www.coingecko.com/en/api_terms"],
+      "limitations": ["Top Pools er rangert/top-N og dokumenterer ikke alle likviditetspooler."]
+    },
+    {
+      "capability": "CONTRACT_VERIFICATION",
+      "status": "SUPPORTED",
+      "completeness": "PARTIAL",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.etherscan.io/api-reference/endpoint/getsourcecode"],
+      "termsUrls": ["https://etherscan.io/apiterms"],
+      "limitations": ["Dekker explorerens verifikasjonsstatus og kildedata; utgjør ikke full sikkerhetsanalyse eller komplett kontraktdekning."]
+    },
+    {
+      "capability": "HOLDER_COMPLETE_UNIVERSE",
+      "status": "PARTIAL",
+      "completeness": "UNKNOWN",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.etherscan.io/api-reference/endpoint/tokenholderlist"],
+      "termsUrls": ["https://etherscan.io/apiterms"],
+      "limitations": ["Etherscan lister nåværende holderadresser med paging, men dokumenterer ikke atomisk blokkfestet snapshot eller fullstendig supply-rekonsiliering."]
+    },
+    {
+      "capability": "HOLDER_FINALITY",
+      "status": "UNKNOWN",
+      "completeness": "UNKNOWN",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.etherscan.io/", "https://www.alchemy.com/docs/chains/ethereum/ethereum-api-endpoints/eth-get-logs"],
+      "termsUrls": ["https://etherscan.io/apiterms", "https://legal.alchemy.com/"],
+      "limitations": ["Ingen undersøkt leverandør gir et dokumentert holderunivers bundet til samme block number/hash og M5s 12-confirmation finality policy."]
+    },
+    {
+      "capability": "VENUE_COMPLETE_UNIVERSE",
+      "status": "PARTIAL",
+      "completeness": "TOP_N_ONLY",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.coingecko.com/reference/top-pools-contract-address"],
+      "termsUrls": ["https://www.coingecko.com/en/api_terms"],
+      "limitations": ["Pool/rangering og kjent DEX-dekning beviser ikke komplett venue-univers; null-venue-semantikk mangler."],
+      "zeroVenuePolicy": "UNKNOWN"
+    },
+    {
+      "capability": "SUSPICIOUS_REQUIRED_INPUTS",
+      "status": "UNKNOWN",
+      "completeness": "UNKNOWN",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.etherscan.io/", "https://docs.coingecko.com/"],
+      "termsUrls": ["https://etherscan.io/apiterms", "https://www.coingecko.com/en/api_terms"],
+      "limitations": ["Samlet dekning av alle versjonerte M5 suspicious-rule inputs er ikke dokumentert."]
+    },
+    {
+      "capability": "SUSPICIOUS_RULE_COVERAGE",
+      "status": "UNKNOWN",
+      "completeness": "UNKNOWN",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.etherscan.io/", "https://docs.coingecko.com/"],
+      "termsUrls": ["https://etherscan.io/apiterms", "https://www.coingecko.com/en/api_terms"],
+      "limitations": ["Ingen provider leverer et bevis for evaluering av hver påkrevde M5-regel over eksakt SourceLineage-materiale."]
+    },
+    {
+      "capability": "CANONICAL_ASSET_IDENTITY",
+      "status": "PARTIAL",
+      "completeness": "PARTIAL",
+      "reviewedAt": "2026-09-25T00:00:00.000Z",
+      "reviewReference": "review/m5-provider-source-decision/2026-09-25",
+      "documentationUrls": ["https://docs.coingecko.com/", "https://docs.etherscan.io/"],
+      "termsUrls": ["https://www.coingecko.com/en/api_terms", "https://etherscan.io/apiterms"],
+      "limitations": ["Coin IDs, symboler og explorer metadata er provideridentifikatorer; de etablerer ikke Money Machines kanoniske identitetsmapping."]
+    }
+  ],
+  "usageDecisions": [
+    {"usage":"NETWORK_ACQUISITION","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25","limitations":["Ingen live request er godkjent."]},
+    {"usage":"RAW_PAYLOAD_PROCESSING","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25","limitations":["Provider terms må vurderes for planlagt behandling."]},
+    {"usage":"RAW_PAYLOAD_STORAGE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25","limitations":["Retention/storage-periode og råpayloadlagring må godkjennes skriftlig."]},
+    {"usage":"NORMALIZED_STORAGE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25","limitations":["Lagring av normaliserte og avledede providerdata må avklares."]},
+    {"usage":"AUTHORITY_PERSISTENCE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25","limitations":["M5 persistence av provideravledet authority-materiale må avklares."]},
+    {"usage":"REDISTRIBUTION","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25","limitations":["Ekstern deling/videredistribusjon er ikke godkjent."]},
+    {"usage":"COMMERCIAL_USE","approval":"REQUIRES_APPROVAL","reviewedAt":"2026-09-25T00:00:00.000Z","reviewReference":"review/m5-provider-source-decision/2026-09-25","limitations":["Kommersiell produktbruk må avklares per provider, plan og jurisdiksjon."]}
+  ],
+  "limitations": [
+    "Research only; no account or network use; legal status unresolved.",
+    "This aggregate decision is deliberately fail-closed and cannot authorize production execution."
+  ],
+  "metadata": {"sourceKind":"OFFICIAL_DOCUMENTATION","policyVersion":"m5-provider-readiness-policy/v1"}
+}
