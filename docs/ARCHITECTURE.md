@@ -455,3 +455,35 @@ describe endpoints and plan/rate-limit or usage restrictions; they do not
 constitute a legal approval for this product. Commercial use, retention and
 redistribution remain `REQUIRES_APPROVAL` unless a human review records an
 applicable plan and written permission.
+
+### M5 provider execution boundary
+
+The provider execution boundary is provider-neutral and currently fixture-only.
+A structured, versioned request plan is validated before transport: only GET
+over HTTPS to a registered provider hostname, an allowlisted path/query shape,
+bounded timeouts and response bytes, and an explicit retry policy are accepted.
+Caller URLs are never authoritative, redirects are rejected, and path traversal,
+private hosts, duplicate or secret-like query keys, and unsafe pagination cursors
+fail closed.
+
+Execution requires an authentic readiness result produced by the readiness
+evaluator. The result is bound to provider, dataset, dataset version, required
+capabilities and requested usages; a copied or scope-mismatched READY object is
+rejected. Credentials are represented only by a non-secret reference in the
+plan and are resolved at the final transport boundary. They are excluded from
+plan fingerprints, receipts, errors, normalized packages and provenance.
+
+Transport is injected and returns only bounded ephemeral bytes plus safe receipt
+metadata. Strict adapter parsers receive the bytes through a callback and return
+the projection and payload fingerprint; raw response bytes and sensitive headers
+never leave that callback. Receipt/retrieved time affects availability and
+provenance, not payload identity. Retries are limited to idempotent GET transient
+conditions with injected sleep/clock controls, per-attempt rate-limit leases and
+a total budget. Pagination requires contiguous ordinals, a maximum page count,
+validated cursors and no arbitrary provider-returned next URL.
+
+The current implementation has no live HTTP client, scheduler, credential store,
+database write path or provider approval. CoinGecko, Etherscan and holder
+integration is proven only through synthetic fixture transports and existing
+strict parsers. Live execution remains blocked until the readiness gates and a
+separate production execution review are approved.
