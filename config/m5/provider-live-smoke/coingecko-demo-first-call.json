@@ -2,12 +2,12 @@
   "schemaVersion": "m5-provider-live-smoke-cli-config/v1",
   "authorization": {
     "schemaVersion": "m5-provider-live-smoke-authorization/v1",
-    "authorizationId": "m5-smoke-70cd13c92c79170e76d5c111",
-    "fingerprint": "de1cdbba79974e35ea4472d2052543b4579ed5a850da49491f60fc7d99115efa",
+    "authorizationId": "m5-smoke-003cdeab0a209dd76795d48c",
+    "fingerprint": "e05f45995ada2205c54f0c9b76a6ce717f4de580993d006a3ca2bd75d874024c",
     "environment": "LOCAL_SMOKE",
     "providerId": "coingecko",
     "chainId": "ethereum",
-    "assetId": "0xabcdef0123456789abcdef0123456789abcdef01",
+    "assetId": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
     "datasetId": "coingecko-market-chart",
     "datasetVersion": "coingecko-market-chart/range-v1",
     "endpointProfile": "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO",
@@ -15,9 +15,9 @@
     "usages": ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"],
     "forbiddenUsages": ["RAW_PAYLOAD_STORAGE", "NORMALIZED_STORAGE", "AUTHORITY_PERSISTENCE", "REDISTRIBUTION", "COMMERCIAL_USE"],
     "retention": "PROCESS_MEMORY_ONLY",
-    "effectiveFrom": "2026-09-26T21:40:00.000Z",
-    "reviewedAt": "2026-09-26T21:40:00.000Z",
-    "expiresAt": "2026-09-27T09:00:00.000Z",
+    "effectiveFrom": "2026-09-26T21:55:00.000Z",
+    "reviewedAt": "2026-09-26T22:00:00.000Z",
+    "expiresAt": "2026-09-28T22:00:00.000Z",
     "maximumRequests": 1,
     "maximumPages": 1,
     "maximumResponseBytes": 512000,
@@ -25,12 +25,12 @@
     "maximumRetries": 0,
     "operatorReference": "operator:review-77",
     "reviewReference": "review:M5-smoke-77",
-    "recordedAt": "2026-09-26T21:45:00.000Z"
+    "recordedAt": "2026-09-26T22:02:24.000Z"
   },
   "request": {
     "schemaVersion": "m5-provider-live-smoke-config/v1",
     "providerId": "coingecko",
-    "contractAddress": "0xabcdef0123456789abcdef0123456789abcdef01",
+    "contractAddress": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
     "coinId": "ethereum",
     "from": "2026-09-25T00:00:00.000Z",
     "to": "2026-09-26T00:00:00.000Z"

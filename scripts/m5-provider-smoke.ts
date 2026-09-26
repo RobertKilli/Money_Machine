@@ -74,7 +74,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     try {
       const asOf = new Date().toISOString();
       const plan = planM5ProviderLiveSmoke({ config: loaded.request, authorization: loaded.authorization, providerId: args.provider!, environment: "LOCAL_SMOKE", asOf, trustedRegistry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY });
-      console.log(JSON.stringify({ status: "PLAN", mode: "DRY_RUN", trustStatus: "RESOLVED", executableOnlyWithValidSmokeAuthority: true,
+      console.log(JSON.stringify({ status: "PLAN", mode: "DRY_RUN", authorityStatus: "NON_AUTHORITATIVE_SMOKE", trustStatus: "RESOLVED", executableOnlyWithValidSmokeAuthority: true,
         supportedProfile: m5ProviderSmokeSupport("coingecko"), unsupportedProviders: [m5ProviderSmokeSupport("etherscan")], plan }));
     } catch { console.log(JSON.stringify({ status: "INVALID", mode: "DRY_RUN", code: "M5_PROVIDER_SMOKE_PLAN_INVALID" })); process.exitCode = 2; }
     return;
