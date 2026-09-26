@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isM5PublicProviderIpv4, validateM5ProviderTransportRequestShape } from "@/infrastructure/intelligence/m5-node-provider-http-transport";
+import { isM5PublicProviderIpv4, m5ProviderAuthenticationHeaders, validateM5ProviderTransportRequestShape } from "@/infrastructure/intelligence/m5-node-provider-http-transport";
 
 const address = "0x1111111111111111111111111111111111111111";
 function request(overrides: Record<string, unknown> = {}) {
@@ -13,15 +13,22 @@ function request(overrides: Record<string, unknown> = {}) {
 }
 
 describe("M5 Node provider transport request boundary (pure validation only)", () => {
+  it("binds CoinGecko Demo and Pro credentials to distinct exact hosts and headers", () => {
+    expect(m5ProviderAuthenticationHeaders("api.coingecko.com", "canary-header-77")).toEqual({ "x-cg-demo-api-key": "canary-header-77" });
+    expect(m5ProviderAuthenticationHeaders("pro-api.coingecko.com", "canary-header-77")).toEqual({ "x-cg-pro-api-key": "canary-header-77" });
+    expect(m5ProviderAuthenticationHeaders("api.etherscan.io", "canary-header-77")).toEqual({});
+    expect(() => m5ProviderAuthenticationHeaders("evil.test", "canary-header-77")).toThrow();
+  });
   it("accepts only exact provider request shapes without performing DNS or HTTP", () => {
     expect(() => validateM5ProviderTransportRequestShape(request())).not.toThrow();
+    expect(() => validateM5ProviderTransportRequestShape(request({ request: { ...request().request, hostname: "api.coingecko.com" } }))).not.toThrow();
     expect(() => validateM5ProviderTransportRequestShape(request({ request: { ...request().request, hostname: "api.etherscan.io", path: "/v2/api", query: [
       { key: "action", value: "getsourcecode" }, { key: "address", value: address }, { key: "chainid", value: "1" }, { key: "module", value: "contract" },
     ] } }))).not.toThrow();
   });
 
   it.each([
-    ["alternate host", { hostname: "api.coingecko.com" }],
+    ["alternate host", { hostname: "127.0.0.1" }],
     ["suffix bypass", { hostname: "pro-api.coingecko.com.evil.test" }],
     ["subdomain", { hostname: "x.pro-api.coingecko.com" }],
     ["trailing dot", { hostname: "pro-api.coingecko.com." }],

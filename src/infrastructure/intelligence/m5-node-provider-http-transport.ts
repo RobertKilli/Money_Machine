@@ -4,8 +4,9 @@ import { request as httpsRequest, type RequestOptions } from "node:https";
 import { M5ProviderInfrastructureError, type M5ProviderHttpTransport, type M5ProviderHttpTransportRequest, type M5ProviderHttpTransportResponse } from "@/application/intelligence/m5-provider-execution-boundary";
 
 const CG_HOST = "pro-api.coingecko.com";
+const CG_DEMO_HOST = "api.coingecko.com";
 const ES_HOST = "api.etherscan.io";
-const ALLOWED_HOSTS = new Set([CG_HOST, ES_HOST]);
+const ALLOWED_HOSTS = new Set([CG_HOST, CG_DEMO_HOST, ES_HOST]);
 const CONTROL = /[\u0000-\u001f\u007f]/;
 function dataObject(value: unknown, allowed: readonly string[], required: readonly string[], code: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new M5ProviderInfrastructureError(code);
@@ -38,6 +39,12 @@ function safeHeaders(headers: Record<string, string | string[] | number | undefi
   }
   return Object.freeze(result);
 }
+export function m5ProviderAuthenticationHeaders(host: string, credential: string): Readonly<Record<string, string>> {
+  if (host === CG_HOST) return Object.freeze({ "x-cg-pro-api-key": credential });
+  if (host === CG_DEMO_HOST) return Object.freeze({ "x-cg-demo-api-key": credential });
+  if (host === ES_HOST) return Object.freeze({});
+  throw new M5ProviderInfrastructureError("M5_PROVIDER_TRANSPORT_HOST_REJECTED");
+}
 function checkedRequest(input: unknown) {
   const root = dataObject(input, ["request", "credential", "timeoutMs", "maxResponseBytes", "redirectPolicy", "signal", "attemptOrdinal"], ["request", "credential", "timeoutMs", "maxResponseBytes", "redirectPolicy", "attemptOrdinal"], "M5_PROVIDER_TRANSPORT_REQUEST_REJECTED");
   const request = dataObject(root.request, ["protocol", "method", "hostname", "path", "query"], ["protocol", "method", "hostname", "path", "query"], "M5_PROVIDER_TRANSPORT_REQUEST_REJECTED");
@@ -60,7 +67,7 @@ function checkedRequest(input: unknown) {
   });
   if (new Set(query.map(row => row.key)).size !== query.length) throw new M5ProviderInfrastructureError("M5_PROVIDER_TRANSPORT_QUERY_REJECTED");
   const values = new Map(query.map(row => [row.key, row.value]));
-  if (request.hostname === CG_HOST) {
+  if (request.hostname === CG_HOST || request.hostname === CG_DEMO_HOST) {
     const expected = ["from", "interval", "to", "vs_currency"];
     if (!/^\/api\/v3\/coins\/ethereum\/contract\/0x[0-9a-f]{40}\/market_chart\/range$/.test(path) || query.map(row => row.key).sort().join("\0") !== expected.sort().join("\0") || values.get("vs_currency") !== "usd" || values.get("interval") !== "daily" || !/^\d+$/.test(values.get("from") ?? "") || !/^\d+$/.test(values.get("to") ?? "") || BigInt(values.get("from")!) > BigInt(values.get("to")!)) throw new M5ProviderInfrastructureError("M5_PROVIDER_TRANSPORT_SCOPE_REJECTED");
   } else {
@@ -78,6 +85,11 @@ function checkedRequest(input: unknown) {
 
 /** Fixed-host, request-shape-validated HTTPS transport with pinned public DNS and a total deadline. */
 export class M5NodeProviderHttpTransport implements M5ProviderHttpTransport {
+  isCredentialUrlSafeForSmoke(providerId: string): boolean {
+    // Etherscan V2 documents only query-string API-key authentication; smoke forbids secrets in URLs.
+    return providerId !== "etherscan";
+  }
+
   async send(input: M5ProviderHttpTransportRequest): Promise<M5ProviderHttpTransportResponse> {
     const { root, request, credential, query: plannedQuery } = checkedRequest(input);
     const host = request.hostname as string;
@@ -97,9 +109,8 @@ export class M5NodeProviderHttpTransport implements M5ProviderHttpTransport {
     const aborted = external ? new Promise<never>((_, reject) => { rejectExternalAbort = () => reject(new M5ProviderInfrastructureError("M5_PROVIDER_TRANSPORT_ABORTED")); external.addEventListener("abort", rejectExternalAbort, { once: true }); }) : undefined;
     const urlQuery = new URLSearchParams();
     for (const item of plannedQuery) urlQuery.append(item.key, item.value);
-    const headers: Record<string, string> = { accept: "application/json" };
-    if (host === CG_HOST) headers["x-cg-pro-api-key"] = credential;
-    else urlQuery.append("apikey", credential);
+    const headers: Record<string, string> = { accept: "application/json", ...m5ProviderAuthenticationHeaders(host, credential) };
+    if (host === ES_HOST) urlQuery.append("apikey", credential);
     const requestPath = `${request.path as string}?${urlQuery.toString()}`;
     const work = (async (): Promise<M5ProviderHttpTransportResponse> => {
       const addresses = await lookup(host, { all: true, family: 4, verbatim: true }).catch(() => { throw new M5ProviderInfrastructureError("M5_PROVIDER_TRANSPORT_DNS_FAILED"); });
