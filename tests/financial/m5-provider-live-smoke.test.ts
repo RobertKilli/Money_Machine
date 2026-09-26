@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { createM5ProviderSmokeAuthorization, isTrustedM5ProviderSmokeAuthorization, M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, parseM5ProviderSmokeAuthorization, resolveTrustedM5ProviderSmokeAuthorization } from "@/application/intelligence/m5-provider-live-smoke-authorization";
-import { executeM5ProviderLiveSmoke, parseM5ProviderSmokeConfig, previewM5ProviderLiveSmoke } from "@/application/intelligence/m5-provider-live-smoke";
+import { createM5ProviderSmokeAuthorization, isTrustedM5ProviderSmokeAuthorization, parseM5ProviderSmokeAuthorization, resolveTrustedM5ProviderSmokeAuthorization } from "@/application/intelligence/m5-provider-live-smoke-authorization";
+import { M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG, M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY } from "@/application/intelligence/m5-provider-live-smoke-registry";
+import { executeM5ProviderLiveSmoke, parseM5ProviderSmokeConfig, planM5ProviderLiveSmoke, previewM5ProviderLiveSmoke } from "@/application/intelligence/m5-provider-live-smoke";
 import { buildManualIngestionToLineagePlan } from "@/application/intelligence/manual-ingestion-to-lineage";
 import { assertM5ProviderReadinessForExecution } from "@/application/intelligence/evaluate-m5-provider-readiness";
 import { isTrustedM5ProviderReadinessAggregate } from "@/application/intelligence/evaluate-m5-provider-readiness-aggregate";
@@ -12,6 +13,7 @@ import { isM5ProviderSmokeAuthorizationPath, m5ProviderSmokeSupport, parseM5Prov
 const asOf = "2026-09-26T10:00:00.000Z";
 const later = "2026-09-26T10:01:00.000Z";
 const address = "0x1111111111111111111111111111111111111111";
+const wethAddress = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 function auth(overrides: Partial<Parameters<typeof createM5ProviderSmokeAuthorization>[0]> = {}) {
   const common = {
     environment: "LOCAL_SMOKE" as const,
@@ -30,7 +32,9 @@ function auth(overrides: Partial<Parameters<typeof createM5ProviderSmokeAuthoriz
     expiresAt: "2026-09-26T11:00:00.000Z",
     maximumRequests: 1,
     maximumPages: 1,
-    maximumResponseBytes: 16_384,
+    maximumResponseBytes: 512_000,
+    requestTimeoutMs: 5_000 as const,
+    maximumRetries: 0 as const,
     operatorReference: "operator:review-77",
     reviewReference: "review:M5-smoke-77",
     recordedAt: "2026-09-26T09:30:00.000Z",
@@ -111,8 +115,69 @@ describe("M5 provider live smoke authorization", () => {
     expect(() => parseM5ProviderSmokeAuthorization({ ...value, reviewReference: "review:api-key-leak" })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_REFERENCE_INVALID");
     expect(() => parseM5ProviderSmokeAuthorization({ ...value, operatorReference: "operator:https" })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_REFERENCE_INVALID");
     expect(() => parseM5ProviderSmokeAuthorization({ ...value, operatorReference: "operator:example.com" })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_REFERENCE_INVALID");
-    expect(M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY).toEqual([]);
+    expect(M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY).toHaveLength(1);
     expect(Object.isFrozen(M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY)).toBe(true);
+    expect(Object.isFrozen(M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY[0])).toBe(true);
+  });
+
+  it("rejects every altered identity scope and capability before trusting it", () => {
+    const value = auth();
+    for (const changed of [
+      { ...value, chainId: "polygon" },
+      { ...value, assetId: "0x2222222222222222222222222222222222222222" },
+      { ...value, datasetId: "other-dataset" },
+      { ...value, datasetVersion: "coingecko-market-chart/v2" },
+      { ...value, endpointProfile: "COINGECKO_PRO" },
+    ]) expect(() => parseM5ProviderSmokeAuthorization(changed)).toThrow();
+    expect(() => parseM5ProviderSmokeAuthorization({ ...value, capabilities: ["DAILY_CLOSE_SERIES"] })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_CAPABILITY_INVALID");
+  });
+
+  it("loads one factory-derived, immutable Demo smoke authority from the separate server registry", () => {
+    const authorization = parseM5ProviderSmokeAuthorization(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.authorization);
+    expect(authorization).toMatchObject({
+      authorizationId: "m5-smoke-003cdeab0a209dd76795d48c",
+      fingerprint: "e05f45995ada2205c54f0c9b76a6ce717f4de580993d006a3ca2bd75d874024c",
+      providerId: "coingecko", chainId: "ethereum", assetId: wethAddress,
+      datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/range-v1",
+      endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO", maximumRequests: 1,
+      maximumPages: 1, maximumResponseBytes: 512_000, requestTimeoutMs: 5_000, maximumRetries: 0,
+    });
+    expect(M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY).toEqual([{ authorizationId: authorization.authorizationId, fingerprint: authorization.fingerprint }]);
+    expect(Object.isFrozen(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG)).toBe(true);
+    expect(Object.isFrozen(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.authorization.capabilities)).toBe(true);
+    expect(JSON.stringify(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG)).not.toMatch(/api[_-]?key|secret|credential|token/i);
+    expect(auth({
+      assetId: authorization.assetId,
+      effectiveFrom: authorization.effectiveFrom,
+      reviewedAt: authorization.reviewedAt,
+      expiresAt: authorization.expiresAt,
+      maximumRequests: authorization.maximumRequests,
+      maximumPages: authorization.maximumPages,
+      maximumResponseBytes: authorization.maximumResponseBytes,
+      requestTimeoutMs: authorization.requestTimeoutMs,
+      maximumRetries: authorization.maximumRetries,
+      operatorReference: authorization.operatorReference,
+      reviewReference: authorization.reviewReference,
+      recordedAt: authorization.recordedAt,
+    })).toEqual(authorization);
+    const resolved = resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.reviewedAt });
+    expect(isTrustedM5ProviderSmokeAuthorization(resolved)).toBe(true);
+    expect(isTrustedM5ProviderSmokeAuthorization(JSON.parse(JSON.stringify(resolved)))).toBe(false);
+    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: "2026-09-26T21:54:59.999Z" })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
+    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.effectiveFrom })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
+    expect(isTrustedM5ProviderReadinessEvaluation(resolved as unknown as ProviderReadinessEvaluation)).toBe(false);
+    expect(() => assertM5ProviderReadinessForExecution(resolved as unknown as ProviderReadinessEvaluation)).toThrow();
+    expect(isTrustedM5ProviderReadinessAggregate(resolved)).toBe(false);
+    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.expiresAt })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
+    expect(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.request.contractAddress).toBe(authorization.assetId);
+    expect(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.request.coinId).toBe("ethereum");
+    const dryRun = planM5ProviderLiveSmoke({ config: M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.request, authorization, providerId: "coingecko", environment: "LOCAL_SMOKE", asOf: authorization.reviewedAt, trustedRegistry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY });
+    expect(dryRun).toMatchObject({ providerId: "coingecko", endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO", maximumResponseBytes: 512_000, timeoutMs: 5_000, maximumRetries: 0, requestCount: 1, maximumPages: 1, credentialReferences: ["env:coingecko-demo-api-key"] });
+    expect(dryRun.requests[0]?.hostname).toBe("api.coingecko.com");
+    expect(JSON.stringify(dryRun)).not.toMatch(/normalizedPackage|rawPayload|SYNTHETIC_M5_SMOKE_SENTINEL/);
+    expect(authorization.assetId).not.toBe("0xabcdef0123456789abcdef0123456789abcdef01");
+    const fixtureAuthorization = auth({ assetId: "0xabcdef0123456789abcdef0123456789abcdef01", maximumResponseBytes: 512_000 });
+    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization: fixtureAuthorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.reviewedAt })).toThrow("M5_PROVIDER_SMOKE_AUTHORITY_NOT_TRUSTED");
   });
 
   it("keeps the smoke boundary free of persistence, storage, DB, and scheduler wiring", async () => {
@@ -200,7 +265,7 @@ describe("M5 provider live smoke service", () => {
   });
 
   it("bounds response bytes and converts provider/parser failures to sanitized infrastructure failures", async () => {
-    const state = deps({ transport: { send: vi.fn(async () => ({ status: 200, headers: { "content-type": "application/json" }, body: new Uint8Array(16_385), retrievedAt: asOf })) } });
+    const state = deps({ transport: { send: vi.fn(async () => ({ status: 200, headers: { "content-type": "application/json" }, body: new Uint8Array(512_001), retrievedAt: asOf })) } });
     const tooLarge = await executeM5ProviderLiveSmoke(state.input);
     expect(tooLarge.status).toBe("INFRASTRUCTURE_FAILURE");
     expect(tooLarge.code).toBe("M5_PROVIDER_SMOKE_RESPONSE_BUDGET_EXCEEDED");
@@ -264,6 +329,10 @@ describe("M5 provider live smoke service", () => {
     const authorization = auth();
     const plan = previewM5ProviderLiveSmoke({ config: config(), authorization, providerId: "coingecko" });
     expect(plan.requestCount).toBe(1);
+    expect(plan.maximumPages).toBe(1);
+    expect(plan.maximumResponseBytes).toBe(512_000);
+    expect(plan.timeoutMs).toBe(5_000);
+    expect(plan.maximumRetries).toBe(0);
     expect(plan.credentialReferences).toEqual(["env:coingecko-demo-api-key"]);
     expect(plan.requests[0]?.hostname).toBe("api.coingecko.com");
     expect(plan.requests[0]?.hostname).not.toBe("pro-api.coingecko.com");

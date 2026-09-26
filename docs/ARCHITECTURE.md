@@ -653,8 +653,25 @@ in-process rate lease before late credential lookup, and no scheduling or
 polling. CoinGecko Demo dry-run reads only a JSON authorization/request file
 under `config/m5/provider-live-smoke/`, displays the fixed request plan and
 credential reference, and does not resolve credentials, perform DNS or send
-HTTP. Etherscan dry-run reports the unsupported authentication transport
+HTTP. The initial reviewable Demo scope is
+`coingecko-demo-first-call.json`, pinned to WETH's Ethereum contract
+`0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2`, Ethereum,
+`coingecko-market-chart/range-v1`, and the Demo range profile. Its exact
+authorization ID/fingerprint pair is held in a separate server-only
+LOCAL_SMOKE registry. The CLI dry-run and execution both resolve that pair;
+neither uses the production provider approval registry. The reviewed window
+is time-bounded and currently expires at `2026-09-28T22:00:00.000Z`.
+The authorization fingerprints one request, one page, a 512000-byte response
+cap, a 5000 ms request timeout, and zero retries.
+Etherscan dry-run reports the unsupported authentication transport
 without reading its authorization/config file.
+
+The environment credential resolver is server-only and used only by the
+standalone acquisition/smoke CLIs. Next.js loads `.env*` before evaluating
+`next.config.ts`; that config removes `COINGECKO_DEMO_API_KEY` before build
+workers and output caches start. No app route imports the resolver or smoke
+registry. The key has no `NEXT_PUBLIC_` form and is not part of CLI dry-run
+output.
 
 CoinGecko is the only live smoke profile because its documented Demo
 authentication uses a header compatible with the no-credentials-in-URL rule.
@@ -669,6 +686,13 @@ fallback or market/liquidity completeness claim is made. See CoinGecko's
 [Demo authentication](https://docs.coingecko.com/demo/reference/authentication),
 [Pro endpoint](https://docs.coingecko.com/reference/contract-address-market-chart-range),
 and [Pro authentication](https://docs.coingecko.com/reference/authentication).
+CoinGecko's [Demo contract-address data reference](https://docs.coingecko.com/demo/reference/coins-contract-address)
+identifies WETH (`weth`) with `asset_platform_id: ethereum` and the exact
+contract address above; the CoinGecko [WETH asset page](https://www.coingecko.com/en/coins/weth)
+also lists that contract. This verifies public metadata and endpoint support,
+not a successful market-chart response for this asset. The WETH scope remains
+NON_AUTHORITATIVE_SMOKE and does not establish canonical identity or production
+approval.
 
 Etherscan V2 request planning, parsing, and fixture coverage may remain useful
 for non-live code paths, but Etherscan live smoke is explicitly

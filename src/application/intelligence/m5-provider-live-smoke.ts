@@ -38,6 +38,8 @@ export type M5ProviderSmokePlan = Readonly<{
   requestCount: number;
   maximumPages: number;
   maximumResponseBytes: number;
+  timeoutMs: 5_000;
+  maximumRetries: 0;
   requests: readonly Readonly<{ method: "GET"; protocol: "https:"; hostname: string; path: string; query: readonly Readonly<{ key: string; value: string }>[] }>[];
 }>;
 export type M5ProviderSmokeSummary = Readonly<{
@@ -129,13 +131,13 @@ function makePlan(config: M5ProviderSmokeConfig, auth: M5ProviderSmokeAuthorizat
   const plans = requestPlans(config, auth);
   if (plans.length > auth.maximumRequests) throw new Error("M5_PROVIDER_SMOKE_REQUEST_BUDGET_EXCEEDED");
   const requests = plans.map(plan => requestPlanFromAdapterPlan({ plan, requiredCapabilities, credential,
-    limits: { timeoutMs: 5_000, maxResponseBytes: auth.maximumResponseBytes }, retry: { maxAttempts: 1, totalBudgetMs: 5_000, maxRetryAfterMs: 0 } })).map(plan => {
+    limits: { timeoutMs: auth.requestTimeoutMs, maxResponseBytes: auth.maximumResponseBytes }, retry: { maxAttempts: auth.maximumRetries + 1, totalBudgetMs: auth.requestTimeoutMs, maxRetryAfterMs: 0 } })).map(plan => {
       if (plan.request.hostname !== "pro-api.coingecko.com") throw new Error("M5_PROVIDER_SMOKE_PROFILE_INVALID");
       return freeze({ ...plan, request: freeze({ ...plan.request, hostname: "api.coingecko.com" }) });
     });
   return freeze({ status: "PLAN", environment: "LOCAL_SMOKE", authorizationId: auth.authorizationId, authorizationFingerprint: auth.fingerprint,
     providerId: auth.providerId, datasetId: auth.datasetId, datasetVersion: auth.datasetVersion, endpointProfile: auth.endpointProfile,
-    credentialReferences: [credential.reference], requestCount: requests.length, maximumPages: auth.maximumPages, maximumResponseBytes: auth.maximumResponseBytes,
+    credentialReferences: [credential.reference], requestCount: requests.length, maximumPages: auth.maximumPages, maximumResponseBytes: auth.maximumResponseBytes, timeoutMs: auth.requestTimeoutMs, maximumRetries: auth.maximumRetries,
     requests: requests.map(plan => freeze({ protocol: "https:" as const, ...plan.request })) });
 }
 
@@ -263,8 +265,8 @@ export async function executeM5ProviderLiveSmoke(input: M5ProviderSmokeDependenc
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let response: M5ProviderHttpTransportResponse;
       try {
-        const timed = new Promise<never>((_, reject) => { timeout = setTimeout(() => { controller.abort(); reject(new M5ProviderInfrastructureError("M5_PROVIDER_SMOKE_TIMEOUT")); }, 5_000); });
-        response = await Promise.race([input.transport.send({ request: plan, credential, timeoutMs: 5_000, maxResponseBytes: auth.maximumResponseBytes, redirectPolicy: "ERROR", attemptOrdinal: 1, signal: controller.signal }), timed]);
+        const timed = new Promise<never>((_, reject) => { timeout = setTimeout(() => { controller.abort(); reject(new M5ProviderInfrastructureError("M5_PROVIDER_SMOKE_TIMEOUT")); }, auth.requestTimeoutMs); });
+        response = await Promise.race([input.transport.send({ request: plan, credential, timeoutMs: auth.requestTimeoutMs, maxResponseBytes: auth.maximumResponseBytes, redirectPolicy: "ERROR", attemptOrdinal: 1, signal: controller.signal }), timed]);
       } catch (error) {
         const code = error instanceof M5ProviderInfrastructureError && error.code === "M5_PROVIDER_SMOKE_TIMEOUT" ? error.code : "M5_PROVIDER_SMOKE_TRANSPORT_FAILED";
         throw new M5ProviderInfrastructureError(code);
