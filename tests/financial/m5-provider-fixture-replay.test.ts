@@ -155,7 +155,7 @@ describe("M5 provider fixture replay integration", () => {
     expect(result.execution).not.toHaveProperty("body");
     expect(JSON.stringify(result, (_key, value) => typeof value === "bigint" ? value.toString() : value)).not.toMatch(/credential|rawPayload|authorization/i);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0]?.[0].request).toMatchObject({ protocol: "https:", hostname: "api.coingecko.com", method: "GET" });
+    expect(send.mock.calls[0]?.[0].request).toMatchObject({ protocol: "https:", hostname: "pro-api.coingecko.com", method: "GET" });
   });
 
   it("executes Etherscan fixture bytes through the same boundary and preserves exact scope", async () => {

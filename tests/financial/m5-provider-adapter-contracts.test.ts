@@ -118,7 +118,8 @@ describe("M5 typed provider adapter contracts", () => {
   it("parses Etherscan verification states and rejects ambiguous proxy claims", () => {
     const parsed = parseEtherscanFixture(etherscanFixture());
     expect(parsed.chainNamespace).toBe("eip155:1");
-    expect(parsed.creation.blockNumber).toBe(19000000n);
+    expect(parsed.creation).toBeDefined();
+    expect(parsed.creation?.blockNumber).toBe(19000000n);
     expect(parsed.verification.state).toBe("VERIFIED");
     expect(parseEtherscanFixture({ ...etherscanFixture(), sourceCode: { status: "UNVERIFIED" } }).verification.state).toBe("UNVERIFIED");
     expect(parseEtherscanFixture({ ...etherscanFixture(), apiStatus: "0", apiMessage: "No data found", sourceCode: null }).verification.state).toBe("UNKNOWN");

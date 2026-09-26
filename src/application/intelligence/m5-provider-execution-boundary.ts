@@ -163,6 +163,7 @@ const ID = /^[a-z0-9][a-z0-9._:/-]*$/;
 const HOST = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
 const CONTROL = /[\u0000-\u001f\u007f]/;
 const SECRET_KEY = /(?:api[-_]?key|authorization|cookie|credential|password|secret|token|private[-_]?key)/i;
+const URL_LIKE_CREDENTIAL = /(?:https?:\/\/|:\/\/|[\/?#&=])/i;
 const RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const CAPABILITIES = new Set<string>(M5_PROVIDER_CAPABILITIES);
 const EXECUTION_USAGES = new Set(["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"]);
@@ -208,8 +209,8 @@ const exact = (value: Obj, allowed: readonly string[], code: string): void => {
 };
 
 const allowlistFor = (providerId: string): Readonly<{ host: string; pathPrefix: string; queryKeys: readonly string[] }> => {
-  if (providerId === "coingecko") return { host: "api.coingecko.com", pathPrefix: "/api/v3/coins/", queryKeys: ["contract_address", "cursor", "from", "interval", "to", "vs_currency"] };
-  if (providerId === "etherscan") return { host: "api.etherscan.io", pathPrefix: "/v2/api", queryKeys: ["action", "address", "chainid", "module"] };
+  if (providerId === "coingecko") return { host: "pro-api.coingecko.com", pathPrefix: "/api/v3/coins/", queryKeys: ["contract_address", "cursor", "from", "interval", "to", "vs_currency"] };
+  if (providerId === "etherscan") return { host: "api.etherscan.io", pathPrefix: "/v2/api", queryKeys: ["action", "address", "chainid", "contractaddresses", "module"] };
   throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PROVIDER_UNREGISTERED");
 };
 
@@ -244,6 +245,30 @@ const validateCursor = (value: unknown): string => {
   if (typeof value !== "string" || value.length === 0 || value.length > 512 || value.trim() !== value || /[\u0000-\u001f\u007f?&#=]/.test(value) || /^https?:\/\//i.test(value)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CURSOR_INVALID");
   return value;
 };
+
+function validateProviderRequestShape(providerId: string, path: string, query: readonly M5ProviderQueryParameter[], pagination: unknown): void {
+  const values = new Map(query.map(item => [item.key, item.value]));
+  const page = pagination === undefined ? undefined : pagination as Record<string, unknown>;
+  if (providerId === "coingecko") {
+    if (!/^\/api\/v3\/coins\/ethereum\/contract\/0x[0-9a-f]{40}\/market_chart\/range$/.test(path) || values.get("vs_currency") !== "usd" || values.get("interval") !== "daily" || !/^\d+$/.test(values.get("from") ?? "") || !/^\d+$/.test(values.get("to") ?? "") || BigInt(values.get("from")!) > BigInt(values.get("to")!)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_REQUEST_SCOPE_INVALID");
+    const base = ["from", "interval", "to", "vs_currency"];
+    const keys = query.map(item => item.key).sort(stableCompare);
+    const initialKeys = [...base].sort(stableCompare);
+    const pagedKeys = page === undefined ? [] : [...base, String(page.cursorKey)].sort(stableCompare);
+    if (keys.join("\u0000") !== initialKeys.join("\u0000") && keys.join("\u0000") !== pagedKeys.join("\u0000")) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_QUERY_SCOPE_INVALID");
+    if (page && page.cursorKey !== "cursor") throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_PAGINATION_INVALID");
+    return;
+  }
+  if (providerId === "etherscan") {
+    if (path !== "/v2/api" || values.get("chainid") !== "1" || values.get("module") !== "contract") throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_REQUEST_SCOPE_INVALID");
+    const action = values.get("action");
+    const creation = action === "getcontractcreation" && values.has("contractaddresses") && !values.has("address");
+    const source = action === "getsourcecode" && values.has("address") && !values.has("contractaddresses");
+    const addressValue = values.get(creation ? "contractaddresses" : "address");
+    const expected = creation ? ["action", "chainid", "contractaddresses", "module"] : ["action", "address", "chainid", "module"];
+    if ((!creation && !source) || !/^0x[0-9a-f]{40}$/.test(addressValue ?? "") || query.map(item => item.key).sort(stableCompare).join("\u0000") !== expected.sort(stableCompare).join("\u0000")) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_QUERY_SCOPE_INVALID");
+  }
+}
 
 export function validateM5ProviderExecutionPlan(input: unknown): M5ProviderExecutionPlan {
   try {
@@ -296,6 +321,7 @@ export function validateM5ProviderExecutionPlan(input: unknown): M5ProviderExecu
       exact(item, ["pageOrdinal", "maxPages", "cursorKey"], "M5_PROVIDER_EXECUTION_PAGINATION_INVALID");
       return freeze({ pageOrdinal: integer(item.pageOrdinal, "M5_PROVIDER_EXECUTION_PAGINATION_INVALID", 0, 10_000), maxPages: integer(item.maxPages, "M5_PROVIDER_EXECUTION_PAGINATION_INVALID", 1, 100), cursorKey: nonBlank(item.cursorKey, "M5_PROVIDER_EXECUTION_PAGINATION_INVALID", 64) });
     })();
+    validateProviderRequestShape(providerId, path, query, pagination);
     return freeze({ planVersion: M5_PROVIDER_EXECUTION_PLAN_VERSION, policyVersion: M5_PROVIDER_EXECUTION_POLICY_VERSION, providerId, datasetId, datasetVersion, providerSourceNamespace, adapterContractVersion, parserContractVersion, requiredCapabilities: freeze(stableSort(capabilities, item => `${item.capability}:${item.completeness}`)), requestedUsages: freeze([...usages].sort(stableCompare)), credential: freeze({ kind: credential.kind, reference: credentialReference }), request: freeze({ method: "GET" as const, hostname, path, query }), limits: freeze({ timeoutMs, maxResponseBytes }), retry: retryPolicy, ...(pagination === undefined ? {} : { pagination }) });
   } catch (error) {
     if (error instanceof M5ProviderInfrastructureError) throw error;
@@ -323,7 +349,7 @@ export function providerPlanFingerprint(plan: M5ProviderExecutionPlan): string {
 }
 
 export function requestPlanFromAdapterPlan(input: Readonly<{ plan: Readonly<{ providerId: string; datasetId: string; datasetVersion: string; providerSourceNamespace: string; adapterContractVersion: string; parserContractVersion: string; endpointPath: string; query: Readonly<Record<string, string>> }>; requiredCapabilities: readonly ProviderCapabilityRequirement[]; credential: M5CredentialReference; limits?: Partial<M5ProviderExecutionPlan["limits"]>; retry?: Partial<M5RetryPolicy> }>): M5ProviderExecutionPlan {
-  return validateM5ProviderExecutionPlan({ planVersion: M5_PROVIDER_EXECUTION_PLAN_VERSION, policyVersion: M5_PROVIDER_EXECUTION_POLICY_VERSION, providerId: input.plan.providerId, datasetId: input.plan.datasetId, datasetVersion: input.plan.datasetVersion, providerSourceNamespace: input.plan.providerSourceNamespace, adapterContractVersion: input.plan.adapterContractVersion, parserContractVersion: input.plan.parserContractVersion, requiredCapabilities: input.requiredCapabilities, requestedUsages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"], credential: input.credential, request: { method: "GET", hostname: input.plan.providerId === "coingecko" ? "api.coingecko.com" : "api.etherscan.io", path: input.plan.endpointPath, query: Object.entries(input.plan.query).map(([key, value]) => ({ key, value })) }, limits: { timeoutMs: input.limits?.timeoutMs ?? 30_000, maxResponseBytes: input.limits?.maxResponseBytes ?? 1_000_000 }, retry: { maxAttempts: input.retry?.maxAttempts ?? 3, totalBudgetMs: input.retry?.totalBudgetMs ?? 30_000, maxRetryAfterMs: input.retry?.maxRetryAfterMs ?? 10_000 } });
+  return validateM5ProviderExecutionPlan({ planVersion: M5_PROVIDER_EXECUTION_PLAN_VERSION, policyVersion: M5_PROVIDER_EXECUTION_POLICY_VERSION, providerId: input.plan.providerId, datasetId: input.plan.datasetId, datasetVersion: input.plan.datasetVersion, providerSourceNamespace: input.plan.providerSourceNamespace, adapterContractVersion: input.plan.adapterContractVersion, parserContractVersion: input.plan.parserContractVersion, requiredCapabilities: input.requiredCapabilities, requestedUsages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"], credential: input.credential, request: { method: "GET", hostname: input.plan.providerId === "coingecko" ? "pro-api.coingecko.com" : "api.etherscan.io", path: input.plan.endpointPath, query: Object.entries(input.plan.query).map(([key, value]) => ({ key, value })) }, limits: { timeoutMs: input.limits?.timeoutMs ?? 30_000, maxResponseBytes: input.limits?.maxResponseBytes ?? 1_000_000 }, retry: { maxAttempts: input.retry?.maxAttempts ?? 3, totalBudgetMs: input.retry?.totalBudgetMs ?? 30_000, maxRetryAfterMs: input.retry?.maxRetryAfterMs ?? 10_000 } });
 }
 
 async function boundedBody(body: Uint8Array | AsyncIterable<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
@@ -346,12 +372,14 @@ async function boundedBody(body: Uint8Array | AsyncIterable<Uint8Array>, maxByte
 
 const header = (headers: Readonly<Record<string, string>>, key: string): string | undefined => Object.entries(headers).find(([name]) => name.toLowerCase() === key)?.[1];
 
-function retryAfterMs(headers: Readonly<Record<string, string>>, max: number): number {
+function retryAfterMs(headers: Readonly<Record<string, string>>, max: number, nowMs: number): number {
   const value = header(headers, "retry-after");
   if (value === undefined) return 0;
   const seconds = Number(value);
-  if (!Number.isFinite(seconds) || seconds < 0) return 0;
-  return Math.min(Math.floor(seconds * 1000), max);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(Math.floor(seconds * 1000), max);
+  const retryAt = Date.parse(value);
+  if (!Number.isFinite(retryAt) || !Number.isFinite(nowMs)) return 0;
+  return Math.min(Math.max(0, retryAt - nowMs), max);
 }
 
 export function createNoopM5ProviderRateLimitLease(): M5ProviderRateLimitLease {
@@ -366,6 +394,7 @@ export async function executeM5ProviderPlan(input: Readonly<{
   rateLimit?: M5ProviderRateLimitLease;
   parser: M5ProviderResponseParser;
   now?: () => string;
+  monotonicNow?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
   signal?: AbortSignal;
 }>): Promise<M5ProviderExecutionResult> {
@@ -374,30 +403,48 @@ export async function executeM5ProviderPlan(input: Readonly<{
   const request: ProviderReadinessExecutionRequest = { providerId: plan.providerId, datasetId: plan.datasetId, datasetVersion: plan.datasetVersion, requiredCapabilities: plan.requiredCapabilities, requestedUsages: plan.requestedUsages };
   try { assertM5ProviderReadinessForExecution(input.readiness, request); } catch (error) { return { status: "BLOCKED", code: error instanceof Error ? error.message : "M5_PROVIDER_READINESS_BLOCKED" }; }
   const now = input.now ?? (() => new Date().toISOString());
+  const monotonicNow = input.monotonicNow ?? (() => performance.now());
   const sleep = input.sleep ?? ((milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds)));
   const planFingerprint = providerPlanFingerprint(plan);
-  let credential: M5EphemeralCredential;
-  try { credential = await input.credentials.resolve(plan.credential); } catch { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_FAILED"); }
-  if (credential.kind !== plan.credential.kind) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_KIND_MISMATCH");
-  if ((credential.kind === "NONE" && credential.value !== undefined) || (credential.kind !== "NONE" && (credential.value === undefined || credential.value.length === 0 || credential.value.trim() !== credential.value || credential.value.length > 8192 || CONTROL.test(credential.value)))) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
-  const startedAt = Date.parse(now());
-  if (!Number.isFinite(startedAt)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CLOCK_INVALID");
+  let credential: M5EphemeralCredential | undefined;
+  const startedAt = monotonicNow();
+  if (!Number.isFinite(startedAt) || startedAt < 0) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CLOCK_INVALID");
+  let previousMonotonicTime = startedAt;
+  const readMonotonicTime = (): number => {
+    const value = monotonicNow();
+    if (!Number.isFinite(value) || value < previousMonotonicTime) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CLOCK_INVALID");
+    previousMonotonicTime = value;
+    return value;
+  };
   let lastRetryable: string | undefined;
   for (let attempt = 1; attempt <= plan.retry.maxAttempts; attempt += 1) {
-    if (Date.parse(now()) - startedAt > plan.retry.totalBudgetMs) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RETRY_BUDGET_EXCEEDED");
+    const attemptStartedAt = readMonotonicTime();
+    if (attemptStartedAt - startedAt > plan.retry.totalBudgetMs) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RETRY_BUDGET_EXCEEDED");
     let lease: boolean;
     try { lease = await (input.rateLimit ?? createNoopM5ProviderRateLimitLease()).acquire({ providerId: plan.providerId, datasetId: plan.datasetId, credentialReference: plan.credential.reference }); } catch { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RATE_LIMIT_FAILED"); }
     if (!lease) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RATE_LIMITED");
+    if (credential === undefined) {
+      try { credential = await input.credentials.resolve(plan.credential); } catch { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_FAILED"); }
+      if (credential.kind !== plan.credential.kind) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_KIND_MISMATCH");
+      if ((credential.kind === "NONE" && credential.value !== undefined) || (credential.kind !== "NONE" && (credential.value === undefined || credential.value.length === 0 || credential.value.trim() !== credential.value || credential.value.length > 8192 || CONTROL.test(credential.value) || URL_LIKE_CREDENTIAL.test(credential.value)))) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CREDENTIAL_INVALID");
+    }
+    const remainingBudgetMs = plan.retry.totalBudgetMs - (readMonotonicTime() - startedAt);
+    if (remainingBudgetMs <= 0) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_RETRY_BUDGET_EXCEEDED");
     let response: M5ProviderHttpTransportResponse;
     try {
-      response = await input.transport.send({ request: freeze({ protocol: "https:" as const, ...plan.request }), credential, timeoutMs: plan.limits.timeoutMs, maxResponseBytes: plan.limits.maxResponseBytes, redirectPolicy: "ERROR", signal: input.signal, attemptOrdinal: attempt });
+      response = await input.transport.send({ request: freeze({ protocol: "https:" as const, ...plan.request }), credential, timeoutMs: Math.min(plan.limits.timeoutMs, remainingBudgetMs), maxResponseBytes: plan.limits.maxResponseBytes, redirectPolicy: "ERROR", signal: input.signal, attemptOrdinal: attempt });
     } catch (error) {
       if (attempt < plan.retry.maxAttempts && error instanceof M5ProviderInfrastructureError && error.code === "M5_PROVIDER_TRANSPORT_TIMEOUT") { lastRetryable = error.code; await sleep(0); continue; }
       if (error instanceof M5ProviderInfrastructureError) throw error;
       throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_TRANSPORT_FAILED");
     }
     if (response.status >= 300 && response.status < 400) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_REDIRECT_REJECTED");
-    if (RETRY_STATUSES.has(response.status) && attempt < plan.retry.maxAttempts) { lastRetryable = `HTTP_${response.status}`; await sleep(retryAfterMs(response.headers, plan.retry.maxRetryAfterMs)); continue; }
+    if (RETRY_STATUSES.has(response.status) && attempt < plan.retry.maxAttempts) {
+      const wallClock = Date.parse(now());
+      if (!Number.isFinite(wallClock)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CLOCK_INVALID");
+      const delay = Math.min(retryAfterMs(response.headers, plan.retry.maxRetryAfterMs, wallClock), Math.max(0, plan.retry.totalBudgetMs - (readMonotonicTime() - startedAt)));
+      lastRetryable = `HTTP_${response.status}`; await sleep(delay); continue;
+    }
     if (response.status < 200 || response.status >= 300) throw new M5ProviderInfrastructureError(`M5_PROVIDER_HTTP_${response.status}`);
     const contentType = header(response.headers, "content-type");
     if (response.status !== 204 && (contentType === undefined || !/^application\/json(?:\s*;|$)/i.test(contentType))) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CONTENT_TYPE_REJECTED");
@@ -427,7 +474,7 @@ export async function executeM5ProviderPlan(input: Readonly<{
       }
       return freeze({ isFinal: false as const, nextCursor: validateCursor(parsed.nextCursor) });
     })();
-    return freeze({ status: "EXECUTED", planFingerprint, scope: freeze({ providerId: plan.providerId, datasetId: plan.datasetId, datasetVersion: plan.datasetVersion }), receipt: freeze({ providerId: plan.providerId, datasetId: plan.datasetId, datasetVersion: plan.datasetVersion, planFingerprint, receivedAt, effectiveAvailableAt, attemptCount: attempt, ...(response.providerRequestId === undefined ? {} : { providerRequestId: nonBlank(response.providerRequestId, "M5_PROVIDER_EXECUTION_RECEIPT_INVALID", 256) }) }), projection: parsed.projection, payloadFingerprint, ...(pagination === undefined ? {} : { pagination }) });
+    return freeze({ status: "EXECUTED", planFingerprint, scope: freeze({ providerId: plan.providerId, datasetId: plan.datasetId, datasetVersion: plan.datasetVersion }), receipt: freeze({ providerId: plan.providerId, datasetId: plan.datasetId, datasetVersion: plan.datasetVersion, planFingerprint, receivedAt, effectiveAvailableAt, attemptCount: attempt }), projection: parsed.projection, payloadFingerprint, ...(pagination === undefined ? {} : { pagination }) });
   }
   throw new M5ProviderInfrastructureError(lastRetryable ?? "M5_PROVIDER_EXECUTION_RETRY_EXHAUSTED");
 }

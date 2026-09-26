@@ -18,6 +18,7 @@
     "m5:authority": "tsx --tsconfig scripts/tsconfig.json scripts/provision-m5-manifest-authority.ts",
     "m5:ingest": "tsx --tsconfig scripts/tsconfig.json scripts/manual-m5-ingest.ts",
     "m5:provider-readiness": "tsx --tsconfig scripts/tsconfig.json scripts/m5-provider-readiness.ts",
+    "m5:provider:acquire": "tsx --tsconfig scripts/tsconfig.json scripts/m5-provider-acquire.ts",
     "test:watch": "vitest"
   },
   "repository": {
