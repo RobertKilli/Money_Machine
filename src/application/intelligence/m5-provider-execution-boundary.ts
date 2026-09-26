@@ -87,6 +87,8 @@ export type M5ProviderHttpTransportResponse = Readonly<{
 
 export interface M5ProviderHttpTransport {
   send(request: M5ProviderHttpTransportRequest): Promise<M5ProviderHttpTransportResponse>;
+  /** Smoke-only transport declaration used to fail closed when a provider requires URL credentials. */
+  isCredentialUrlSafeForSmoke?(providerId: string): boolean;
 }
 
 export interface M5ProviderCredentialPort {

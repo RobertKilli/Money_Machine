@@ -6,6 +6,7 @@ export class M5ProviderEnvironmentCredentialResolver implements M5ProviderCreden
   async resolve(reference: M5CredentialReference): Promise<M5EphemeralCredential> {
     if (reference.kind !== "API_KEY") throw new M5ProviderInfrastructureError("M5_PROVIDER_CREDENTIAL_REFERENCE_INVALID");
     const envName = reference.reference === "env:coingecko-pro-api-key" ? "COINGECKO_PRO_API_KEY"
+      : reference.reference === "env:coingecko-demo-api-key" ? "COINGECKO_DEMO_API_KEY"
       : reference.reference === "env:etherscan-api-key" ? "ETHERSCAN_API_KEY" : undefined;
     if (!envName) throw new M5ProviderInfrastructureError("M5_PROVIDER_CREDENTIAL_REFERENCE_INVALID");
     const value = process.env[envName];
