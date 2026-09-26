@@ -3,11 +3,10 @@ import { canonicalSha256, normalizeIngestionTimestamp } from "@/domain/intellige
 export const M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_VERSION = "m5-provider-live-smoke-authorization/v1" as const;
 export const M5_PROVIDER_LIVE_SMOKE_CAPABILITIES = {
   coingecko: ["DAILY_CLOSE_SERIES", "MARKET_CAP", "VOLUME_24H"],
-  etherscan: ["CONTRACT_VERIFICATION"],
 } as const;
 const FORBIDDEN = ["RAW_PAYLOAD_STORAGE", "NORMALIZED_STORAGE", "AUTHORITY_PERSISTENCE", "REDISTRIBUTION", "COMMERCIAL_USE"] as const;
 const RETENTION = "PROCESS_MEMORY_ONLY" as const;
-const MAX_REQUESTS = 2;
+const MAX_REQUESTS = 1;
 const MAX_PAGES = 1;
 const MAX_RESPONSE_BYTES = 512_000;
 
@@ -17,6 +16,8 @@ export type M5ProviderSmokeAuthorization = Readonly<{
   fingerprint: string;
   environment: "LOCAL_SMOKE";
   providerId: "coingecko";
+  chainId: "ethereum";
+  assetId: string;
   datasetId: string;
   datasetVersion: string;
   endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO";
@@ -25,6 +26,7 @@ export type M5ProviderSmokeAuthorization = Readonly<{
   forbiddenUsages: typeof FORBIDDEN;
   retention: typeof RETENTION;
   effectiveFrom: string;
+  reviewedAt: string;
   expiresAt: string;
   maximumRequests: number;
   maximumPages: number;
@@ -72,14 +74,14 @@ function integer(value: unknown, code: string, min: number, max: number): number
 }
 function reference(value: unknown): string {
   const parsed = text(value, "M5_PROVIDER_SMOKE_AUTHORIZATION_REFERENCE_INVALID", 96);
-  if (!/^(?:operator|review|ticket|change):[A-Za-z0-9._-]{1,80}$/.test(parsed)) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_REFERENCE_INVALID");
+  if (!/^(?:operator|review|ticket|change):[A-Za-z0-9_-]{1,80}$/.test(parsed) || /(?:api[_-]?key|secret|token|password|bearer|credential|https?)/i.test(parsed)) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_REFERENCE_INVALID");
   return parsed;
 }
 const material = (auth: Omit<M5ProviderSmokeAuthorization, "fingerprint" | "recordedAt">) => ({
   schemaVersion: auth.schemaVersion, authorizationId: auth.authorizationId, environment: auth.environment,
-  providerId: auth.providerId, datasetId: auth.datasetId, datasetVersion: auth.datasetVersion,
+  providerId: auth.providerId, chainId: auth.chainId, assetId: auth.assetId, datasetId: auth.datasetId, datasetVersion: auth.datasetVersion,
   endpointProfile: auth.endpointProfile, capabilities: auth.capabilities, usages: auth.usages,
-  forbiddenUsages: auth.forbiddenUsages, retention: auth.retention, effectiveFrom: auth.effectiveFrom,
+  forbiddenUsages: auth.forbiddenUsages, retention: auth.retention, effectiveFrom: auth.effectiveFrom, reviewedAt: auth.reviewedAt,
   expiresAt: auth.expiresAt, maximumRequests: auth.maximumRequests, maximumPages: auth.maximumPages,
   maximumResponseBytes: auth.maximumResponseBytes, operatorReference: auth.operatorReference,
   reviewReference: auth.reviewReference,
@@ -99,13 +101,14 @@ function strictArray(value: unknown, code: string): unknown[] {
 }
 
 export function parseM5ProviderSmokeAuthorization(value: unknown): M5ProviderSmokeAuthorization {
-  const root = record(value, ["schemaVersion", "authorizationId", "fingerprint", "environment", "providerId", "datasetId", "datasetVersion", "endpointProfile", "capabilities", "usages", "forbiddenUsages", "retention", "effectiveFrom", "expiresAt", "maximumRequests", "maximumPages", "maximumResponseBytes", "operatorReference", "reviewReference", "recordedAt"], ["schemaVersion", "authorizationId", "fingerprint", "environment", "providerId", "datasetId", "datasetVersion", "endpointProfile", "capabilities", "usages", "forbiddenUsages", "retention", "effectiveFrom", "expiresAt", "maximumRequests", "maximumPages", "maximumResponseBytes", "operatorReference", "reviewReference", "recordedAt"], "M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
+  const fields = ["schemaVersion", "authorizationId", "fingerprint", "environment", "providerId", "chainId", "assetId", "datasetId", "datasetVersion", "endpointProfile", "capabilities", "usages", "forbiddenUsages", "retention", "effectiveFrom", "reviewedAt", "expiresAt", "maximumRequests", "maximumPages", "maximumResponseBytes", "operatorReference", "reviewReference", "recordedAt"];
+  const root = record(value, fields, fields, "M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
   if (root.schemaVersion !== M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_VERSION || root.environment !== "LOCAL_SMOKE") throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
   if (root.providerId === "etherscan") throw new Error("M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT");
   if (root.providerId !== "coingecko") throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
   const providerId = root.providerId;
   const expected = { datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/range-v1", endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO" };
-  if (root.datasetId !== expected.datasetId || root.datasetVersion !== expected.datasetVersion || root.endpointProfile !== expected.endpointProfile) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_SCOPE_INVALID");
+  if (root.chainId !== "ethereum" || typeof root.assetId !== "string" || !/^0x[0-9a-f]{40}$/.test(root.assetId) || root.datasetId !== expected.datasetId || root.datasetVersion !== expected.datasetVersion || root.endpointProfile !== expected.endpointProfile) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_SCOPE_INVALID");
   const capabilities = strictArray(root.capabilities, "M5_PROVIDER_SMOKE_AUTHORIZATION_CAPABILITY_INVALID");
   const usages = strictArray(root.usages, "M5_PROVIDER_SMOKE_AUTHORIZATION_USAGE_INVALID");
   const forbiddenUsages = strictArray(root.forbiddenUsages, "M5_PROVIDER_SMOKE_AUTHORIZATION_USAGE_INVALID");
@@ -114,21 +117,22 @@ export function parseM5ProviderSmokeAuthorization(value: unknown): M5ProviderSmo
   if (forbiddenUsages.length !== FORBIDDEN.length || forbiddenUsages.some((item, index) => item !== FORBIDDEN[index])) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_USAGE_INVALID");
   if (root.retention !== RETENTION) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_RETENTION_INVALID");
   const effectiveFrom = time(root.effectiveFrom, "M5_PROVIDER_SMOKE_AUTHORIZATION_TIME_INVALID");
+  const reviewedAt = time(root.reviewedAt, "M5_PROVIDER_SMOKE_AUTHORIZATION_TIME_INVALID");
   const expiresAt = time(root.expiresAt, "M5_PROVIDER_SMOKE_AUTHORIZATION_TIME_INVALID");
   const recordedAt = time(root.recordedAt, "M5_PROVIDER_SMOKE_AUTHORIZATION_TIME_INVALID");
-  if (effectiveFrom >= expiresAt || recordedAt < effectiveFrom || recordedAt >= expiresAt) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_TIME_INVALID");
+  if (effectiveFrom > reviewedAt || reviewedAt >= expiresAt || effectiveFrom >= expiresAt || recordedAt < reviewedAt || recordedAt >= expiresAt) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_TIME_INVALID");
   const base: Omit<M5ProviderSmokeAuthorization, "fingerprint" | "recordedAt"> = {
     schemaVersion: M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_VERSION,
     authorizationId: text(root.authorizationId, "M5_PROVIDER_SMOKE_AUTHORIZATION_ID_INVALID", 120),
-    environment: "LOCAL_SMOKE" as const, providerId,
+    environment: "LOCAL_SMOKE" as const, providerId, chainId: "ethereum" as const, assetId: root.assetId,
     datasetId: expected.datasetId, datasetVersion: expected.datasetVersion,
     endpointProfile: expected.endpointProfile as M5ProviderSmokeAuthorization["endpointProfile"],
     capabilities: [...capabilities] as string[],
     usages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"] as const,
     forbiddenUsages: [...FORBIDDEN] as unknown as typeof FORBIDDEN,
     retention: RETENTION,
-    effectiveFrom, expiresAt,
-    maximumRequests: integer(root.maximumRequests, "M5_PROVIDER_SMOKE_AUTHORIZATION_BUDGET_INVALID", providerId === "coingecko" ? 1 : 2, providerId === "coingecko" ? 1 : MAX_REQUESTS),
+    effectiveFrom, reviewedAt, expiresAt,
+    maximumRequests: integer(root.maximumRequests, "M5_PROVIDER_SMOKE_AUTHORIZATION_BUDGET_INVALID", 1, 1),
     maximumPages: integer(root.maximumPages, "M5_PROVIDER_SMOKE_AUTHORIZATION_BUDGET_INVALID", 1, MAX_PAGES),
     maximumResponseBytes: integer(root.maximumResponseBytes, "M5_PROVIDER_SMOKE_AUTHORIZATION_BUDGET_INVALID", 1, MAX_RESPONSE_BYTES),
     operatorReference: reference(root.operatorReference),
@@ -165,7 +169,7 @@ export function resolveTrustedM5ProviderSmokeAuthorization(input: Readonly<{ aut
   const entry = entries.find(item => item.authorizationId === auth.authorizationId && item.fingerprint === auth.fingerprint);
   if (!entry) throw new Error("M5_PROVIDER_SMOKE_AUTHORITY_NOT_TRUSTED");
   const asOf = time(input.asOf, "M5_PROVIDER_SMOKE_AS_OF_INVALID");
-  if (asOf < auth.effectiveFrom || asOf < auth.recordedAt || asOf >= auth.expiresAt) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
+  if (asOf < auth.effectiveFrom || asOf < auth.reviewedAt || asOf >= auth.expiresAt) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
   const resolved = parseM5ProviderSmokeAuthorization(auth);
   trusted.add(resolved);
   return resolved as TrustedM5ProviderSmokeAuthorization;

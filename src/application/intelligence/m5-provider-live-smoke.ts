@@ -119,7 +119,7 @@ function trusted(input: M5ProviderSmokeDependencies): TrustedM5ProviderSmokeAuth
   return resolveTrustedM5ProviderSmokeAuthorization({ authorization: input.authorization, registry: input.trustedRegistry, asOf: input.asOf });
 }
 function requestPlans(config: M5ProviderSmokeConfig, auth: M5ProviderSmokeAuthorization) {
-  if (config.providerId !== "coingecko" || config.providerId !== auth.providerId) throw new Error("M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT");
+  if (config.providerId !== "coingecko" || config.providerId !== auth.providerId || auth.chainId !== "ethereum" || config.contractAddress !== auth.assetId) throw new Error("M5_PROVIDER_SMOKE_SCOPE_INVALID");
   return [buildCoinGeckoMarketRequestPlan({ coinId: config.coinId!, contractAddress: config.contractAddress, from: config.from!, to: config.to!, datasetVersion: auth.datasetVersion })];
 }
 function makePlan(config: M5ProviderSmokeConfig, auth: M5ProviderSmokeAuthorization): M5ProviderSmokePlan {
@@ -129,11 +129,14 @@ function makePlan(config: M5ProviderSmokeConfig, auth: M5ProviderSmokeAuthorizat
   const plans = requestPlans(config, auth);
   if (plans.length > auth.maximumRequests) throw new Error("M5_PROVIDER_SMOKE_REQUEST_BUDGET_EXCEEDED");
   const requests = plans.map(plan => requestPlanFromAdapterPlan({ plan, requiredCapabilities, credential,
-    limits: { timeoutMs: 5_000, maxResponseBytes: auth.maximumResponseBytes }, retry: { maxAttempts: 1, totalBudgetMs: 5_000, maxRetryAfterMs: 0 } }));
+    limits: { timeoutMs: 5_000, maxResponseBytes: auth.maximumResponseBytes }, retry: { maxAttempts: 1, totalBudgetMs: 5_000, maxRetryAfterMs: 0 } })).map(plan => {
+      if (plan.request.hostname !== "pro-api.coingecko.com") throw new Error("M5_PROVIDER_SMOKE_PROFILE_INVALID");
+      return freeze({ ...plan, request: freeze({ ...plan.request, hostname: "api.coingecko.com" }) });
+    });
   return freeze({ status: "PLAN", environment: "LOCAL_SMOKE", authorizationId: auth.authorizationId, authorizationFingerprint: auth.fingerprint,
     providerId: auth.providerId, datasetId: auth.datasetId, datasetVersion: auth.datasetVersion, endpointProfile: auth.endpointProfile,
     credentialReferences: [credential.reference], requestCount: requests.length, maximumPages: auth.maximumPages, maximumResponseBytes: auth.maximumResponseBytes,
-    requests: requests.map(plan => ({ ...plan.request, hostname: config.providerId === "coingecko" ? "api.coingecko.com" : plan.request.hostname, protocol: "https:" as const })) });
+    requests: requests.map(plan => freeze({ protocol: "https:" as const, ...plan.request })) });
 }
 
 export function planM5ProviderLiveSmoke(input: Readonly<{ config: unknown; authorization: unknown; trustedRegistry: unknown; providerId: string; environment: string; asOf: string }>): M5ProviderSmokePlan {
@@ -186,17 +189,17 @@ async function boundedBody(body: Uint8Array | AsyncIterable<Uint8Array>, maximum
   chunks.forEach(item => item.fill(0));
   return result;
 }
-function parseResponseBody(body: Uint8Array, auth: TrustedM5ProviderSmokeAuthorization, config: M5ProviderSmokeConfig, receivedAt: string): Readonly<{ recordCount: number; fingerprint: string; capabilityOutcomes?: readonly ("OBSERVED" | "UNKNOWN")[] }> {
+function parseResponseBody(body: Uint8Array, auth: TrustedM5ProviderSmokeAuthorization, config: M5ProviderSmokeConfig, receivedAt: string): Readonly<{ recordCount: number; fingerprint: string; responseTimestamps: readonly string[]; capabilityOutcomes?: readonly ("OBSERVED" | "UNKNOWN")[] }> {
   try {
     const parsed = parseM5LiveCoinGeckoResponse({ body, coinId: config.coinId!, contractAddress: config.contractAddress, datasetVersion: auth.datasetVersion, retrievedAt: receivedAt });
-    return { recordCount: parsed.daily.length, fingerprint: parsed.payloadFingerprint, capabilityOutcomes: [
+    return { recordCount: parsed.daily.length, fingerprint: parsed.payloadFingerprint, responseTimestamps: parsed.daily.map(row => row.observedAt), capabilityOutcomes: [
       parsed.daily.length && parsed.daily.some(row => row.price.valueAtoms > 0n) ? "OBSERVED" : "UNKNOWN",
       parsed.daily.some(row => row.marketCap !== undefined) ? "OBSERVED" : "UNKNOWN",
       parsed.daily.some(row => row.volume !== undefined) ? "OBSERVED" : "UNKNOWN",
     ] };
   } finally { body.fill(0); }
 }
-async function parseProviderResponse(response: M5ProviderHttpTransportResponse, auth: TrustedM5ProviderSmokeAuthorization, config: M5ProviderSmokeConfig): Promise<Readonly<{ receivedAt: string; recordCount: number; fingerprint: string; capabilityOutcomes?: readonly ("OBSERVED" | "UNKNOWN")[] }>> {
+async function parseProviderResponse(response: M5ProviderHttpTransportResponse, auth: TrustedM5ProviderSmokeAuthorization, config: M5ProviderSmokeConfig): Promise<Readonly<{ receivedAt: string; recordCount: number; fingerprint: string; responseTimestamps: readonly string[]; capabilityOutcomes?: readonly ("OBSERVED" | "UNKNOWN")[] }>> {
   try {
     validateResponseShape(response);
     if (response.status >= 300 && response.status < 400) throw new M5ProviderInfrastructureError("M5_PROVIDER_SMOKE_REDIRECT_REJECTED");
@@ -228,16 +231,17 @@ export async function executeM5ProviderLiveSmoke(input: M5ProviderSmokeDependenc
   catch { return summary("INFRASTRUCTURE_FAILURE", config.providerId, auth.datasetId, auth.datasetVersion, "M5_PROVIDER_SMOKE_CLOCK_INVALID"); }
   try {
     const asOf = canonicalTime(input.asOf, "M5_PROVIDER_SMOKE_AS_OF_INVALID");
-    if (input.environment !== "LOCAL_SMOKE" || auth.environment !== "LOCAL_SMOKE" || input.providerId !== config.providerId || config.providerId !== auth.providerId || asOf > current || Date.parse(current) - Date.parse(asOf) > MAX_AS_OF_AGE_MS || current >= auth.expiresAt) throw new Error("M5_PROVIDER_SMOKE_SCOPE_INVALID");
+    if (input.environment !== "LOCAL_SMOKE" || auth.environment !== "LOCAL_SMOKE" || input.providerId !== config.providerId || config.providerId !== auth.providerId || auth.chainId !== "ethereum" || config.contractAddress !== auth.assetId || asOf > current || Date.parse(current) - Date.parse(asOf) > MAX_AS_OF_AGE_MS || current >= auth.expiresAt) throw new Error("M5_PROVIDER_SMOKE_SCOPE_INVALID");
   } catch (error) { const code = error instanceof Error ? error.message : "M5_PROVIDER_SMOKE_SCOPE_INVALID"; return summary(errorStatus(code), config.providerId, auth.datasetId, auth.datasetVersion, code); }
-  if (input.transport.isCredentialUrlSafeForSmoke?.(auth.providerId) === false) {
-    return summary("BLOCKED", auth.providerId, auth.datasetId, auth.datasetVersion, "M5_PROVIDER_SMOKE_CREDENTIAL_URL_POLICY_BLOCKED");
-  }
   let requests: ReturnType<typeof makePlan>["requests"];
   try { requests = makePlan(config, auth).requests; }
   catch (error) { const code = error instanceof Error ? error.message : "M5_PROVIDER_SMOKE_PLAN_INVALID"; return summary(errorStatus(code), auth.providerId, auth.datasetId, auth.datasetVersion, code); }
+  if (input.transport.isCredentialUrlSafeForSmoke?.(auth.providerId) === false) {
+    return summary("BLOCKED", auth.providerId, auth.datasetId, auth.datasetVersion, "M5_PROVIDER_SMOKE_CREDENTIAL_URL_POLICY_BLOCKED");
+  }
   const reference = credentialReference(auth.providerId, auth.endpointProfile);
   const receipts: string[] = [];
+  const responseTimes: string[] = [];
   const fingerprints: string[] = [];
   const observations: { capability: string; outcome: "OBSERVED" | "UNKNOWN" }[] = auth.capabilities.map(capability => ({ capability, outcome: "UNKNOWN" }));
   let requestCount = 0;
@@ -268,17 +272,18 @@ export async function executeM5ProviderLiveSmoke(input: M5ProviderSmokeDependenc
       const parsed = await parseProviderResponse(response, auth, config);
       parsedRecordCount += parsed.recordCount;
       fingerprints.push(parsed.fingerprint);
+      responseTimes.push(...parsed.responseTimestamps);
       if (parsed.capabilityOutcomes !== undefined) {
         parsed.capabilityOutcomes.forEach((outcome, index) => { observations[index]!.outcome = outcome; });
       }
       receipts.push(parsed.receivedAt);
     }
-    return summary("VERIFIED", auth.providerId, auth.datasetId, auth.datasetVersion, undefined, { requestCount, parsedRecordCount, responseTimestamps: [...receipts], receiptTimestamps: [...receipts], payloadFingerprints: [...fingerprints], capabilityObservations: observations });
+    return summary("VERIFIED", auth.providerId, auth.datasetId, auth.datasetVersion, undefined, { requestCount, parsedRecordCount, responseTimestamps: [...responseTimes], receiptTimestamps: [...receipts], payloadFingerprints: [...fingerprints], capabilityObservations: observations });
   } catch (error) {
     // Provider/parser errors are converted to stable codes; raw bodies and error objects are discarded.
     const candidate = error instanceof M5ProviderInfrastructureError ? error.code : error instanceof Error ? error.message : "";
     const safe = SAFE_SMOKE_FAILURE_CODES.has(candidate) ? candidate : "M5_PROVIDER_SMOKE_PROVIDER_RESPONSE_INVALID";
     const status = safe === "M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED" ? "BLOCKED" : "INFRASTRUCTURE_FAILURE";
-    return summary(status, auth.providerId, auth.datasetId, auth.datasetVersion, safe, { requestCount, parsedRecordCount, responseTimestamps: [...receipts], receiptTimestamps: [...receipts], payloadFingerprints: [...fingerprints], capabilityObservations: observations });
+    return summary(status, auth.providerId, auth.datasetId, auth.datasetVersion, safe, { requestCount, parsedRecordCount, responseTimestamps: [...responseTimes], receiptTimestamps: [...receipts], payloadFingerprints: [...fingerprints], capabilityObservations: observations });
   }
 }

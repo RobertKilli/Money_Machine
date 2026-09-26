@@ -629,8 +629,12 @@ Executable smoke supports only the exact CoinGecko Demo profile and requires
 an `m5-provider-live-smoke-authorization/v1` ID and fingerprint in the
 separate, source-controlled local smoke trust registry. The registry is empty
 in this slice. Its resolver copies and freezes its input, rejects
-duplicate/conflicting entries, pins the supported provider/dataset/version/
-profile, and checks canonical caller `asOf`, `effectiveFrom`, and `expiresAt`.
+duplicate/conflicting entries, pins the supported provider, Ethereum chain,
+exact lowercase contract address, dataset/version, capabilities and endpoint
+profile, and checks canonical caller `asOf`, `effectiveFrom`, `reviewedAt`, and
+`expiresAt`. The reviewed timestamp is included in the authority fingerprint;
+`recordedAt` remains outside material identity and cannot replace `reviewedAt`
+in the as-of check.
 A runtime WeakSet marks resolved authority; copying or serializing it loses
 trust. Etherscan cannot be authorized for live smoke. Smoke authorization
 grants only `NETWORK_ACQUISITION` and `RAW_PAYLOAD_PROCESSING`.
