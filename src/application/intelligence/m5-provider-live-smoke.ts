@@ -1,7 +1,7 @@
 import "server-only";
-import { canonicalSha256, normalizeIngestionTimestamp } from "@/domain/intelligence/ingestion-provenance";
-import { buildCoinGeckoMarketRequestPlan, buildEtherscanCreationRequestPlan, buildEtherscanContractRequestPlan, M5_PROVIDER_PARSER_CONTRACT_VERSION } from "./m5-provider-adapter-contracts";
-import { parseM5LiveCoinGeckoResponse, parseM5LiveEtherscanCreation, parseM5LiveEtherscanVerification } from "./m5-provider-live-acquisition";
+import { normalizeIngestionTimestamp } from "@/domain/intelligence/ingestion-provenance";
+import { buildCoinGeckoMarketRequestPlan, M5_PROVIDER_PARSER_CONTRACT_VERSION } from "./m5-provider-adapter-contracts";
+import { parseM5LiveCoinGeckoResponse } from "./m5-provider-live-acquisition";
 import { M5ProviderInfrastructureError, requestPlanFromAdapterPlan, type M5ProviderCredentialPort, type M5ProviderHttpTransport, type M5ProviderRateLimitLease, type M5CredentialReference, type M5EphemeralCredential, type M5ProviderHttpTransportResponse } from "./m5-provider-execution-boundary";
 import type { ProviderCapabilityRequirement } from "@/domain/intelligence/m5-provider-readiness";
 import { parseM5ProviderSmokeAuthorization, resolveTrustedM5ProviderSmokeAuthorization, type M5ProviderSmokeAuthorization, type M5ProviderSmokeAuthorizationRegistryEntry, type TrustedM5ProviderSmokeAuthorization } from "./m5-provider-live-smoke-authorization";
@@ -119,11 +119,11 @@ function trusted(input: M5ProviderSmokeDependencies): TrustedM5ProviderSmokeAuth
   return resolveTrustedM5ProviderSmokeAuthorization({ authorization: input.authorization, registry: input.trustedRegistry, asOf: input.asOf });
 }
 function requestPlans(config: M5ProviderSmokeConfig, auth: M5ProviderSmokeAuthorization) {
-  if (config.providerId !== auth.providerId) throw new Error("M5_PROVIDER_SMOKE_SCOPE_INVALID");
-  if (config.providerId === "coingecko") return [buildCoinGeckoMarketRequestPlan({ coinId: config.coinId!, contractAddress: config.contractAddress, from: config.from!, to: config.to!, datasetVersion: auth.datasetVersion })];
-  return [buildEtherscanCreationRequestPlan({ contractAddress: config.contractAddress, datasetVersion: auth.datasetVersion }), buildEtherscanContractRequestPlan({ contractAddress: config.contractAddress, datasetVersion: auth.datasetVersion })];
+  if (config.providerId !== "coingecko" || config.providerId !== auth.providerId) throw new Error("M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT");
+  return [buildCoinGeckoMarketRequestPlan({ coinId: config.coinId!, contractAddress: config.contractAddress, from: config.from!, to: config.to!, datasetVersion: auth.datasetVersion })];
 }
 function makePlan(config: M5ProviderSmokeConfig, auth: M5ProviderSmokeAuthorization): M5ProviderSmokePlan {
+  if (config.providerId !== "coingecko" || auth.providerId !== "coingecko") throw new Error("M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT");
   const credential = credentialReference(config.providerId, auth.endpointProfile);
   const requiredCapabilities = auth.capabilities.map(capability => ({ capability, completeness: "ANY" as const })) as ProviderCapabilityRequirement[];
   const plans = requestPlans(config, auth);
@@ -156,7 +156,7 @@ function summary(status: M5ProviderSmokeSummary["status"], providerId: string, d
 }
 function errorStatus(code: string): M5ProviderSmokeSummary["status"] {
   if (code === "M5_PROVIDER_SMOKE_AUTHORITY_CONFLICT" || /(?:AUTHORIZATION|CONFIG|CAPABILITY|USAGE|BUDGET|FINGERPRINT|AS_OF|TIME)_INVALID$/.test(code)) return "INVALID";
-  return /AUTHORIZATION|AUTHORITY|SCOPE|ENVIRONMENT|AS_OF|BUDGET|CONFIG|CAPABILITY|USAGE|RETENTION|FINGERPRINT|TIME_INVALID|NOT_TRUSTED|CONFLICT/.test(code) ? "BLOCKED" : "INVALID";
+  return /AUTHORIZATION|AUTHORITY|SCOPE|ENVIRONMENT|AS_OF|BUDGET|CONFIG|CAPABILITY|USAGE|RETENTION|FINGERPRINT|TIME_INVALID|NOT_TRUSTED|CONFLICT|UNSUPPORTED_AUTHENTICATION_TRANSPORT/.test(code) ? "BLOCKED" : "INVALID";
 }
 function validCredential(value: M5EphemeralCredential, reference: M5CredentialReference): void {
   if (!value || value.kind !== reference.kind || typeof value.value !== "string" || value.value.length === 0 || value.value.trim() !== value.value || value.value.length > 8192 || /[\u0000-\u001f\u007f]/.test(value.value) || /(?:https?:\/\/|:\/\/|[\/?#&=])/i.test(value.value)) throw new M5ProviderInfrastructureError("M5_PROVIDER_SMOKE_CREDENTIAL_INVALID");
@@ -186,25 +186,17 @@ async function boundedBody(body: Uint8Array | AsyncIterable<Uint8Array>, maximum
   chunks.forEach(item => item.fill(0));
   return result;
 }
-function parseResponseBody(body: Uint8Array, auth: TrustedM5ProviderSmokeAuthorization, config: M5ProviderSmokeConfig, isCreation: boolean, receivedAt: string): Readonly<{ recordCount: number; fingerprint: string; capabilityOutcomes?: readonly ("OBSERVED" | "UNKNOWN")[] }> {
+function parseResponseBody(body: Uint8Array, auth: TrustedM5ProviderSmokeAuthorization, config: M5ProviderSmokeConfig, receivedAt: string): Readonly<{ recordCount: number; fingerprint: string; capabilityOutcomes?: readonly ("OBSERVED" | "UNKNOWN")[] }> {
   try {
-    if (auth.providerId === "coingecko") {
-      const parsed = parseM5LiveCoinGeckoResponse({ body, coinId: config.coinId!, contractAddress: config.contractAddress, datasetVersion: auth.datasetVersion, retrievedAt: receivedAt });
-      return { recordCount: parsed.daily.length, fingerprint: parsed.payloadFingerprint, capabilityOutcomes: [
-        parsed.daily.length && parsed.daily.some(row => row.price.valueAtoms > 0n) ? "OBSERVED" : "UNKNOWN",
-        parsed.daily.some(row => row.marketCap !== undefined) ? "OBSERVED" : "UNKNOWN",
-        parsed.daily.some(row => row.volume !== undefined) ? "OBSERVED" : "UNKNOWN",
-      ] };
-    }
-    if (isCreation) {
-      const parsed = parseM5LiveEtherscanCreation(body, config.contractAddress);
-      return { recordCount: parsed ? 1 : 0, fingerprint: canonicalSha256({ providerId: auth.providerId, datasetId: auth.datasetId, datasetVersion: auth.datasetVersion, creation: parsed ?? null }) };
-    }
-    const parsed = parseM5LiveEtherscanVerification(body);
-    return { recordCount: parsed.status === "UNKNOWN" ? 0 : 1, fingerprint: canonicalSha256({ providerId: auth.providerId, datasetId: auth.datasetId, datasetVersion: auth.datasetVersion, verification: parsed }), capabilityOutcomes: [parsed.status === "UNKNOWN" ? "UNKNOWN" : "OBSERVED"] };
+    const parsed = parseM5LiveCoinGeckoResponse({ body, coinId: config.coinId!, contractAddress: config.contractAddress, datasetVersion: auth.datasetVersion, retrievedAt: receivedAt });
+    return { recordCount: parsed.daily.length, fingerprint: parsed.payloadFingerprint, capabilityOutcomes: [
+      parsed.daily.length && parsed.daily.some(row => row.price.valueAtoms > 0n) ? "OBSERVED" : "UNKNOWN",
+      parsed.daily.some(row => row.marketCap !== undefined) ? "OBSERVED" : "UNKNOWN",
+      parsed.daily.some(row => row.volume !== undefined) ? "OBSERVED" : "UNKNOWN",
+    ] };
   } finally { body.fill(0); }
 }
-async function parseProviderResponse(response: M5ProviderHttpTransportResponse, auth: TrustedM5ProviderSmokeAuthorization, config: M5ProviderSmokeConfig, isCreation: boolean): Promise<Readonly<{ receivedAt: string; recordCount: number; fingerprint: string; capabilityOutcomes?: readonly ("OBSERVED" | "UNKNOWN")[] }>> {
+async function parseProviderResponse(response: M5ProviderHttpTransportResponse, auth: TrustedM5ProviderSmokeAuthorization, config: M5ProviderSmokeConfig): Promise<Readonly<{ receivedAt: string; recordCount: number; fingerprint: string; capabilityOutcomes?: readonly ("OBSERVED" | "UNKNOWN")[] }>> {
   try {
     validateResponseShape(response);
     if (response.status >= 300 && response.status < 400) throw new M5ProviderInfrastructureError("M5_PROVIDER_SMOKE_REDIRECT_REJECTED");
@@ -212,7 +204,7 @@ async function parseProviderResponse(response: M5ProviderHttpTransportResponse, 
     if (!/application\/json(?:\s*;|$)/i.test(response.headers["content-type"] ?? "")) throw new M5ProviderInfrastructureError("M5_PROVIDER_SMOKE_PROVIDER_RESPONSE_INVALID");
     const receivedAt = canonicalTime(response.retrievedAt, "M5_PROVIDER_SMOKE_RECEIPT_INVALID");
     const body = await boundedBody(response.body, auth.maximumResponseBytes);
-    const parsed = parseResponseBody(body, auth, config, isCreation, receivedAt);
+    const parsed = parseResponseBody(body, auth, config, receivedAt);
     return { receivedAt, ...parsed };
   } finally {
     if (response?.body instanceof Uint8Array) response.body.fill(0);
@@ -225,6 +217,9 @@ export async function executeM5ProviderLiveSmoke(input: M5ProviderSmokeDependenc
   let config: M5ProviderSmokeConfig;
   try { config = parseM5ProviderSmokeConfig(input.config); }
   catch { return summary("INVALID", input.providerId, "unknown", "unknown", "M5_PROVIDER_SMOKE_CONFIG_INVALID"); }
+  if (config.providerId === "etherscan" || input.providerId === "etherscan") {
+    return summary("BLOCKED", "etherscan", "etherscan-contract-authority", "etherscan-api-v2/v1", "M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT");
+  }
   let auth: TrustedM5ProviderSmokeAuthorization;
   try { auth = trusted(input); }
   catch (error) { const code = error instanceof Error ? error.message : "M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID"; return summary(errorStatus(code), config.providerId, "unknown", "unknown", code); }
@@ -270,7 +265,7 @@ export async function executeM5ProviderLiveSmoke(input: M5ProviderSmokeDependenc
         const code = error instanceof M5ProviderInfrastructureError && error.code === "M5_PROVIDER_SMOKE_TIMEOUT" ? error.code : "M5_PROVIDER_SMOKE_TRANSPORT_FAILED";
         throw new M5ProviderInfrastructureError(code);
       } finally { if (timeout !== undefined) clearTimeout(timeout); }
-      const parsed = await parseProviderResponse(response, auth, config, plan.query.some(item => item.value === "getcontractcreation"));
+      const parsed = await parseProviderResponse(response, auth, config);
       parsedRecordCount += parsed.recordCount;
       fingerprints.push(parsed.fingerprint);
       if (parsed.capabilityOutcomes !== undefined) {

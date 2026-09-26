@@ -625,13 +625,15 @@ require an authentic aggregate `READY` result and matching production approval
 authority; the checked-in production authority registry and readiness
 configuration are unchanged and remain `BLOCKED`.
 
-Smoke requires an exact `m5-provider-live-smoke-authorization/v1` ID and
-fingerprint in the separate, source-controlled local smoke trust registry.
-The registry is empty in this slice. Its resolver copies and freezes its input,
-rejects duplicate/conflicting entries, pins provider/dataset/version/profile,
-and checks canonical caller `asOf`, `effectiveFrom`, and `expiresAt`. A runtime
-WeakSet marks resolved authority; copying or serializing it loses trust. Smoke
-authorization grants only `NETWORK_ACQUISITION` and `RAW_PAYLOAD_PROCESSING`.
+Executable smoke supports only the exact CoinGecko Demo profile and requires
+an `m5-provider-live-smoke-authorization/v1` ID and fingerprint in the
+separate, source-controlled local smoke trust registry. The registry is empty
+in this slice. Its resolver copies and freezes its input, rejects
+duplicate/conflicting entries, pins the supported provider/dataset/version/
+profile, and checks canonical caller `asOf`, `effectiveFrom`, and `expiresAt`.
+A runtime WeakSet marks resolved authority; copying or serializing it loses
+trust. Etherscan cannot be authorized for live smoke. Smoke authorization
+grants only `NETWORK_ACQUISITION` and `RAW_PAYLOAD_PROCESSING`.
 It expressly forbids raw and normalized storage, authority persistence,
 redistribution, commercial use, and retention beyond process memory. Its
 operator and review references are sanitized identifiers; `recordedAt` is
@@ -644,12 +646,16 @@ observations. It contains no raw response, credential, fixture, normalized
 package, lineage or evidence. Provider bytes are bounded and parsed in memory,
 with one attempt per request, bounded request time and response bytes, an
 in-process rate lease before late credential lookup, and no scheduling or
-polling. Dry-run reads only a JSON authorization/request file under
-`config/m5/provider-live-smoke/`, displays fixed request plans and credential
-references, and does not resolve credentials, perform DNS or send HTTP.
+polling. CoinGecko Demo dry-run reads only a JSON authorization/request file
+under `config/m5/provider-live-smoke/`, displays the fixed request plan and
+credential reference, and does not resolve credentials, perform DNS or send
+HTTP. Etherscan dry-run reports the unsupported authentication transport
+without reading its authorization/config file.
 
-CoinGecko smoke pins the documented Demo profile for Ethereum contract market
-chart range: `api.coingecko.com`, `/api/v3/coins/ethereum/contract/{address}/market_chart/range`,
+CoinGecko is the only live smoke profile because its documented Demo
+authentication uses a header compatible with the no-credentials-in-URL rule.
+It pins Ethereum contract market chart range: `api.coingecko.com`,
+`/api/v3/coins/ethereum/contract/{address}/market_chart/range`,
 `x-cg-demo-api-key`, and the fixed `usd`/daily range query. The Demo reference
 lists this endpoint and documents a 365-day historical limit; this does not
 assume the operator has an account or key. Pro is a separate host and
@@ -660,18 +666,23 @@ fallback or market/liquidity completeness claim is made. See CoinGecko's
 [Pro endpoint](https://docs.coingecko.com/reference/contract-address-market-chart-range),
 and [Pro authentication](https://docs.coingecko.com/reference/authentication).
 
-Etherscan smoke is pinned to V2 `api.etherscan.io/v2/api`, `chainid=1`, and only
-`getcontractcreation` plus `getsourcecode`. Status zero/no data and ambiguous
-proxy results remain `UNKNOWN`; smoke does not claim holders, finality, or
-completeness. Etherscan's official V2 endpoint docs specify the `apikey` query
-parameter ([creation](https://docs.etherscan.io/api-reference/endpoint/getcontractcreation),
+Etherscan V2 request planning, parsing, and fixture coverage may remain useful
+for non-live code paths, but Etherscan live smoke is explicitly
+`UNSUPPORTED_AUTHENTICATION_TRANSPORT`. Its V2 `getcontractcreation` and
+`getsourcecode` endpoints require the `apikey` query parameter in the official
+documentation ([creation](https://docs.etherscan.io/api-reference/endpoint/getcontractcreation),
 [source code](https://docs.etherscan.io/api-reference/endpoint/getsourcecode)).
-That documented mechanism conflicts with the Money Machine requirement that
-credentials never enter a URL. Until an approved transport can satisfy both
-constraints, smoke must fail closed before credential resolution for Etherscan;
-fake-transport parser tests do not authorize a real call. No smoke result is
+This is a provider/protocol authentication limitation, not a parser problem.
+No config, CLI option, or injected caller transport may enable Etherscan live
+execution; rejection happens before rate lease, credential resolution, DNS,
+and HTTP. Status zero/no data and ambiguous proxy results remain `UNKNOWN` in
+the preserved parser/fixture paths. Future options are a separately reviewed,
+secure server-side egress proxy that safely handles provider authentication, or
+an explorer/provider with a compatible header or other non-URL authentication
+scheme. Neither option makes Etherscan production-ready. No smoke result is
 legal or commercial approval, production readiness, data authority, or
 completeness evidence. Any later real request requires a separate, explicit
 operator authorization after review/merge, an exact reviewed local smoke
-authority entry, a valid local credential, and the fixed provider profile.
+authority entry, a valid local credential, and the fixed CoinGecko Demo
+profile.
 Trailing decimal zeroes normalize to the same fixed-point value and fingerprint.

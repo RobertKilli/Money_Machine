@@ -6,26 +6,26 @@ import { buildManualIngestionToLineagePlan } from "@/application/intelligence/ma
 import { assertM5ProviderReadinessForExecution } from "@/application/intelligence/evaluate-m5-provider-readiness";
 import { isTrustedM5ProviderReadinessAggregate } from "@/application/intelligence/evaluate-m5-provider-readiness-aggregate";
 import { isTrustedM5ProviderReadinessEvaluation, type ProviderReadinessEvaluation } from "@/domain/intelligence/m5-provider-readiness";
-import type { M5ProviderCredentialPort, M5ProviderHttpTransport, M5ProviderHttpTransportRequest, M5ProviderHttpTransportResponse, M5ProviderRateLimitLease } from "@/application/intelligence/m5-provider-execution-boundary";
-import { isM5ProviderSmokeAuthorizationPath, parseM5ProviderSmokeArgs } from "../../scripts/m5-provider-smoke";
+import type { M5ProviderCredentialPort, M5ProviderHttpTransport, M5ProviderHttpTransportResponse, M5ProviderRateLimitLease } from "@/application/intelligence/m5-provider-execution-boundary";
+import { isM5ProviderSmokeAuthorizationPath, m5ProviderSmokeSupport, parseM5ProviderSmokeArgs } from "../../scripts/m5-provider-smoke";
 
 const asOf = "2026-09-26T10:00:00.000Z";
 const later = "2026-09-26T10:01:00.000Z";
 const address = "0x1111111111111111111111111111111111111111";
-function auth(providerId: "coingecko" | "etherscan" = "coingecko", overrides: Partial<Parameters<typeof createM5ProviderSmokeAuthorization>[0]> = {}) {
+function auth(overrides: Partial<Parameters<typeof createM5ProviderSmokeAuthorization>[0]> = {}) {
   const common = {
     environment: "LOCAL_SMOKE" as const,
-    providerId,
-    datasetId: providerId === "coingecko" ? "coingecko-market-chart" : "etherscan-contract-authority",
-    datasetVersion: providerId === "coingecko" ? "coingecko-market-chart/range-v1" : "etherscan-api-v2/v1",
-    endpointProfile: providerId === "coingecko" ? "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO" as const : "ETHERSCAN_V2_ETHEREUM_CREATION_AND_SOURCE" as const,
-    capabilities: providerId === "coingecko" ? ["DAILY_CLOSE_SERIES", "MARKET_CAP", "VOLUME_24H"] : ["CONTRACT_VERIFICATION"],
+    providerId: "coingecko" as const,
+    datasetId: "coingecko-market-chart",
+    datasetVersion: "coingecko-market-chart/range-v1",
+    endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO" as const,
+    capabilities: ["DAILY_CLOSE_SERIES", "MARKET_CAP", "VOLUME_24H"],
     usages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"] as const,
     forbiddenUsages: ["RAW_PAYLOAD_STORAGE", "NORMALIZED_STORAGE", "AUTHORITY_PERSISTENCE", "REDISTRIBUTION", "COMMERCIAL_USE"] as const,
     retention: "PROCESS_MEMORY_ONLY" as const,
     effectiveFrom: "2026-09-26T09:00:00.000Z",
     expiresAt: "2026-09-26T11:00:00.000Z",
-    maximumRequests: providerId === "coingecko" ? 1 : 2,
+    maximumRequests: 1,
     maximumPages: 1,
     maximumResponseBytes: 16_384,
     operatorReference: "operator:review-77",
@@ -59,7 +59,7 @@ function deps(overrides: Partial<Parameters<typeof executeM5ProviderLiveSmoke>[0
 describe("M5 provider live smoke authorization", () => {
   it("uses deterministic material identity and excludes recordedAt", () => {
     const first = auth();
-    const second = auth("coingecko", { recordedAt: later });
+    const second = auth({ recordedAt: later });
     expect(first.authorizationId).toBe(second.authorizationId);
     expect(first.fingerprint).toBe(second.fingerprint);
     expect(Object.isFrozen(first)).toBe(true);
@@ -96,7 +96,7 @@ describe("M5 provider live smoke authorization", () => {
     const entry = { authorizationId: value.authorizationId, fingerprint: value.fingerprint };
     expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization: value, registry: [entry, entry], asOf })).toThrow("M5_PROVIDER_SMOKE_AUTHORITY_CONFLICT");
     expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization: value, registry: [{ ...entry, fingerprint: "f".repeat(64) }], asOf })).toThrow("M5_PROVIDER_SMOKE_AUTHORITY_NOT_TRUSTED");
-    expect(() => parseM5ProviderSmokeAuthorization({ ...value, providerId: "etherscan" })).toThrow();
+    expect(() => parseM5ProviderSmokeAuthorization({ ...value, providerId: "etherscan" })).toThrow("M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT");
     expect(M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY).toEqual([]);
     expect(Object.isFrozen(M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY)).toBe(true);
   });
@@ -120,6 +120,9 @@ describe("M5 provider live smoke service", () => {
     expect(result.capabilityObservations.every(item => item.outcome === "OBSERVED")).toBe(true);
     expect(state.events).toEqual(["lease", "credential", "http"]);
     expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.responseTimestamps)).toBe(true);
+    expect(Object.isFrozen(result.capabilityObservations)).toBe(true);
+    expect(Object.isFrozen(result.capabilityObservations[0])).toBe(true);
     expect(JSON.stringify(result)).not.toContain("canary-secret-smoke-77");
     expect(JSON.stringify(result)).not.toContain("prices");
     expect(result).not.toHaveProperty("normalizedPackage");
@@ -142,36 +145,21 @@ describe("M5 provider live smoke service", () => {
     expect(state.events).toEqual([]);
   });
 
-  it("keeps Etherscan status=0/no data and ambiguous proxy as UNKNOWN", async () => {
-    const authorization = auth("etherscan");
+  it("blocks Etherscan config and execution before lease, credential, DNS, or HTTP", async () => {
+    const authorization = auth();
     const events: string[] = [];
-    const transport: M5ProviderHttpTransport = { send: vi.fn(async (request: M5ProviderHttpTransportRequest) => {
-      events.push(request.request.path);
-      const isCreation = request.request.query.some(row => row.value === "getcontractcreation");
-      const body = isCreation ? '{"status":"0","message":"NOTOK","result":"No records found"}' : '{"status":"1","message":"OK","result":[{"SourceCode":"contract X {}","Proxy":"1","Implementation":""}]}';
-      return { status: 200, headers: { "content-type": "application/json" }, body: Buffer.from(body), retrievedAt: asOf };
-    }) };
-    const result = await executeM5ProviderLiveSmoke({ config: config("etherscan"), authorization, providerId: "etherscan", environment: "LOCAL_SMOKE", asOf, currentTime: () => asOf,
-      trustedRegistry: [{ authorizationId: authorization.authorizationId, fingerprint: authorization.fingerprint }],
-      credentials: { resolve: vi.fn(async () => ({ kind: "API_KEY" as const, value: "eth-canary-77" })) }, rateLimit: { acquire: vi.fn(async () => true) }, transport });
-    expect(result.status).toBe("VERIFIED");
-    expect(result.requestCount).toBe(2);
-    expect(result.parsedRecordCount).toBe(0);
-    expect(result.capabilityObservations[0]?.outcome).toBe("UNKNOWN");
-    expect(events).toHaveLength(2);
-  });
-
-  it("fails closed for the built-in Etherscan transport before lease, credential, or HTTP", async () => {
-    const authorization = auth("etherscan");
-    const events: string[] = [];
-    const result = await executeM5ProviderLiveSmoke({ config: config("etherscan"), authorization, providerId: "etherscan", environment: "LOCAL_SMOKE", asOf, currentTime: () => asOf,
+    const result = await executeM5ProviderLiveSmoke({ config: config("etherscan"), authorization: { providerId: "etherscan" }, providerId: "etherscan", environment: "LOCAL_SMOKE", asOf, currentTime: () => asOf,
       trustedRegistry: [{ authorizationId: authorization.authorizationId, fingerprint: authorization.fingerprint }],
       credentials: { resolve: vi.fn(async () => { events.push("credential"); return { kind: "API_KEY" as const, value: "eth-canary-77" }; }) },
       rateLimit: { acquire: vi.fn(async () => { events.push("lease"); return true; }) },
-      transport: { isCredentialUrlSafeForSmoke: () => false, send: vi.fn(async () => { events.push("http"); throw new Error("must not be called"); }) } });
+      transport: { isCredentialUrlSafeForSmoke: () => { events.push("dns-policy-check"); return true; }, send: vi.fn(async () => { events.push("http"); throw new Error("must not be called"); }) } });
     expect(result.status).toBe("BLOCKED");
-    expect(result.code).toBe("M5_PROVIDER_SMOKE_CREDENTIAL_URL_POLICY_BLOCKED");
+    expect(result.code).toBe("M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT");
     expect(events).toEqual([]);
+    expect(parseM5ProviderSmokeArgs(["--authorization", "auth.json", "--provider", "etherscan", "--execute", "--environment", "LOCAL_SMOKE"]).provider).toBe("etherscan");
+    expect(parseM5ProviderSmokeArgs(["--authorization", "auth.json", "--provider", "etherscan"])).toMatchObject({ execute: false, provider: "etherscan" });
+    expect(m5ProviderSmokeSupport("coingecko")).toMatchObject({ status: "SUPPORTED", requirement: "VALID_TRUSTED_SMOKE_AUTHORITY" });
+    expect(m5ProviderSmokeSupport("etherscan")).toMatchObject({ status: "BLOCKED", code: "M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT", executableSmoke: false });
   });
 
   it("bounds response bytes and converts provider/parser failures to sanitized infrastructure failures", async () => {

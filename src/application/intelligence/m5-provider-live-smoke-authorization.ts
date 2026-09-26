@@ -16,10 +16,10 @@ export type M5ProviderSmokeAuthorization = Readonly<{
   authorizationId: string;
   fingerprint: string;
   environment: "LOCAL_SMOKE";
-  providerId: "coingecko" | "etherscan";
+  providerId: "coingecko";
   datasetId: string;
   datasetVersion: string;
-  endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO" | "ETHERSCAN_V2_ETHEREUM_CREATION_AND_SOURCE";
+  endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO";
   capabilities: readonly string[];
   usages: readonly ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"];
   forbiddenUsages: typeof FORBIDDEN;
@@ -100,11 +100,11 @@ function strictArray(value: unknown, code: string): unknown[] {
 
 export function parseM5ProviderSmokeAuthorization(value: unknown): M5ProviderSmokeAuthorization {
   const root = record(value, ["schemaVersion", "authorizationId", "fingerprint", "environment", "providerId", "datasetId", "datasetVersion", "endpointProfile", "capabilities", "usages", "forbiddenUsages", "retention", "effectiveFrom", "expiresAt", "maximumRequests", "maximumPages", "maximumResponseBytes", "operatorReference", "reviewReference", "recordedAt"], ["schemaVersion", "authorizationId", "fingerprint", "environment", "providerId", "datasetId", "datasetVersion", "endpointProfile", "capabilities", "usages", "forbiddenUsages", "retention", "effectiveFrom", "expiresAt", "maximumRequests", "maximumPages", "maximumResponseBytes", "operatorReference", "reviewReference", "recordedAt"], "M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
-  if (root.schemaVersion !== M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_VERSION || root.environment !== "LOCAL_SMOKE" || (root.providerId !== "coingecko" && root.providerId !== "etherscan")) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
+  if (root.schemaVersion !== M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_VERSION || root.environment !== "LOCAL_SMOKE") throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
+  if (root.providerId === "etherscan") throw new Error("M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT");
+  if (root.providerId !== "coingecko") throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
   const providerId = root.providerId;
-  const expected = providerId === "coingecko"
-    ? { datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/range-v1", endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO" }
-    : { datasetId: "etherscan-contract-authority", datasetVersion: "etherscan-api-v2/v1", endpointProfile: "ETHERSCAN_V2_ETHEREUM_CREATION_AND_SOURCE" };
+  const expected = { datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/range-v1", endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO" };
   if (root.datasetId !== expected.datasetId || root.datasetVersion !== expected.datasetVersion || root.endpointProfile !== expected.endpointProfile) throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_SCOPE_INVALID");
   const capabilities = strictArray(root.capabilities, "M5_PROVIDER_SMOKE_AUTHORIZATION_CAPABILITY_INVALID");
   const usages = strictArray(root.usages, "M5_PROVIDER_SMOKE_AUTHORIZATION_USAGE_INVALID");
