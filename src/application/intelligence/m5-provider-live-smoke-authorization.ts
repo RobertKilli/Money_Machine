@@ -31,6 +31,8 @@ export type M5ProviderSmokeAuthorization = Readonly<{
   maximumRequests: number;
   maximumPages: number;
   maximumResponseBytes: number;
+  requestTimeoutMs: 5_000;
+  maximumRetries: 0;
   operatorReference: string;
   reviewReference: string;
   recordedAt: string;
@@ -83,7 +85,7 @@ const material = (auth: Omit<M5ProviderSmokeAuthorization, "fingerprint" | "reco
   endpointProfile: auth.endpointProfile, capabilities: auth.capabilities, usages: auth.usages,
   forbiddenUsages: auth.forbiddenUsages, retention: auth.retention, effectiveFrom: auth.effectiveFrom, reviewedAt: auth.reviewedAt,
   expiresAt: auth.expiresAt, maximumRequests: auth.maximumRequests, maximumPages: auth.maximumPages,
-  maximumResponseBytes: auth.maximumResponseBytes, operatorReference: auth.operatorReference,
+  maximumResponseBytes: auth.maximumResponseBytes, requestTimeoutMs: auth.requestTimeoutMs, maximumRetries: auth.maximumRetries, operatorReference: auth.operatorReference,
   reviewReference: auth.reviewReference,
 });
 const identitySeed = (auth: Omit<M5ProviderSmokeAuthorization, "fingerprint" | "recordedAt">) => {
@@ -101,7 +103,7 @@ function strictArray(value: unknown, code: string): unknown[] {
 }
 
 export function parseM5ProviderSmokeAuthorization(value: unknown): M5ProviderSmokeAuthorization {
-  const fields = ["schemaVersion", "authorizationId", "fingerprint", "environment", "providerId", "chainId", "assetId", "datasetId", "datasetVersion", "endpointProfile", "capabilities", "usages", "forbiddenUsages", "retention", "effectiveFrom", "reviewedAt", "expiresAt", "maximumRequests", "maximumPages", "maximumResponseBytes", "operatorReference", "reviewReference", "recordedAt"];
+  const fields = ["schemaVersion", "authorizationId", "fingerprint", "environment", "providerId", "chainId", "assetId", "datasetId", "datasetVersion", "endpointProfile", "capabilities", "usages", "forbiddenUsages", "retention", "effectiveFrom", "reviewedAt", "expiresAt", "maximumRequests", "maximumPages", "maximumResponseBytes", "requestTimeoutMs", "maximumRetries", "operatorReference", "reviewReference", "recordedAt"];
   const root = record(value, fields, fields, "M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
   if (root.schemaVersion !== M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_VERSION || root.environment !== "LOCAL_SMOKE") throw new Error("M5_PROVIDER_SMOKE_AUTHORIZATION_INVALID");
   if (root.providerId === "etherscan") throw new Error("M5_PROVIDER_SMOKE_UNSUPPORTED_AUTHENTICATION_TRANSPORT");
@@ -135,6 +137,8 @@ export function parseM5ProviderSmokeAuthorization(value: unknown): M5ProviderSmo
     maximumRequests: integer(root.maximumRequests, "M5_PROVIDER_SMOKE_AUTHORIZATION_BUDGET_INVALID", 1, 1),
     maximumPages: integer(root.maximumPages, "M5_PROVIDER_SMOKE_AUTHORIZATION_BUDGET_INVALID", 1, MAX_PAGES),
     maximumResponseBytes: integer(root.maximumResponseBytes, "M5_PROVIDER_SMOKE_AUTHORIZATION_BUDGET_INVALID", 1, MAX_RESPONSE_BYTES),
+    requestTimeoutMs: integer(root.requestTimeoutMs, "M5_PROVIDER_SMOKE_AUTHORIZATION_BUDGET_INVALID", 5_000, 5_000) as 5_000,
+    maximumRetries: integer(root.maximumRetries, "M5_PROVIDER_SMOKE_AUTHORIZATION_BUDGET_INVALID", 0, 0) as 0,
     operatorReference: reference(root.operatorReference),
     reviewReference: reference(root.reviewReference),
   };
@@ -177,6 +181,3 @@ export function resolveTrustedM5ProviderSmokeAuthorization(input: Readonly<{ aut
 
 export const M5_PROVIDER_SMOKE_BUDGET_CAPS = freeze({ maximumRequests: MAX_REQUESTS, maximumPages: MAX_PAGES, maximumResponseBytes: MAX_RESPONSE_BYTES });
 export const M5_PROVIDER_SMOKE_FORBIDDEN_USAGES = FORBIDDEN;
-// Deliberately empty in this implementation slice. A later separately approved operation must
-// add an exact ID/fingerprint pair through reviewed source control.
-export const M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY: readonly M5ProviderSmokeAuthorizationRegistryEntry[] = freeze([]);

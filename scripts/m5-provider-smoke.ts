@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import { extname, relative, resolve, sep } from "node:path";
 import { M5ProviderEnvironmentCredentialResolver } from "@/application/intelligence/m5-provider-environment-credentials";
 import { M5InProcessProviderRateLimitLease } from "@/application/intelligence/m5-provider-rate-limit-lease";
-import { M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY } from "@/application/intelligence/m5-provider-live-smoke-authorization";
-import { executeM5ProviderLiveSmoke, previewM5ProviderLiveSmoke } from "@/application/intelligence/m5-provider-live-smoke";
+import { M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY } from "@/application/intelligence/m5-provider-live-smoke-registry";
+import { executeM5ProviderLiveSmoke, planM5ProviderLiveSmoke } from "@/application/intelligence/m5-provider-live-smoke";
 import { M5NodeProviderHttpTransport } from "@/infrastructure/intelligence/m5-node-provider-http-transport";
 
 const USAGE = "Usage: npm run m5:provider:smoke -- --authorization <path> --provider <coingecko|etherscan> [--execute --environment LOCAL_SMOKE]";
@@ -72,8 +72,9 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
   catch { console.error(JSON.stringify({ status: "INVALID", code: "M5_PROVIDER_SMOKE_CONFIG_INVALID" })); process.exitCode = 2; return; }
   if (!args.execute) {
     try {
-      const plan = previewM5ProviderLiveSmoke({ config: loaded.request, authorization: loaded.authorization, providerId: args.provider! });
-      console.log(JSON.stringify({ status: "PLAN", mode: "DRY_RUN", trustStatus: "UNRESOLVED", executableOnlyWithValidSmokeAuthority: true,
+      const asOf = new Date().toISOString();
+      const plan = planM5ProviderLiveSmoke({ config: loaded.request, authorization: loaded.authorization, providerId: args.provider!, environment: "LOCAL_SMOKE", asOf, trustedRegistry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY });
+      console.log(JSON.stringify({ status: "PLAN", mode: "DRY_RUN", trustStatus: "RESOLVED", executableOnlyWithValidSmokeAuthority: true,
         supportedProfile: m5ProviderSmokeSupport("coingecko"), unsupportedProviders: [m5ProviderSmokeSupport("etherscan")], plan }));
     } catch { console.log(JSON.stringify({ status: "INVALID", mode: "DRY_RUN", code: "M5_PROVIDER_SMOKE_PLAN_INVALID" })); process.exitCode = 2; }
     return;

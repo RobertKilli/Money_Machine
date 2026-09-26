@@ -653,7 +653,17 @@ in-process rate lease before late credential lookup, and no scheduling or
 polling. CoinGecko Demo dry-run reads only a JSON authorization/request file
 under `config/m5/provider-live-smoke/`, displays the fixed request plan and
 credential reference, and does not resolve credentials, perform DNS or send
-HTTP. Etherscan dry-run reports the unsupported authentication transport
+HTTP. The initial reviewable Demo scope is
+`coingecko-demo-first-call.json`, pinned to the existing synthetic fixture
+contract `0xabcdef0123456789abcdef0123456789abcdef01`, Ethereum,
+`coingecko-market-chart/range-v1`, and the Demo range profile. Its exact
+authorization ID/fingerprint pair is held in a separate server-only
+LOCAL_SMOKE registry. The CLI dry-run and execution both resolve that pair;
+neither uses the production provider approval registry. The reviewed window
+is time-bounded and currently expires at `2026-09-27T09:00:00.000Z`.
+The authorization fingerprints one request, one page, a 512000-byte response
+cap, a 5000 ms request timeout, and zero retries.
+Etherscan dry-run reports the unsupported authentication transport
 without reading its authorization/config file.
 
 CoinGecko is the only live smoke profile because its documented Demo
