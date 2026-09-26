@@ -32,4 +32,20 @@ describe("M5 smoke credential boundary", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("removes the synthetic Demo key from the Next build process before cache workers start", async () => {
+    const sentinel = "SYNTHETIC_M5_BUILD_SENTINEL_9D62C1";
+    vi.resetModules();
+    vi.stubEnv("COINGECKO_DEMO_API_KEY", sentinel);
+    try {
+      const presentBeforeConfig = process.env.COINGECKO_DEMO_API_KEY === sentinel;
+      expect(presentBeforeConfig).toBe(true);
+      await import("../../next.config");
+      const retainedAfterConfig = process.env.COINGECKO_DEMO_API_KEY === sentinel;
+      expect(retainedAfterConfig).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
 });

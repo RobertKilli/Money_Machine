@@ -666,6 +666,13 @@ cap, a 5000 ms request timeout, and zero retries.
 Etherscan dry-run reports the unsupported authentication transport
 without reading its authorization/config file.
 
+The environment credential resolver is server-only and used only by the
+standalone acquisition/smoke CLIs. Next.js loads `.env*` before evaluating
+`next.config.ts`; that config removes `COINGECKO_DEMO_API_KEY` before build
+workers and output caches start. No app route imports the resolver or smoke
+registry. The key has no `NEXT_PUBLIC_` form and is not part of CLI dry-run
+output.
+
 CoinGecko is the only live smoke profile because its documented Demo
 authentication uses a header compatible with the no-credentials-in-URL rule.
 It pins Ethereum contract market chart range: `api.coingecko.com`,
