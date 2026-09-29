@@ -111,6 +111,8 @@ describe("M5 provider execution boundary", () => {
     ["secret query", { request: { ...plan().request, query: [...plan().request.query, { key: "api_key", value: "x" }] } }, "M5_PROVIDER_EXECUTION_SECRET_QUERY_REJECTED"],
     ["oversized limit", { limits: { timeoutMs: 10_000, maxResponseBytes: 20_000_000 } }, "M5_PROVIDER_EXECUTION_LIMITS_INVALID"],
     ["unknown capability", { requiredCapabilities: [{ capability: "UNKNOWN_CAPABILITY", completeness: "COMPLETE" }] }, "M5_PROVIDER_EXECUTION_CAPABILITY_INVALID"],
+    ["empty capability request", { requiredCapabilities: [] }, "M5_PROVIDER_EXECUTION_CAPABILITY_INVALID"],
+    ["duplicate capability at different completeness", { requiredCapabilities: [{ capability: "DAILY_CLOSE_SERIES", completeness: "ANY" }, { capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }] }, "M5_PROVIDER_EXECUTION_CAPABILITY_DUPLICATE"],
     ["unknown usage", { requestedUsages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING", "RAW_PAYLOAD_STORAGE"] }, "M5_PROVIDER_EXECUTION_USAGE_INVALID"],
     ["timeout beyond retry budget", { limits: { timeoutMs: 10_001, maxResponseBytes: 1024 }, retry: { maxAttempts: 3, totalBudgetMs: 10_000, maxRetryAfterMs: 500 } }, "M5_PROVIDER_EXECUTION_RETRY_INVALID"],
   ] as const)("rejects SSRF and unsafe request plan: %s", (_name, override, code) => {

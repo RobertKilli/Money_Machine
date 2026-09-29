@@ -292,7 +292,8 @@ export function validateM5ProviderExecutionPlan(input: unknown): M5ProviderExecu
       if (item.completeness !== "ANY" && item.completeness !== "COMPLETE") throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CAPABILITY_INVALID");
       return freeze({ capability, completeness: item.completeness as "ANY" | "COMPLETE" });
     }) : (() => { throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CAPABILITY_INVALID"); })();
-    if (new Set(capabilities.map(item => `${item.capability}:${item.completeness}`)).size !== capabilities.length) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CAPABILITY_DUPLICATE");
+    if (capabilities.length === 0) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CAPABILITY_INVALID");
+    if (new Set(capabilities.map(item => item.capability)).size !== capabilities.length) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_CAPABILITY_DUPLICATE");
     const usages = Array.isArray(root.requestedUsages) ? root.requestedUsages.map(value => {
       const usage = nonBlank(value, "M5_PROVIDER_EXECUTION_USAGE_INVALID", 64);
       if (!EXECUTION_USAGES.has(usage)) throw new M5ProviderInfrastructureError("M5_PROVIDER_EXECUTION_USAGE_INVALID");

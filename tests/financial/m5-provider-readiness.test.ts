@@ -94,6 +94,11 @@ describe("M5 provider readiness gate", () => {
     const evaluation = evaluateM5ProviderReadinessConfig({ config: config(), evaluatedAt: "2026-09-25T13:00:00.000Z" });
     const request = { providerId: "synthetic-provider", datasetId: "synthetic-dataset", datasetVersion: "synthetic-dataset/v1", requiredCapabilities: M5_DEFAULT_REQUIRED_CAPABILITIES, requestedUsages: M5_DEFAULT_REQUESTED_USAGES };
     expect(() => assertM5ProviderReadinessForExecution(evaluation, request)).not.toThrow();
+    expect(() => assertM5ProviderReadinessForExecution(evaluation, { ...request, requiredCapabilities: [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }], requestedUsages: ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"] })).not.toThrow();
+    expect(() => assertM5ProviderReadinessForExecution(evaluation, { ...request, requiredCapabilities: [], requestedUsages: ["NETWORK_ACQUISITION"] })).toThrow("M5_PROVIDER_READINESS_SCOPE_MISMATCH");
+    expect(() => assertM5ProviderReadinessForExecution(evaluation, { ...request, requiredCapabilities: [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }, { capability: "DAILY_CLOSE_SERIES", completeness: "ANY" }], requestedUsages: ["NETWORK_ACQUISITION"] })).toThrow("M5_PROVIDER_READINESS_SCOPE_MISMATCH");
+    expect(() => assertM5ProviderReadinessForExecution(evaluation, { ...request, requiredCapabilities: [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }], requestedUsages: [] })).toThrow("M5_PROVIDER_READINESS_SCOPE_MISMATCH");
+    expect(() => assertM5ProviderReadinessForExecution(evaluation, { ...request, requiredCapabilities: [{ capability: "DAILY_CLOSE_SERIES", completeness: "COMPLETE" }], requestedUsages: ["NETWORK_ACQUISITION", "NETWORK_ACQUISITION"] })).toThrow("M5_PROVIDER_READINESS_SCOPE_MISMATCH");
     expect(() => assertM5ProviderReadinessForExecution({ ...evaluation })).toThrow("M5_PROVIDER_READINESS_BLOCKED");
     expect(() => assertM5ProviderReadinessForExecution(evaluation, { ...request, datasetId: "other-dataset" })).toThrow("M5_PROVIDER_READINESS_SCOPE_MISMATCH");
   });

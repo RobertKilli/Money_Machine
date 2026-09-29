@@ -1,0 +1,303 @@
+import { fileURLToPath } from "node:url";
+import postgres from "postgres";
+import { describe, expect, it, vi } from "vitest";
+import { createPostgresManualIngestionToLineageUnitOfWork } from "@/infrastructure/postgres/manual-ingestion-to-lineage-uow";
+import { buildManualIngestionToLineagePlan } from "@/application/intelligence/manual-ingestion-to-lineage";
+import type { ManualIngestionToLineageRepositories, ManualIngestionToLineageUnitOfWork } from "@/application/intelligence/manual-ingestion-to-lineage-uow";
+import type { M5ProviderHttpTransportRequest } from "@/application/intelligence/m5-provider-execution-boundary";
+
+const databaseUrl = process.env.DATABASE_URL;
+const enabled = process.env.MONEY_MACHINE_COINGECKO_ACQUISITION_INGESTION_INTEGRATION === "1" && Boolean(databaseUrl);
+const now = "2026-09-25T12:00:00.000Z";
+const expiry = "2027-09-25T12:00:00.000Z";
+const weth = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
+const providerId = "coingecko";
+const datasetId = "coingecko-market-chart";
+const datasetVersion = "coingecko-market-chart/range-v1";
+const registryModule = fileURLToPath(new URL("../../config/m5/provider-approval-authorities.production.json", import.meta.url));
+
+function assertLoopback(value: string) { const host = new URL(value).hostname; if (!["localhost", "127.0.0.1", "::1"].includes(host)) throw new Error("M5_COINGECKO_INTEGRATION_REQUIRES_LOCAL_DATABASE"); }
+const serialize = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => typeof item === "bigint" ? item.toString() : item);
+const body = new TextEncoder().encode(`{"prices":[${Array.from({ length: 15 }, (_, i) => `[${1767225600000 + i * 86400000},9007199254740993]`).join(",")}],"market_caps":[${Array.from({ length: 15 }, (_, i) => `[${1767225600000 + i * 86400000},1]`).join(",")}],"total_volumes":[${Array.from({ length: 15 }, (_, i) => `[${1767225600000 + i * 86400000},2]`).join(",")}]}`);
+
+describe.skipIf(!enabled)("M5 CoinGecko acquisition ingestion PostgreSQL happy path", () => {
+  it("persists fifteen authenticated CoinGecko records into a sealed lineage", async () => {
+    assertLoopback(databaseUrl!); vi.resetModules();
+    const approvalModule = await import("@/domain/intelligence/m5-provider-approval-authority");
+    const approval = approvalModule.createM5ProviderApprovalAuthority({ contractVersion: "m5-provider-approval-authority/v1", policyVersion: "m5-provider-approval-policy/v1", authorityVersion: "integration/v1", providerId, datasetId, datasetVersion, reviewedAt: now, effectiveFrom: now, expiresAt: expiry, recordedAt: now, usageDecisions: ["AUTHORITY_PERSISTENCE", "COMMERCIAL_USE", "NETWORK_ACQUISITION", "NORMALIZED_STORAGE", "RAW_PAYLOAD_PROCESSING", "RAW_PAYLOAD_STORAGE", "REDISTRIBUTION"].map(usage => ({ usage, decision: "APPROVED", evidence: [{ kind: "IDENTIFIER", value: "review/synthetic-approval/v1" }] })), retentionDecision: { decision: "APPROVED", evidence: [{ kind: "SHA256", value: "a".repeat(64) }] } });
+    vi.doMock(registryModule, () => ({ default: { contractVersion: "m5-provider-approval-authority-registry/v1", entries: [{ approvalAuthorityId: approval.approvalAuthorityId, approvalAuthorityFingerprint: approval.approvalAuthorityFingerprint, providerId, datasetId, datasetVersion }], authorities: [approval] } }));
+    const ready = await import("@/application/intelligence/evaluate-m5-provider-readiness"); const aggregateModule = await import("@/application/intelligence/evaluate-m5-provider-readiness-aggregate"); const acquire = await import("@/application/intelligence/m5-provider-live-acquisition"); const handoff = await import("@/application/intelligence/m5-coingecko-acquisition-ingestion-handoff");
+    const config = { configVersion: "m5-provider-readiness-config/v1", providerNamespace: "test:coingecko", providerId, datasetId, datasetVersion, reviewedAt: now, reviewReference: "test/review", documentationUrls: ["https://docs.example.test"], termsUrls: ["https://terms.example.test"], capabilities: ready.M5_DEFAULT_REQUIRED_CAPABILITIES.map(({ capability }) => ({ capability, status: "SUPPORTED", completeness: "COMPLETE", reviewedAt: now, reviewReference: "test/review", documentationUrls: ["https://docs.example.test"], termsUrls: ["https://terms.example.test"], limitations: [], ...(capability === "VENUE_COMPLETE_UNIVERSE" ? { zeroVenuePolicy: "ALLOWED_EMPTY" } : {}) })), usageDecisions: ready.M5_DEFAULT_REQUESTED_USAGES.map(usage => ({ usage, approval: "APPROVED", reviewedAt: now, reviewReference: "test/review", limitations: [] })), limitations: [], approvalExpiresAt: expiry, metadata: { sourceKind: "SYNTHETIC_FIXTURE", policyVersion: "m5-provider-readiness-policy/v1" } };
+    const evaluation = ready.evaluateM5ProviderReadinessConfig({ config, evaluatedAt: now, requiredCapabilities: [...ready.M5_DEFAULT_REQUIRED_CAPABILITIES].sort((a, b) => a.capability.localeCompare(b.capability)) }); const source = { ...aggregateModule.bindM5ProviderReadinessAggregateSource(config, evaluation), approvalAuthorityId: approval.approvalAuthorityId, approvalAuthorityFingerprint: approval.approvalAuthorityFingerprint };
+    const aggregate = aggregateModule.evaluateM5ProviderReadinessAggregate({ config: { contractVersion: "m5-provider-readiness-aggregate/v1", policyVersion: "m5-provider-readiness-aggregate-policy/v1", aggregateId: "integration", reviewedAt: now, reviewReference: "test/review", sources: [source], capabilityAssignments: ready.M5_DEFAULT_REQUIRED_CAPABILITIES.map(({ capability }) => ({ capability, mode: "ALL_OF", sourceIds: [source.sourceId] })), usageDecisions: ["AUTHORITY_PERSISTENCE", "COMMERCIAL_USE", "NETWORK_ACQUISITION", "NORMALIZED_STORAGE", "RAW_PAYLOAD_PROCESSING", "RAW_PAYLOAD_STORAGE", "REDISTRIBUTION", "RETENTION"].map(usage => ({ sourceId: source.sourceId, usage, approval: "APPROVED", reviewedAt: now, reviewReference: "test/review", approvalExpiresAt: expiry })) }, sources: [{ sourceId: source.sourceId, config, evaluation }], evaluatedAt: now }); expect(aggregate.result).toBe("READY");
+    let receiptAt = now; let clockAt = now; const transportRequests: M5ProviderHttpTransportRequest[] = []; const lease = vi.fn(async () => true); const credential = "integration-credential-sentinel"; const resolve = vi.fn(async () => ({ kind: "API_KEY" as const, value: credential })); const send = vi.fn(async (input: M5ProviderHttpTransportRequest) => { transportRequests.push(input); return { status: 200, headers: { "content-type": "application/json" }, body, retrievedAt: receiptAt }; });
+    const request = { providerId, coinId: "ethereum", contractAddress: weth, from: "2026-01-01T00:00:00.000Z", to: "2026-02-01T00:00:00.000Z", datasetVersion } as const;
+    const acquireResultAt = async (at: string) => { clockAt = at; receiptAt = at; return acquire.executeM5ProviderLiveAcquisition({ aggregate, readiness: evaluation, request, asOf: at, currentTime: () => clockAt, credential: { kind: "API_KEY", reference: "env:coingecko-pro-api-key" }, credentials: { resolve }, transport: { send }, rateLimit: { acquire: lease }, requestedAt: at, startedAt: at, recordedAt: at, now: () => clockAt, monotonicNow: () => 0 }); };
+    const acquireAt = async (at: string) => { const result = await acquireResultAt(at); if (result.status !== "READY" || !result.ingestionHandoffBinding) throw new Error(result.status === "READY" ? "binding" : result.code); return result; };
+    const acquisition = await acquireAt(now);
+    const acquisitionAtB = "2026-09-25T12:00:01.000Z";
+    const acquisitionB = await acquireAt(acquisitionAtB);
+    const planA = buildManualIngestionToLineagePlan(acquisition.normalizedPackage);
+    const planB = buildManualIngestionToLineagePlan(acquisitionB.normalizedPackage);
+    expect(acquisition.payloadFingerprint).toBe(acquisitionB.payloadFingerprint);
+    expect(acquisition.executions[0]?.planFingerprint).toBe(acquisitionB.executions[0]?.planFingerprint);
+    expect(acquisition.executions[0]?.receipt.receivedAt).not.toBe(acquisitionB.executions[0]?.receipt.receivedAt);
+    expect(acquisition.ingestionHandoffBinding).toMatchObject({ providerId, datasetId, datasetVersion, chain: "ethereum", contractAddress: weth, endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_PRO", endpointHostname: "pro-api.coingecko.com", endpointPath: `/api/v3/coins/ethereum/contract/${weth}/market_chart/range`, approvalAuthorityId: acquisitionB.ingestionHandoffBinding?.approvalAuthorityId, approvalAuthorityFingerprint: acquisitionB.ingestionHandoffBinding?.approvalAuthorityFingerprint, requestPlanFingerprint: acquisitionB.ingestionHandoffBinding?.requestPlanFingerprint, canonicalQueryFingerprint: acquisitionB.ingestionHandoffBinding?.canonicalQueryFingerprint, parserContractVersion: acquisitionB.ingestionHandoffBinding?.parserContractVersion, payloadFingerprint: acquisition.payloadFingerprint });
+    expect(acquisitionB.ingestionHandoffBinding).toMatchObject({ providerId, datasetId, datasetVersion, contractAddress: weth, payloadFingerprint: acquisition.payloadFingerprint });
+    expect(acquisitionB.ingestionHandoffBinding?.approvalAuthorityFingerprint).toBe(acquisition.ingestionHandoffBinding?.approvalAuthorityFingerprint);
+    expect(acquisitionB.ingestionHandoffBinding?.requestPlanFingerprint).toBe(acquisition.ingestionHandoffBinding?.requestPlanFingerprint);
+    expect(acquisitionB.ingestionHandoffBinding?.canonicalQueryFingerprint).toBe(acquisition.ingestionHandoffBinding?.canonicalQueryFingerprint);
+    expect(acquisitionB.ingestionHandoffBinding?.parserContractVersion).toBe(acquisition.ingestionHandoffBinding?.parserContractVersion);
+    expect(planA.records.every(record => record.artifact.providerRevision === acquisition.payloadFingerprint)).toBe(true);
+    expect(planB.records.every(record => record.artifact.providerRevision === acquisitionB.payloadFingerprint)).toBe(true);
+    expect(planA.records[0]?.envelope.normalizedEnvelope).toMatchObject({ closeValueAtoms: "9007199254740993", priceScale: 0, marketCapAtoms: "1", marketCapScale: 0, volumeAtoms: "2", volumeScale: 0 });
+    expect(transportRequests).toHaveLength(2);
+    expect(transportRequests.map(item => item.request)).toEqual([transportRequests[0]?.request, transportRequests[0]?.request]);
+    expect(transportRequests[0]?.request).toMatchObject({ protocol: "https:", method: "GET", hostname: "pro-api.coingecko.com", path: `/api/v3/coins/ethereum/contract/${weth}/market_chart/range` });
+    expect(transportRequests[0]?.request.query.map(item => item.key).sort()).toEqual(["from", "interval", "to", "vs_currency"]);
+    expect(Object.fromEntries(transportRequests[0]!.request.query.map(item => [item.key, item.value]))).toEqual({ from: "1767225600", interval: "daily", to: "1769904000", vs_currency: "usd" });
+    expect(acquisition.executions[0]?.receipt.effectiveAvailableAt).toBe(now);
+    expect(acquisitionB.executions[0]?.receipt.effectiveAvailableAt).toBe(acquisitionAtB);
+    expect(acquisition.normalizedPackage.records.map(record => [record.providerExternalRecordId, record.providerRevision, record.payloadFingerprint, record.observedAt, record.normalizedEnvelope])).toEqual(acquisitionB.normalizedPackage.records.map(record => [record.providerExternalRecordId, record.providerRevision, record.payloadFingerprint, record.observedAt, record.normalizedEnvelope]));
+    expect(acquisition.normalizedPackage.records.map(record => record.retrievedAt)).toEqual(Array(15).fill(now));
+    expect(acquisitionB.normalizedPackage.records.map(record => record.retrievedAt)).toEqual(Array(15).fill(acquisitionAtB));
+    expect(planA.request.ingestionRequestId).not.toBe(planB.request.ingestionRequestId);
+    expect(planA.attempt.ingestionAttemptId).not.toBe(planB.attempt.ingestionAttemptId);
+    expect(planA.records.map(record => [record.artifact.sourceArtifactId, record.artifact.sourceArtifactFingerprint])).toEqual(planB.records.map(record => [record.artifact.sourceArtifactId, record.artifact.sourceArtifactFingerprint]));
+    // Receipt time is retrieval authority: it belongs on observation/claim/lineage material, while normalized envelopes and stable artifact identity describe provider content.
+    expect(planA.records.map(record => [record.envelope.sourceEnvelopeId, record.envelope.sourceEnvelopeFingerprint])).toEqual(planB.records.map(record => [record.envelope.sourceEnvelopeId, record.envelope.sourceEnvelopeFingerprint]));
+    expect(planA.records.map(record => [record.observation.sourceObservationId, record.observation.observationFingerprint])).not.toEqual(planB.records.map(record => [record.observation.sourceObservationId, record.observation.observationFingerprint]));
+    expect(planA.records.map(record => [record.claim.availabilityClaimId, record.claim.claimFingerprint])).not.toEqual(planB.records.map(record => [record.claim.availabilityClaimId, record.claim.claimFingerprint]));
+    expect(planA.sourceLineageId).not.toBe(planB.sourceLineageId);
+    expect(planA.sourceLineageFingerprint).not.toBe(planB.sourceLineageFingerprint);
+    expect(serialize([acquisition, acquisitionB])).not.toContain(credential);
+    expect(serialize([acquisition, acquisitionB])).not.toContain(new TextDecoder().decode(body));
+    const sql = postgres(databaseUrl!, { max: 1, prepare: true });
+    try {
+      await sql`insert into public.intelligence_providers (provider_id,name,provider_type,canonical_source,provenance_policy_version,content_storage_mode) values (${providerId},${providerId},'SYNTHETIC_FIXTURE','integration','provenance/v1','METADATA_ONLY') on conflict (provider_id) do nothing`;
+      await sql`insert into public.intelligence_datasets (dataset_id,provider_id,dataset_version,source_description,content_storage_mode) values (${datasetId},${providerId},${datasetVersion},'integration','METADATA_ONLY') on conflict (dataset_id) do nothing`;
+      const result = await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition, asOf: now, scope: acquisition.ingestionHandoffBinding!, apply: true, unitOfWork: createPostgresManualIngestionToLineageUnitOfWork(sql) });
+      expect(result.status).toBe("READY"); if (result.status !== "READY" || result.ingestion.status !== "PERSISTED") throw new Error("persist");
+      const replay = await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition, asOf: now, scope: acquisition.ingestionHandoffBinding!, apply: true, unitOfWork: createPostgresManualIngestionToLineageUnitOfWork(sql) });
+      expect(replay).toEqual(result);
+      const reread = postgres(databaseUrl!, { max: 1, prepare: true });
+      const idsA = { request: result.ingestion.requestId, attempt: result.ingestion.attemptId, lineage: result.ingestion.sourceLineageId };
+      const artifactIds = planA.records.map(record => record.artifact.sourceArtifactId);
+      const envelopeIds = planA.records.map(record => record.envelope.sourceEnvelopeId);
+      const lineageCountsA = await reread`select (select count(*) from public.intelligence_ingestion_requests where ingestion_request_id=${idsA.request})::int requests,(select count(*) from public.intelligence_ingestion_attempts where ingestion_attempt_id=${idsA.attempt})::int attempts,(select count(*) from public.intelligence_ingestion_events where ingestion_attempt_id=${idsA.attempt})::int events,(select count(*) from public.intelligence_source_artifacts where source_artifact_id = any(${reread.array(artifactIds, 1009)}))::int artifacts,(select count(*) from public.intelligence_source_envelopes where source_envelope_id = any(${reread.array(envelopeIds, 1009)}))::int envelopes,(select count(*) from public.intelligence_ingestion_source_observations where ingestion_attempt_id=${idsA.attempt})::int observations,(select count(*) from public.intelligence_source_availability_claims where source_observation_id in (select source_observation_id from public.intelligence_ingestion_source_observations where ingestion_attempt_id=${idsA.attempt}))::int claims,(select count(*) from public.intelligence_source_lineages where source_lineage_id=${idsA.lineage})::int lineages,(select count(*) from public.intelligence_source_lineage_members where source_lineage_id=${idsA.lineage})::int members`;
+      expect(lineageCountsA[0]).toEqual({ requests: 1, attempts: 1, events: 17, artifacts: 15, envelopes: 15, observations: 15, claims: 15, lineages: 1, members: 15 });
+      const resultB = await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: acquisitionB, asOf: acquisitionAtB, scope: acquisitionB.ingestionHandoffBinding!, apply: true, unitOfWork: createPostgresManualIngestionToLineageUnitOfWork(sql) });
+      expect(resultB.status).toBe("READY"); if (resultB.status !== "READY" || resultB.ingestion.status !== "PERSISTED") throw new Error("receipt variance persist");
+      expect(resultB.ingestion.requestId).not.toBe(result.ingestion.requestId);
+      expect(resultB.ingestion.attemptId).not.toBe(result.ingestion.attemptId);
+      expect(resultB.ingestion.sourceLineageId).toBe(planB.sourceLineageId);
+      expect(resultB.ingestion.sourceLineageFingerprint).toBe(planB.sourceLineageFingerprint);
+      expect(resultB.ingestion.effectiveAvailableAt).toBe(acquisitionAtB);
+      try {
+        const counts = await reread`select (select count(*) from public.intelligence_ingestion_requests where provider_id=${providerId})::int requests,(select count(*) from public.intelligence_ingestion_attempts where ingestion_request_id in (${result.ingestion.requestId},${resultB.ingestion.requestId}))::int attempts,(select count(*) from public.intelligence_ingestion_events where ingestion_attempt_id in (${result.ingestion.attemptId},${resultB.ingestion.attemptId}))::int events,(select count(*) from public.intelligence_source_artifacts where provider_id=${providerId})::int artifacts,(select count(*) from public.intelligence_source_envelopes where source_artifact_id in (select source_artifact_id from public.intelligence_source_artifacts where provider_id=${providerId}))::int envelopes,(select count(*) from public.intelligence_ingestion_source_observations where ingestion_attempt_id in (${result.ingestion.attemptId},${resultB.ingestion.attemptId}))::int observations,(select count(*) from public.intelligence_source_availability_claims where source_artifact_id in (select source_artifact_id from public.intelligence_source_artifacts where provider_id=${providerId}))::int claims,(select count(*) from public.intelligence_source_lineages where source_lineage_id in (${result.ingestion.sourceLineageId},${resultB.ingestion.sourceLineageId}))::int lineages,(select count(*) from public.intelligence_source_lineage_members where source_lineage_id in (${result.ingestion.sourceLineageId},${resultB.ingestion.sourceLineageId}))::int members`;
+        expect(counts[0]).toMatchObject({ requests: 2, attempts: 2, events: 34, artifacts: 15, envelopes: 15, observations: 30, claims: 30, lineages: 2, members: 30 }); expect(send).toHaveBeenCalledTimes(2); expect(lease).toHaveBeenCalledTimes(2); expect(serialize([result, resultB])).not.toContain(credential); expect(acquisition.ingestionHandoffBinding).toMatchObject({ providerId, datasetId, datasetVersion, contractAddress: weth });
+        const lineageRows = await reread`select source_lineage_id,fingerprint,effective_available_at,availability_claim_ids,member_count from public.intelligence_source_lineages where source_lineage_id in (${result.ingestion.sourceLineageId},${resultB.ingestion.sourceLineageId}) order by effective_available_at`;
+        expect(lineageRows).toHaveLength(2); expect(new Date(String(lineageRows[0]!.effective_available_at)).toISOString()).toBe(now); expect(new Date(String(lineageRows[1]!.effective_available_at)).toISOString()).toBe(acquisitionAtB);
+        const requestRows = await reread`select ingestion_request_id,request_fingerprint,idempotency_key from public.intelligence_ingestion_requests where ingestion_request_id in (${result.ingestion.requestId},${resultB.ingestion.requestId}) order by requested_at`;
+        expect(requestRows.map(row => String(row.ingestion_request_id))).toEqual([planA.request.ingestionRequestId, planB.request.ingestionRequestId]);
+        expect(requestRows.map(row => String(row.request_fingerprint))).toEqual([planA.request.requestFingerprint, planB.request.requestFingerprint]);
+        const attemptRows = await reread`select ingestion_attempt_id,attempt_fingerprint from public.intelligence_ingestion_attempts where ingestion_attempt_id in (${result.ingestion.attemptId},${resultB.ingestion.attemptId}) order by started_at`;
+        expect(attemptRows.map(row => [String(row.ingestion_attempt_id), String(row.attempt_fingerprint)])).toEqual([[planA.attempt.ingestionAttemptId, planA.attempt.attemptFingerprint], [planB.attempt.ingestionAttemptId, planB.attempt.attemptFingerprint]]);
+        const eventRows = await reread`select ingestion_attempt_id,event_type,count(*)::int as count from public.intelligence_ingestion_events where ingestion_attempt_id in (${result.ingestion.attemptId},${resultB.ingestion.attemptId}) group by ingestion_attempt_id,event_type order by ingestion_attempt_id,event_type`;
+        expect(eventRows.map(row => [String(row.event_type), Number(row.count)])).toEqual([...["COMPLETED", "SOURCE_OBSERVED", "STARTED"].map(type => [type, type === "SOURCE_OBSERVED" ? 15 : 1]), ...["COMPLETED", "SOURCE_OBSERVED", "STARTED"].map(type => [type, type === "SOURCE_OBSERVED" ? 15 : 1])]);
+        const artifactRows = await reread`select source_artifact_id,provider_revision,payload_fingerprint,source_artifact_fingerprint from public.intelligence_source_artifacts where source_artifact_id = any(${reread.array(artifactIds, 1009)}) order by provider_external_record_id`;
+        expect(artifactRows.map(row => [String(row.source_artifact_id), String(row.provider_revision), String(row.payload_fingerprint), String(row.source_artifact_fingerprint)])).toEqual(planA.records.map(record => [record.artifact.sourceArtifactId, record.artifact.providerRevision, record.artifact.payloadFingerprint, record.artifact.sourceArtifactFingerprint]));
+        const observationRows = await reread`select source_observation_id,observation_fingerprint,retrieved_at from public.intelligence_ingestion_source_observations where ingestion_attempt_id in (${result.ingestion.attemptId},${resultB.ingestion.attemptId}) order by ingestion_attempt_id,item_ordinal`;
+        expect(observationRows.map(row => new Date(String(row.retrieved_at)).toISOString())).toEqual([...Array(15).fill(now), ...Array(15).fill(acquisitionAtB)]);
+        expect(observationRows.map(row => [String(row.source_observation_id), String(row.observation_fingerprint)])).toEqual([...planA.records.map(record => [record.observation.sourceObservationId, record.observation.observationFingerprint]), ...planB.records.map(record => [record.observation.sourceObservationId, record.observation.observationFingerprint])]);
+        const claimRows = await reread`select availability_claim_id,claim_fingerprint,effective_available_at from public.intelligence_source_availability_claims where source_observation_id in (select source_observation_id from public.intelligence_ingestion_source_observations where ingestion_attempt_id in (${result.ingestion.attemptId},${resultB.ingestion.attemptId})) order by effective_available_at,availability_claim_id`;
+        expect(claimRows).toHaveLength(30); expect(claimRows.slice(0, 15).every(row => new Date(String(row.effective_available_at)).toISOString() === now)).toBe(true); expect(claimRows.slice(15).every(row => new Date(String(row.effective_available_at)).toISOString() === acquisitionAtB)).toBe(true);
+        const envelopeRows = await reread`select source_envelope_id,source_envelope_fingerprint,payload_fingerprint from public.intelligence_source_envelopes where source_envelope_id = any(${reread.array(envelopeIds, 1009)}) order by source_envelope_id`;
+        expect(envelopeRows).toHaveLength(15); expect(envelopeRows.every(row => String(row.payload_fingerprint) === acquisition.payloadFingerprint || planA.records.some(record => record.envelope.payloadFingerprint === String(row.payload_fingerprint)))).toBe(true);
+        const memberIntegrity = await reread`select count(*)::int as members,count(*) filter (where l.source_lineage_id is null)::int as orphan_members,count(*) filter (where c.availability_claim_id is null or c.effective_available_at <> m.effective_available_at)::int as invalid_claim_bindings from public.intelligence_source_lineage_members m left join public.intelligence_source_lineages l using (source_lineage_id) left join public.intelligence_source_availability_claims c using (availability_claim_id) where m.source_lineage_id in (${result.ingestion.sourceLineageId},${resultB.ingestion.sourceLineageId})`;
+        expect(memberIntegrity[0]).toEqual({ members: 30, orphan_members: 0, invalid_claim_bindings: 0 });
+        const membersA = await reread`select member_ordinal,availability_claim_id,source_artifact_id,source_envelope_id,source_observation_id,effective_available_at,member_fingerprint from public.intelligence_source_lineage_members where source_lineage_id=${result.ingestion.sourceLineageId} order by member_ordinal`;
+        const membersB = await reread`select member_ordinal,availability_claim_id,source_artifact_id,source_envelope_id,source_observation_id,effective_available_at,member_fingerprint from public.intelligence_source_lineage_members where source_lineage_id=${resultB.ingestion.sourceLineageId} order by member_ordinal`;
+        expect(membersA).toHaveLength(15); expect(membersB).toHaveLength(15);
+        expect(membersA.map(row => String(row.source_artifact_id)).sort()).toEqual(membersB.map(row => String(row.source_artifact_id)).sort());
+        expect(membersA.map(row => String(row.source_envelope_id)).sort()).toEqual(membersB.map(row => String(row.source_envelope_id)).sort());
+        expect(membersA.map(row => String(row.source_observation_id)).sort()).not.toEqual(membersB.map(row => String(row.source_observation_id)).sort());
+        expect(membersA.map(row => String(row.availability_claim_id)).sort()).not.toEqual(membersB.map(row => String(row.availability_claim_id)).sort());
+        expect(membersA.map(row => String(row.member_fingerprint)).sort()).not.toEqual(membersB.map(row => String(row.member_fingerprint)).sort());
+        expect(serialize([result, resultB])).not.toContain(new TextDecoder().decode(body));
+
+        const rollbackAt = "2026-09-25T12:00:02.000Z";
+        const rollbackAcquisition = await acquireAt(rollbackAt);
+        const rollbackPlan = buildManualIngestionToLineagePlan(rollbackAcquisition.normalizedPackage);
+        const sentinel = new Error("M5_TEST_ROLLBACK_SENTINEL");
+        const realUnitOfWork = createPostgresManualIngestionToLineageUnitOfWork(sql);
+        let transactionBegan = false;
+        let materialRowWritten = false;
+        const rollbackUnitOfWork: ManualIngestionToLineageUnitOfWork = {
+          withTransaction: <T>(work: (repositories: ManualIngestionToLineageRepositories) => Promise<T>) => realUnitOfWork.withTransaction(async repositories => {
+            transactionBegan = true;
+            const decoratedRepositories: ManualIngestionToLineageRepositories = {
+              ...repositories,
+              requests: {
+                ...repositories.requests,
+                save: async input => {
+                  const saved = await repositories.requests.save(input);
+                  const persistedInsideTransaction = await repositories.requests.readById(saved.ingestionRequestId);
+                  if (!persistedInsideTransaction) throw new Error("M5_TEST_ROLLBACK_ROW_NOT_WRITTEN");
+                  materialRowWritten = true;
+                  throw sentinel;
+                },
+              },
+            };
+            return work(decoratedRepositories);
+          }),
+        };
+        let propagated: unknown;
+        try {
+          await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: rollbackAcquisition, asOf: rollbackAt, scope: rollbackAcquisition.ingestionHandoffBinding!, apply: true, unitOfWork: rollbackUnitOfWork });
+        } catch (error) { propagated = error; }
+        expect(transactionBegan).toBe(true);
+        expect(materialRowWritten).toBe(true);
+        expect(propagated).toBe(sentinel);
+        expect(transportRequests).toHaveLength(3);
+        expect(lease).toHaveBeenCalledTimes(3);
+        expect(serialize(rollbackAcquisition)).not.toContain(credential);
+        expect(serialize(rollbackAcquisition)).not.toContain(new TextDecoder().decode(body));
+
+        const rollbackReread = postgres(databaseUrl!, { max: 1, prepare: true });
+        try {
+          const rollbackIds = { request: rollbackPlan.request.ingestionRequestId, attempt: rollbackPlan.attempt.ingestionAttemptId, lineage: rollbackPlan.sourceLineageId };
+          const rollbackArtifactIds = rollbackPlan.records.map(record => record.artifact.sourceArtifactId);
+          const rollbackEnvelopeIds = rollbackPlan.records.map(record => record.envelope.sourceEnvelopeId);
+          const rollbackCounts = await rollbackReread`select (select count(*) from public.intelligence_ingestion_requests where ingestion_request_id=${rollbackIds.request})::int requests,(select count(*) from public.intelligence_ingestion_attempts where ingestion_attempt_id=${rollbackIds.attempt})::int attempts,(select count(*) from public.intelligence_ingestion_events where ingestion_attempt_id=${rollbackIds.attempt})::int events,(select count(*) from public.intelligence_source_artifacts where source_artifact_id = any(${rollbackReread.array(rollbackArtifactIds, 1009)}))::int artifacts,(select count(*) from public.intelligence_source_envelopes where source_envelope_id = any(${rollbackReread.array(rollbackEnvelopeIds, 1009)}))::int envelopes,(select count(*) from public.intelligence_ingestion_source_observations where ingestion_attempt_id=${rollbackIds.attempt})::int observations,(select count(*) from public.intelligence_source_availability_claims where source_observation_id in (select source_observation_id from public.intelligence_ingestion_source_observations where ingestion_attempt_id=${rollbackIds.attempt}))::int claims,(select count(*) from public.intelligence_source_lineages where source_lineage_id=${rollbackIds.lineage})::int lineages,(select count(*) from public.intelligence_source_lineage_members where source_lineage_id=${rollbackIds.lineage})::int members`;
+          expect(rollbackCounts[0]).toEqual({ requests: 0, attempts: 0, events: 0, artifacts: 15, envelopes: 15, observations: 0, claims: 0, lineages: 0, members: 0 });
+        } finally { await rollbackReread.end({ timeout: 5 }); }
+
+        const expectedStableCounts = { requests: 2, attempts: 2, events: 34, artifacts: 15, envelopes: 15, observations: 30, claims: 30, lineages: 2, members: 30 };
+        const readScopeCounts = async () => {
+          const connection = postgres(databaseUrl!, { max: 1, prepare: true });
+          try {
+            const rows = await connection`select (select count(*) from public.intelligence_ingestion_requests where provider_id=${providerId} and dataset_id=${datasetId})::int requests,(select count(*) from public.intelligence_ingestion_attempts a join public.intelligence_ingestion_requests r using (ingestion_request_id) where r.provider_id=${providerId} and r.dataset_id=${datasetId})::int attempts,(select count(*) from public.intelligence_ingestion_events e join public.intelligence_ingestion_attempts a using (ingestion_attempt_id) join public.intelligence_ingestion_requests r using (ingestion_request_id) where r.provider_id=${providerId} and r.dataset_id=${datasetId})::int events,(select count(*) from public.intelligence_source_artifacts where provider_id=${providerId} and dataset_id=${datasetId})::int artifacts,(select count(*) from public.intelligence_source_envelopes e join public.intelligence_source_artifacts a using (source_artifact_id) where a.provider_id=${providerId} and a.dataset_id=${datasetId})::int envelopes,(select count(*) from public.intelligence_ingestion_source_observations o join public.intelligence_ingestion_attempts t using (ingestion_attempt_id) join public.intelligence_ingestion_requests r using (ingestion_request_id) where r.provider_id=${providerId} and r.dataset_id=${datasetId})::int observations,(select count(*) from public.intelligence_source_availability_claims c join public.intelligence_ingestion_source_observations o using (source_observation_id) join public.intelligence_ingestion_attempts t using (ingestion_attempt_id) join public.intelligence_ingestion_requests r using (ingestion_request_id) where r.provider_id=${providerId} and r.dataset_id=${datasetId})::int claims,(select count(*) from public.intelligence_source_lineages where provider_id=${providerId} and dataset_id=${datasetId})::int lineages,(select count(*) from public.intelligence_source_lineage_members m join public.intelligence_source_lineages l using (source_lineage_id) where l.provider_id=${providerId} and l.dataset_id=${datasetId})::int members`;
+            return rows[0];
+          } finally { await connection.end({ timeout: 5 }); }
+        };
+        const realHandoffUnitOfWork = createPostgresManualIngestionToLineageUnitOfWork(sql);
+        const makeObservedUnitOfWork = (onBegin: () => void): ManualIngestionToLineageUnitOfWork => ({ withTransaction: <T>(work: (repositories: ManualIngestionToLineageRepositories) => Promise<T>) => { onBegin(); return realHandoffUnitOfWork.withTransaction(work); } });
+        const actualScope = acquisition.ingestionHandoffBinding!;
+        const mismatchCases: ReadonlyArray<Readonly<{ name: string; change: Record<string, string> }>> = [
+          { name: "provider mismatch", change: { providerId: "coingecko-negative-provider" } },
+          { name: "dataset mismatch", change: { datasetId: "coingecko-negative-dataset" } },
+          { name: "version mismatch", change: { datasetVersion: "coingecko-market-chart/negative-v1" } },
+          { name: "chain mismatch", change: { chain: "ethereum-negative" } },
+          { name: "address mismatch", change: { contractAddress: "0x1111111111111111111111111111111111111111" } },
+          { name: "endpoint profile mismatch", change: { endpointProfile: "COINGECKO_NEGATIVE_PROFILE" } },
+          { name: "hostname mismatch", change: { endpointHostname: "api.coingecko.com" } },
+          { name: "path mismatch", change: { endpointPath: "/api/v3/negative" } },
+          { name: "query mismatch", change: { canonicalQueryFingerprint: "1".repeat(64) } },
+          { name: "request plan mismatch", change: { requestPlanFingerprint: "2".repeat(64) } },
+          { name: "approval authority ID mismatch", change: { approvalAuthorityId: "m5-provider-approval-authority:negative" } },
+          { name: "approval authority fingerprint mismatch", change: { approvalAuthorityFingerprint: "3".repeat(64) } },
+          { name: "parser contract mismatch", change: { parserContractVersion: "m5-provider-parser/negative-v1" } },
+          { name: "payload fingerprint mismatch", change: { payloadFingerprint: "4".repeat(64) } },
+        ];
+        const lookalikeSmoke = { status: "VERIFIED", authorityStatus: "NON_AUTHORITATIVE_SMOKE", providerId, datasetId, datasetVersion, rawPayload: new TextDecoder().decode(body), credential };
+        const copiedAcquisition = { ...acquisition };
+        const serializedAcquisition = JSON.parse(serialize(acquisition)) as unknown;
+        const fabricatedAcquisition = { status: "READY", scope: acquisition.scope, asOf: now, normalizedPackage: {}, rawPayload: new TextDecoder().decode(body), credential };
+        const lookalikeCases = [
+          { name: "NON_AUTHORITATIVE_SMOKE/lookalike", value: lookalikeSmoke },
+          { name: "spread/copied acquisition", value: copiedAcquisition },
+          { name: "JSON serialized/deserialized acquisition", value: serializedAcquisition },
+          { name: "fabricated acquisition", value: fabricatedAcquisition },
+        ];
+        const uniqueLookalikeScope = (index: number) => ({ ...actualScope, canonicalQueryFingerprint: (index + 5).toString(16).repeat(64) });
+        let checkedNegativeCaseCount = 0;
+        for (const [index, item] of lookalikeCases.entries()) {
+          const before = await readScopeCounts();
+          expect(before).toEqual(expectedStableCounts);
+          let transactions = 0;
+          const result = await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: item.value, asOf: now, scope: uniqueLookalikeScope(index), apply: true, unitOfWork: makeObservedUnitOfWork(() => { transactions += 1; }) });
+          expect(result).toEqual({ status: "BLOCKED", code: "M5_ACQUISITION_HANDOFF_UNTRUSTED_ACQUISITION" });
+          expect(serialize(result)).not.toContain(credential);
+          expect(serialize(result)).not.toContain(new TextDecoder().decode(body));
+          expect(transactions).toBe(0);
+          expect(await readScopeCounts()).toEqual(before);
+          expect(transportRequests).toHaveLength(3);
+          checkedNegativeCaseCount += 1;
+        }
+        for (const item of mismatchCases) {
+          const before = await readScopeCounts();
+          expect(before).toEqual(expectedStableCounts);
+          let transactions = 0;
+          const result = await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition, asOf: now, scope: { ...actualScope, ...item.change } as typeof actualScope, apply: true, unitOfWork: makeObservedUnitOfWork(() => { transactions += 1; }) });
+          expect(result).toEqual({ status: "BLOCKED", code: "M5_ACQUISITION_HANDOFF_SCOPE_MISMATCH" });
+          expect(serialize(result)).not.toContain(credential);
+          expect(serialize(result)).not.toContain(new TextDecoder().decode(body));
+          expect(transactions).toBe(0);
+          expect(await readScopeCounts()).toEqual(before);
+          expect(transportRequests).toHaveLength(3);
+          checkedNegativeCaseCount += 1;
+        }
+        for (const item of [
+          { name: "asOf before effectiveFrom", at: "2026-09-25T11:59:59.000Z", code: "M5_PROVIDER_READINESS_AGGREGATE_AS_OF_INVALID" },
+          { name: "asOf at expiry", at: expiry, code: "M5_PROVIDER_READINESS_AGGREGATE_EXPIRED" },
+          { name: "asOf after expiry", at: "2027-09-25T12:00:01.000Z", code: "M5_PROVIDER_READINESS_AGGREGATE_EXPIRED" },
+        ]) {
+          const before = await readScopeCounts();
+          expect(before).toEqual(expectedStableCounts);
+          const unauthorized = await acquireResultAt(item.at);
+          expect(unauthorized.status).toBe("BLOCKED");
+          if (unauthorized.status !== "BLOCKED") throw new Error(`${item.name} unexpectedly authorized`);
+          expect(unauthorized.code).toBe(item.code);
+          let transactions = 0;
+          const result = await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: unauthorized, asOf: item.at, scope: actualScope, apply: true, unitOfWork: makeObservedUnitOfWork(() => { transactions += 1; }) });
+          expect(result.status).toBe("BLOCKED");
+          expect(serialize(result)).not.toContain(credential);
+          expect(serialize(result)).not.toContain(new TextDecoder().decode(body));
+          expect(transactions).toBe(0);
+          expect(await readScopeCounts()).toEqual(before);
+          expect(transportRequests).toHaveLength(3);
+          checkedNegativeCaseCount += 1;
+        }
+        expect(checkedNegativeCaseCount).toBe(21);
+
+        const infrastructureAt = "2026-09-25T12:00:03.000Z";
+        const infrastructureAcquisition = await acquireAt(infrastructureAt);
+        const infrastructureError = new Error("M5_TEST_INFRASTRUCTURE_UNAVAILABLE");
+        let infrastructureTransactionBegan = false;
+        let infrastructureMaterialRowWritten = false;
+        const infrastructureUnitOfWork: ManualIngestionToLineageUnitOfWork = {
+          withTransaction: <T>(work: (repositories: ManualIngestionToLineageRepositories) => Promise<T>) => realHandoffUnitOfWork.withTransaction(async repositories => {
+            infrastructureTransactionBegan = true;
+            const decoratedRepositories: ManualIngestionToLineageRepositories = {
+              ...repositories,
+              requests: {
+                ...repositories.requests,
+                save: async input => {
+                  const saved = await repositories.requests.save(input);
+                  if (!await repositories.requests.readById(saved.ingestionRequestId)) throw new Error("M5_TEST_INFRASTRUCTURE_ROW_NOT_WRITTEN");
+                  infrastructureMaterialRowWritten = true;
+                  throw infrastructureError;
+                },
+              },
+            };
+            return work(decoratedRepositories);
+          }),
+        };
+        const infrastructureBefore = await readScopeCounts();
+        expect(infrastructureBefore).toEqual(expectedStableCounts);
+        let infrastructurePropagated: unknown;
+        try {
+          await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: infrastructureAcquisition, asOf: infrastructureAt, scope: infrastructureAcquisition.ingestionHandoffBinding!, apply: true, unitOfWork: infrastructureUnitOfWork });
+        } catch (error) { infrastructurePropagated = error; }
+        expect(infrastructureTransactionBegan).toBe(true);
+        expect(infrastructureMaterialRowWritten).toBe(true);
+        expect(infrastructurePropagated).toBe(infrastructureError);
+        expect(infrastructurePropagated).toBeInstanceOf(Error);
+        expect(serialize(infrastructurePropagated)).not.toContain(credential);
+        expect(serialize(infrastructurePropagated)).not.toContain(new TextDecoder().decode(body));
+        expect(await readScopeCounts()).toEqual(infrastructureBefore);
+      } finally { await reread.end({ timeout: 5 }); }
+    } finally { await sql.end({ timeout: 5 }); vi.doUnmock(registryModule); vi.resetModules(); }
+  });
+});
