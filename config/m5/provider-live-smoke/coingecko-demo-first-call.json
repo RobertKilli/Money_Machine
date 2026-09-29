@@ -2,8 +2,8 @@
   "schemaVersion": "m5-provider-live-smoke-cli-config/v1",
   "authorization": {
     "schemaVersion": "m5-provider-live-smoke-authorization/v1",
-    "authorizationId": "m5-smoke-003cdeab0a209dd76795d48c",
-    "fingerprint": "e05f45995ada2205c54f0c9b76a6ce717f4de580993d006a3ca2bd75d874024c",
+    "authorizationId": "m5-smoke-c8670845ddf7b2f73895395d",
+    "fingerprint": "c6d2fcb3794915959b9a56836149566c8fcb0aa74a74580c1b7e297e263e5453",
     "environment": "LOCAL_SMOKE",
     "providerId": "coingecko",
     "chainId": "ethereum",
@@ -15,17 +15,17 @@
     "usages": ["NETWORK_ACQUISITION", "RAW_PAYLOAD_PROCESSING"],
     "forbiddenUsages": ["RAW_PAYLOAD_STORAGE", "NORMALIZED_STORAGE", "AUTHORITY_PERSISTENCE", "REDISTRIBUTION", "COMMERCIAL_USE"],
     "retention": "PROCESS_MEMORY_ONLY",
-    "effectiveFrom": "2026-09-26T21:55:00.000Z",
-    "reviewedAt": "2026-09-26T22:00:00.000Z",
-    "expiresAt": "2026-09-28T22:00:00.000Z",
+    "effectiveFrom": "2026-09-29T14:01:07.000Z",
+    "reviewedAt": "2026-09-29T14:01:07.000Z",
+    "expiresAt": "2026-10-02T14:01:07.000Z",
     "maximumRequests": 1,
     "maximumPages": 1,
     "maximumResponseBytes": 512000,
     "requestTimeoutMs": 5000,
     "maximumRetries": 0,
     "operatorReference": "operator:review-77",
-    "reviewReference": "review:M5-smoke-77",
-    "recordedAt": "2026-09-26T22:02:24.000Z"
+    "reviewReference": "review:M5-smoke-reauth-2026-09-29",
+    "recordedAt": "2026-09-29T14:01:07.000Z"
   },
   "request": {
     "schemaVersion": "m5-provider-live-smoke-config/v1",
