@@ -415,7 +415,10 @@ export function parseM5LiveEtherscanVerification(body: Uint8Array): EtherscanVer
 function executionParser(run: (body: Uint8Array, retrievedAt: string) => unknown): M5ProviderResponseParser {
   return response => {
     const parsed = run(response.body, response.retrievedAt);
-    return { projection: parsed, payloadFingerprint: canonicalSha256(parsed), effectiveAvailableAt: response.retrievedAt };
+    const payloadFingerprint = parsed && typeof parsed === "object" && typeof (parsed as { payloadFingerprint?: unknown }).payloadFingerprint === "string"
+      ? (parsed as { payloadFingerprint: string }).payloadFingerprint
+      : canonicalSha256(parsed);
+    return { projection: parsed, payloadFingerprint, effectiveAvailableAt: response.retrievedAt };
   };
 }
 

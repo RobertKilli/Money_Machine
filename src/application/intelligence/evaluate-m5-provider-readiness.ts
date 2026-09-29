@@ -34,14 +34,12 @@ export const M5_DEFAULT_REQUESTED_USAGES: readonly M5ProviderUsage[] = [
   "COMMERCIAL_USE",
 ];
 
-const lexical = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0;
-const capabilityKey = (item: ProviderCapabilityRequirement): string => `${item.capability}:${item.completeness}`;
-const sameRequestSet = (left: ProviderReadinessExecutionRequest, evaluation: ProviderReadinessEvaluation): boolean => {
-  const leftCapabilities = [...left.requiredCapabilities].map(capabilityKey).sort(lexical);
-  const rightCapabilities = evaluation.requiredCapabilities.map(capabilityKey).sort(lexical);
-  const leftUsages = [...left.requestedUsages].sort(lexical);
-  const rightUsages = [...evaluation.requestedUsages].sort(lexical);
-  return JSON.stringify(leftCapabilities) === JSON.stringify(rightCapabilities) && JSON.stringify(leftUsages) === JSON.stringify(rightUsages);
+const satisfiesExecutionRequest = (request: ProviderReadinessExecutionRequest, evaluation: ProviderReadinessEvaluation): boolean => {
+  const evaluatedCapabilities = new Map(evaluation.requiredCapabilities.map(item => [item.capability, item.completeness]));
+  return request.requiredCapabilities.every(item => {
+    const evaluated = evaluatedCapabilities.get(item.capability);
+    return evaluated === "COMPLETE" || evaluated === item.completeness;
+  }) && request.requestedUsages.every(usage => evaluation.requestedUsages.includes(usage));
 };
 
 export function evaluateM5ProviderReadinessConfig(input: Readonly<{ config: unknown; evaluatedAt: string; requiredCapabilities?: readonly ProviderCapabilityRequirement[]; requestedUsages?: readonly M5ProviderUsage[]; expectedScope?: ProviderReadinessScope }>): ProviderReadinessEvaluation {
@@ -60,6 +58,6 @@ export function assertM5ProviderReadinessForExecution(evaluation: ProviderReadin
     request.providerId !== evaluation.providerId ||
     request.datasetId !== evaluation.datasetId ||
     request.datasetVersion !== evaluation.datasetVersion ||
-    !sameRequestSet(request, evaluation)
+    !satisfiesExecutionRequest(request, evaluation)
   )) throw new Error("M5_PROVIDER_READINESS_SCOPE_MISMATCH");
 }
