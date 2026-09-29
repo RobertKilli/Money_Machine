@@ -62,6 +62,8 @@ export type M5ProviderLiveAcquisitionReady = Readonly<{
   executions: readonly M5ProviderExecutionSuccess[];
   payloadFingerprint: string;
   normalizedPackage: ManualNormalizedSourcePackage;
+  /** Server-issued material binding; it is intentionally absent from smoke output. */
+  ingestionHandoffBinding?: M5ProviderAcquisitionIngestionHandoffBinding;
 }>;
 
 export type M5ProviderLiveAcquisitionResult = M5ProviderLiveAcquisitionReady | Readonly<{
@@ -74,6 +76,26 @@ export type M5ProviderLiveAcquisitionPlan = Readonly<{
   scope: Readonly<{ providerId: string; datasetId: string; datasetVersion: string }>;
   requests: readonly Readonly<{ method: "GET"; protocol: "https:"; hostname: string; path: string; query: readonly Readonly<{ key: string; value: string }>[]; requiredCapabilities: readonly string[]; requestedUsages: readonly string[] }>[];
 }>;
+
+export type M5ProviderAcquisitionIngestionHandoffBinding = Readonly<{
+  providerId: "coingecko";
+  datasetId: "coingecko-market-chart";
+  datasetVersion: "coingecko-market-chart/range-v1";
+  chain: "ethereum";
+  contractAddress: string;
+  endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_PRO";
+  requestPlanFingerprint: string;
+  approvalAuthorityId: string;
+  approvalAuthorityFingerprint: string;
+  parserContractVersion: string;
+  payloadFingerprint: string;
+}>;
+
+/* A READY-shaped object is not authority. Only this module can issue this capability. */
+const acquisitionResultsTrustedForIngestion = new WeakSet<object>();
+export function isTrustedM5ProviderLiveAcquisitionForIngestion(value: unknown): value is M5ProviderLiveAcquisitionReady {
+  return typeof value === "object" && value !== null && acquisitionResultsTrustedForIngestion.has(value);
+}
 
 const freeze = <T>(value: T): T => {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -159,6 +181,22 @@ function acquisitionIdempotencyKey(request: M5ProviderLiveAcquisitionRequest, as
     ? { providerId: request.providerId, datasetId: "coingecko-market-chart", datasetVersion: request.datasetVersion, chain: "ethereum", contractAddress: request.contractAddress.toLowerCase(), from: request.from, to: request.to, asOf }
     : { providerId: request.providerId, datasetId: "etherscan-contract-authority", datasetVersion: request.datasetVersion, chainId: "1", contractAddress: request.contractAddress.toLowerCase(), asOf };
   return `m5-live-acquisition-${canonicalSha256(identity)}`;
+}
+
+function coinGeckoHandoffBinding(input: M5ProviderLiveAcquisitionDependencies, plan: M5ProviderRequestPlan, planFingerprint: string, payloadFingerprint: string): M5ProviderAcquisitionIngestionHandoffBinding {
+  const source = input.aggregate.sources.find(item => item.providerId === "coingecko" && item.datasetId === plan.datasetId && item.datasetVersion === plan.datasetVersion);
+  if (!source?.approvalAuthorityId || !source.approvalAuthorityFingerprint) throw new M5ProviderInfrastructureError("M5_PROVIDER_LIVE_PROJECTION_INVALID");
+  return freeze({ providerId: "coingecko", datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/range-v1", chain: "ethereum",
+    contractAddress: input.request.providerId === "coingecko" ? input.request.contractAddress.toLowerCase() : "",
+    endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_PRO", requestPlanFingerprint: planFingerprint,
+    approvalAuthorityId: source.approvalAuthorityId, approvalAuthorityFingerprint: source.approvalAuthorityFingerprint,
+    parserContractVersion: plan.parserContractVersion, payloadFingerprint });
+}
+
+function readyForIngestion(value: M5ProviderLiveAcquisitionReady): M5ProviderLiveAcquisitionReady {
+  const frozen = freeze(value);
+  acquisitionResultsTrustedForIngestion.add(frozen);
+  return frozen;
 }
 
 export function planM5ProviderLiveAcquisition(input: Readonly<{ request: M5ProviderLiveAcquisitionRequest }>): M5ProviderLiveAcquisitionPlan {
@@ -409,7 +447,8 @@ export async function executeM5ProviderLiveAcquisition(input: M5ProviderLiveAcqu
       executions.push(result);
       if (!fixture || fixture.payloadFingerprint !== result.payloadFingerprint) throw new M5ProviderInfrastructureError("M5_PROVIDER_LIVE_PROJECTION_INVALID");
       const normalizedPackage = projectCoinGeckoToNormalizedPackage({ fixture, idempotencyKey: acquisitionIdempotencyKey(input.request, input.asOf), requestedAt: input.requestedAt, startedAt: input.startedAt, recordedAt: input.recordedAt });
-      return freeze({ status: "READY", scope: result.scope, asOf: input.asOf, planFingerprints: [result.planFingerprint], executions, payloadFingerprint: fixture.payloadFingerprint, normalizedPackage });
+      return readyForIngestion({ status: "READY", scope: result.scope, asOf: input.asOf, planFingerprints: [result.planFingerprint], executions, payloadFingerprint: fixture.payloadFingerprint, normalizedPackage,
+        ingestionHandoffBinding: coinGeckoHandoffBinding(input, plans[0]!, result.planFingerprint, fixture.payloadFingerprint) });
     }
     const parsed = { creation: undefined as EtherscanCreation, verification: undefined as EtherscanVerification | undefined };
     for (const [index, plan] of executionPlans.entries()) {
@@ -430,7 +469,7 @@ export async function executeM5ProviderLiveAcquisition(input: M5ProviderLiveAcqu
       sourceCode: { status: parsed.verification.status, ...(parsed.verification.proxy === undefined ? {} : { proxy: parsed.verification.proxy }), ...(parsed.verification.implementationAddress ? { implementationAddress: parsed.verification.implementationAddress } : {}) },
       apiStatus: "1", apiMessage: "OK" });
     const normalizedPackage = projectEtherscanToNormalizedPackage({ fixture, idempotencyKey: acquisitionIdempotencyKey(input.request, input.asOf), requestedAt: input.requestedAt, startedAt: input.startedAt, recordedAt: input.recordedAt });
-    return freeze({ status: "READY", scope: executions[0]!.scope, asOf: input.asOf, planFingerprints: executions.map(item => item.planFingerprint), executions, payloadFingerprint: fixture.payloadFingerprint, normalizedPackage });
+    return readyForIngestion({ status: "READY", scope: executions[0]!.scope, asOf: input.asOf, planFingerprints: executions.map(item => item.planFingerprint), executions, payloadFingerprint: fixture.payloadFingerprint, normalizedPackage });
   } catch (error) {
     if (attemptAuthorizationFailure) return freeze({ status: "BLOCKED", code: attemptAuthorizationFailure });
     return freeze({ status: "INFRASTRUCTURE_FAILURE", code: safeCode(error, "M5_PROVIDER_LIVE_INFRASTRUCTURE_FAILURE") });

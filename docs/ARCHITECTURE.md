@@ -717,3 +717,30 @@ operator authorization after review/merge, an exact reviewed local smoke
 authority entry, a valid local credential, and the fixed CoinGecko Demo
 profile.
 Trailing decimal zeroes normalize to the same fixed-point value and fingerprint.
+
+### M5 CoinGecko acquisition-to-ingestion handoff
+
+The lifecycle is deliberately one-way: connectivity smoke → verified parser
+observation → production-authorized acquisition → manual ingestion → sealed
+`SourceLineage`. The completed CoinGecko Demo smoke is only the first two
+stages: it is `NON_AUTHORITATIVE_SMOKE`, is not persistent, and is not
+production-authoritative.
+
+`executeM5CoinGeckoAcquisitionIngestionHandoff()` is server-only and accepts
+only the in-memory, closure-authenticated READY result emitted by the live
+acquisition service. A copied, JSON-deserialized, fabricated, or smoke result
+cannot carry that capability and is rejected before package parsing, a unit of
+work, repository, database, or persistence. Its explicit future-ready contract
+binds provider, dataset/version, Ethereum chain and contract address, Pro
+endpoint profile, exact request-plan fingerprint, approval authority ID and
+fingerprint, parser contract version, payload fingerprint, and exact canonical
+`asOf`. The normalized package is then passed unchanged to the established
+manual-ingestion boundary; it retains lossless decimal strings and bigint-derived
+atoms without `Number` conversion.
+
+Production handoff remains unavailable until an authentic production readiness
+aggregate is READY and the separately registered provider approval authorizes
+the acquisition usages. Retention is not an authority grant: it does not imply
+raw-payload storage, normalized storage, or authority persistence. Repository
+and database errors deliberately propagate; the handoff has no repair,
+newest-wins, UPDATE, or DELETE behavior.
