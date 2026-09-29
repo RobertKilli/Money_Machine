@@ -3,6 +3,7 @@ import postgres from "postgres";
 import { describe, expect, it, vi } from "vitest";
 import { createPostgresManualIngestionToLineageUnitOfWork } from "@/infrastructure/postgres/manual-ingestion-to-lineage-uow";
 import { buildManualIngestionToLineagePlan } from "@/application/intelligence/manual-ingestion-to-lineage";
+import type { ManualIngestionToLineageRepositories, ManualIngestionToLineageUnitOfWork } from "@/application/intelligence/manual-ingestion-to-lineage-uow";
 import type { M5ProviderHttpTransportRequest } from "@/application/intelligence/m5-provider-execution-boundary";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -31,7 +32,8 @@ describe.skipIf(!enabled)("M5 CoinGecko acquisition ingestion PostgreSQL happy p
     const aggregate = aggregateModule.evaluateM5ProviderReadinessAggregate({ config: { contractVersion: "m5-provider-readiness-aggregate/v1", policyVersion: "m5-provider-readiness-aggregate-policy/v1", aggregateId: "integration", reviewedAt: now, reviewReference: "test/review", sources: [source], capabilityAssignments: ready.M5_DEFAULT_REQUIRED_CAPABILITIES.map(({ capability }) => ({ capability, mode: "ALL_OF", sourceIds: [source.sourceId] })), usageDecisions: ["AUTHORITY_PERSISTENCE", "COMMERCIAL_USE", "NETWORK_ACQUISITION", "NORMALIZED_STORAGE", "RAW_PAYLOAD_PROCESSING", "RAW_PAYLOAD_STORAGE", "REDISTRIBUTION", "RETENTION"].map(usage => ({ sourceId: source.sourceId, usage, approval: "APPROVED", reviewedAt: now, reviewReference: "test/review", approvalExpiresAt: expiry })) }, sources: [{ sourceId: source.sourceId, config, evaluation }], evaluatedAt: now }); expect(aggregate.result).toBe("READY");
     let receiptAt = now; let clockAt = now; const transportRequests: M5ProviderHttpTransportRequest[] = []; const lease = vi.fn(async () => true); const credential = "integration-credential-sentinel"; const resolve = vi.fn(async () => ({ kind: "API_KEY" as const, value: credential })); const send = vi.fn(async (input: M5ProviderHttpTransportRequest) => { transportRequests.push(input); return { status: 200, headers: { "content-type": "application/json" }, body, retrievedAt: receiptAt }; });
     const request = { providerId, coinId: "ethereum", contractAddress: weth, from: "2026-01-01T00:00:00.000Z", to: "2026-02-01T00:00:00.000Z", datasetVersion } as const;
-    const acquireAt = async (at: string) => { clockAt = at; receiptAt = at; const result = await acquire.executeM5ProviderLiveAcquisition({ aggregate, readiness: evaluation, request, asOf: at, currentTime: () => clockAt, credential: { kind: "API_KEY", reference: "env:coingecko-pro-api-key" }, credentials: { resolve }, transport: { send }, rateLimit: { acquire: lease }, requestedAt: at, startedAt: at, recordedAt: at, now: () => clockAt, monotonicNow: () => 0 }); if (result.status !== "READY" || !result.ingestionHandoffBinding) throw new Error(result.status === "READY" ? "binding" : result.code); return result; };
+    const acquireResultAt = async (at: string) => { clockAt = at; receiptAt = at; return acquire.executeM5ProviderLiveAcquisition({ aggregate, readiness: evaluation, request, asOf: at, currentTime: () => clockAt, credential: { kind: "API_KEY", reference: "env:coingecko-pro-api-key" }, credentials: { resolve }, transport: { send }, rateLimit: { acquire: lease }, requestedAt: at, startedAt: at, recordedAt: at, now: () => clockAt, monotonicNow: () => 0 }); };
+    const acquireAt = async (at: string) => { const result = await acquireResultAt(at); if (result.status !== "READY" || !result.ingestionHandoffBinding) throw new Error(result.status === "READY" ? "binding" : result.code); return result; };
     const acquisition = await acquireAt(now);
     const acquisitionAtB = "2026-09-25T12:00:01.000Z";
     const acquisitionB = await acquireAt(acquisitionAtB);
@@ -123,6 +125,178 @@ describe.skipIf(!enabled)("M5 CoinGecko acquisition ingestion PostgreSQL happy p
         expect(membersA.map(row => String(row.availability_claim_id)).sort()).not.toEqual(membersB.map(row => String(row.availability_claim_id)).sort());
         expect(membersA.map(row => String(row.member_fingerprint)).sort()).not.toEqual(membersB.map(row => String(row.member_fingerprint)).sort());
         expect(serialize([result, resultB])).not.toContain(new TextDecoder().decode(body));
+
+        const rollbackAt = "2026-09-25T12:00:02.000Z";
+        const rollbackAcquisition = await acquireAt(rollbackAt);
+        const rollbackPlan = buildManualIngestionToLineagePlan(rollbackAcquisition.normalizedPackage);
+        const sentinel = new Error("M5_TEST_ROLLBACK_SENTINEL");
+        const realUnitOfWork = createPostgresManualIngestionToLineageUnitOfWork(sql);
+        let transactionBegan = false;
+        let materialRowWritten = false;
+        const rollbackUnitOfWork: ManualIngestionToLineageUnitOfWork = {
+          withTransaction: <T>(work: (repositories: ManualIngestionToLineageRepositories) => Promise<T>) => realUnitOfWork.withTransaction(async repositories => {
+            transactionBegan = true;
+            const decoratedRepositories: ManualIngestionToLineageRepositories = {
+              ...repositories,
+              requests: {
+                ...repositories.requests,
+                save: async input => {
+                  const saved = await repositories.requests.save(input);
+                  const persistedInsideTransaction = await repositories.requests.readById(saved.ingestionRequestId);
+                  if (!persistedInsideTransaction) throw new Error("M5_TEST_ROLLBACK_ROW_NOT_WRITTEN");
+                  materialRowWritten = true;
+                  throw sentinel;
+                },
+              },
+            };
+            return work(decoratedRepositories);
+          }),
+        };
+        let propagated: unknown;
+        try {
+          await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: rollbackAcquisition, asOf: rollbackAt, scope: rollbackAcquisition.ingestionHandoffBinding!, apply: true, unitOfWork: rollbackUnitOfWork });
+        } catch (error) { propagated = error; }
+        expect(transactionBegan).toBe(true);
+        expect(materialRowWritten).toBe(true);
+        expect(propagated).toBe(sentinel);
+        expect(transportRequests).toHaveLength(3);
+        expect(lease).toHaveBeenCalledTimes(3);
+        expect(serialize(rollbackAcquisition)).not.toContain(credential);
+        expect(serialize(rollbackAcquisition)).not.toContain(new TextDecoder().decode(body));
+
+        const rollbackReread = postgres(databaseUrl!, { max: 1, prepare: true });
+        try {
+          const rollbackIds = { request: rollbackPlan.request.ingestionRequestId, attempt: rollbackPlan.attempt.ingestionAttemptId, lineage: rollbackPlan.sourceLineageId };
+          const rollbackArtifactIds = rollbackPlan.records.map(record => record.artifact.sourceArtifactId);
+          const rollbackEnvelopeIds = rollbackPlan.records.map(record => record.envelope.sourceEnvelopeId);
+          const rollbackCounts = await rollbackReread`select (select count(*) from public.intelligence_ingestion_requests where ingestion_request_id=${rollbackIds.request})::int requests,(select count(*) from public.intelligence_ingestion_attempts where ingestion_attempt_id=${rollbackIds.attempt})::int attempts,(select count(*) from public.intelligence_ingestion_events where ingestion_attempt_id=${rollbackIds.attempt})::int events,(select count(*) from public.intelligence_source_artifacts where source_artifact_id = any(${rollbackReread.array(rollbackArtifactIds, 1009)}))::int artifacts,(select count(*) from public.intelligence_source_envelopes where source_envelope_id = any(${rollbackReread.array(rollbackEnvelopeIds, 1009)}))::int envelopes,(select count(*) from public.intelligence_ingestion_source_observations where ingestion_attempt_id=${rollbackIds.attempt})::int observations,(select count(*) from public.intelligence_source_availability_claims where source_observation_id in (select source_observation_id from public.intelligence_ingestion_source_observations where ingestion_attempt_id=${rollbackIds.attempt}))::int claims,(select count(*) from public.intelligence_source_lineages where source_lineage_id=${rollbackIds.lineage})::int lineages,(select count(*) from public.intelligence_source_lineage_members where source_lineage_id=${rollbackIds.lineage})::int members`;
+          expect(rollbackCounts[0]).toEqual({ requests: 0, attempts: 0, events: 0, artifacts: 15, envelopes: 15, observations: 0, claims: 0, lineages: 0, members: 0 });
+        } finally { await rollbackReread.end({ timeout: 5 }); }
+
+        const expectedStableCounts = { requests: 2, attempts: 2, events: 34, artifacts: 15, envelopes: 15, observations: 30, claims: 30, lineages: 2, members: 30 };
+        const readScopeCounts = async () => {
+          const connection = postgres(databaseUrl!, { max: 1, prepare: true });
+          try {
+            const rows = await connection`select (select count(*) from public.intelligence_ingestion_requests where provider_id=${providerId} and dataset_id=${datasetId})::int requests,(select count(*) from public.intelligence_ingestion_attempts a join public.intelligence_ingestion_requests r using (ingestion_request_id) where r.provider_id=${providerId} and r.dataset_id=${datasetId})::int attempts,(select count(*) from public.intelligence_ingestion_events e join public.intelligence_ingestion_attempts a using (ingestion_attempt_id) join public.intelligence_ingestion_requests r using (ingestion_request_id) where r.provider_id=${providerId} and r.dataset_id=${datasetId})::int events,(select count(*) from public.intelligence_source_artifacts where provider_id=${providerId} and dataset_id=${datasetId})::int artifacts,(select count(*) from public.intelligence_source_envelopes e join public.intelligence_source_artifacts a using (source_artifact_id) where a.provider_id=${providerId} and a.dataset_id=${datasetId})::int envelopes,(select count(*) from public.intelligence_ingestion_source_observations o join public.intelligence_ingestion_attempts t using (ingestion_attempt_id) join public.intelligence_ingestion_requests r using (ingestion_request_id) where r.provider_id=${providerId} and r.dataset_id=${datasetId})::int observations,(select count(*) from public.intelligence_source_availability_claims c join public.intelligence_ingestion_source_observations o using (source_observation_id) join public.intelligence_ingestion_attempts t using (ingestion_attempt_id) join public.intelligence_ingestion_requests r using (ingestion_request_id) where r.provider_id=${providerId} and r.dataset_id=${datasetId})::int claims,(select count(*) from public.intelligence_source_lineages where provider_id=${providerId} and dataset_id=${datasetId})::int lineages,(select count(*) from public.intelligence_source_lineage_members m join public.intelligence_source_lineages l using (source_lineage_id) where l.provider_id=${providerId} and l.dataset_id=${datasetId})::int members`;
+            return rows[0];
+          } finally { await connection.end({ timeout: 5 }); }
+        };
+        const realHandoffUnitOfWork = createPostgresManualIngestionToLineageUnitOfWork(sql);
+        const makeObservedUnitOfWork = (onBegin: () => void): ManualIngestionToLineageUnitOfWork => ({ withTransaction: <T>(work: (repositories: ManualIngestionToLineageRepositories) => Promise<T>) => { onBegin(); return realHandoffUnitOfWork.withTransaction(work); } });
+        const actualScope = acquisition.ingestionHandoffBinding!;
+        const mismatchCases: ReadonlyArray<Readonly<{ name: string; change: Record<string, string> }>> = [
+          { name: "provider mismatch", change: { providerId: "coingecko-negative-provider" } },
+          { name: "dataset mismatch", change: { datasetId: "coingecko-negative-dataset" } },
+          { name: "version mismatch", change: { datasetVersion: "coingecko-market-chart/negative-v1" } },
+          { name: "chain mismatch", change: { chain: "ethereum-negative" } },
+          { name: "address mismatch", change: { contractAddress: "0x1111111111111111111111111111111111111111" } },
+          { name: "endpoint profile mismatch", change: { endpointProfile: "COINGECKO_NEGATIVE_PROFILE" } },
+          { name: "hostname mismatch", change: { endpointHostname: "api.coingecko.com" } },
+          { name: "path mismatch", change: { endpointPath: "/api/v3/negative" } },
+          { name: "query mismatch", change: { canonicalQueryFingerprint: "1".repeat(64) } },
+          { name: "request plan mismatch", change: { requestPlanFingerprint: "2".repeat(64) } },
+          { name: "approval authority ID mismatch", change: { approvalAuthorityId: "m5-provider-approval-authority:negative" } },
+          { name: "approval authority fingerprint mismatch", change: { approvalAuthorityFingerprint: "3".repeat(64) } },
+          { name: "parser contract mismatch", change: { parserContractVersion: "m5-provider-parser/negative-v1" } },
+          { name: "payload fingerprint mismatch", change: { payloadFingerprint: "4".repeat(64) } },
+        ];
+        const lookalikeSmoke = { status: "VERIFIED", authorityStatus: "NON_AUTHORITATIVE_SMOKE", providerId, datasetId, datasetVersion, rawPayload: new TextDecoder().decode(body), credential };
+        const copiedAcquisition = { ...acquisition };
+        const serializedAcquisition = JSON.parse(serialize(acquisition)) as unknown;
+        const fabricatedAcquisition = { status: "READY", scope: acquisition.scope, asOf: now, normalizedPackage: {}, rawPayload: new TextDecoder().decode(body), credential };
+        const lookalikeCases = [
+          { name: "NON_AUTHORITATIVE_SMOKE/lookalike", value: lookalikeSmoke },
+          { name: "spread/copied acquisition", value: copiedAcquisition },
+          { name: "JSON serialized/deserialized acquisition", value: serializedAcquisition },
+          { name: "fabricated acquisition", value: fabricatedAcquisition },
+        ];
+        const uniqueLookalikeScope = (index: number) => ({ ...actualScope, canonicalQueryFingerprint: (index + 5).toString(16).repeat(64) });
+        let checkedNegativeCaseCount = 0;
+        for (const [index, item] of lookalikeCases.entries()) {
+          const before = await readScopeCounts();
+          expect(before).toEqual(expectedStableCounts);
+          let transactions = 0;
+          const result = await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: item.value, asOf: now, scope: uniqueLookalikeScope(index), apply: true, unitOfWork: makeObservedUnitOfWork(() => { transactions += 1; }) });
+          expect(result).toEqual({ status: "BLOCKED", code: "M5_ACQUISITION_HANDOFF_UNTRUSTED_ACQUISITION" });
+          expect(serialize(result)).not.toContain(credential);
+          expect(serialize(result)).not.toContain(new TextDecoder().decode(body));
+          expect(transactions).toBe(0);
+          expect(await readScopeCounts()).toEqual(before);
+          expect(transportRequests).toHaveLength(3);
+          checkedNegativeCaseCount += 1;
+        }
+        for (const item of mismatchCases) {
+          const before = await readScopeCounts();
+          expect(before).toEqual(expectedStableCounts);
+          let transactions = 0;
+          const result = await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition, asOf: now, scope: { ...actualScope, ...item.change } as typeof actualScope, apply: true, unitOfWork: makeObservedUnitOfWork(() => { transactions += 1; }) });
+          expect(result).toEqual({ status: "BLOCKED", code: "M5_ACQUISITION_HANDOFF_SCOPE_MISMATCH" });
+          expect(serialize(result)).not.toContain(credential);
+          expect(serialize(result)).not.toContain(new TextDecoder().decode(body));
+          expect(transactions).toBe(0);
+          expect(await readScopeCounts()).toEqual(before);
+          expect(transportRequests).toHaveLength(3);
+          checkedNegativeCaseCount += 1;
+        }
+        for (const item of [
+          { name: "asOf before effectiveFrom", at: "2026-09-25T11:59:59.000Z", code: "M5_PROVIDER_READINESS_AGGREGATE_AS_OF_INVALID" },
+          { name: "asOf at expiry", at: expiry, code: "M5_PROVIDER_READINESS_AGGREGATE_EXPIRED" },
+          { name: "asOf after expiry", at: "2027-09-25T12:00:01.000Z", code: "M5_PROVIDER_READINESS_AGGREGATE_EXPIRED" },
+        ]) {
+          const before = await readScopeCounts();
+          expect(before).toEqual(expectedStableCounts);
+          const unauthorized = await acquireResultAt(item.at);
+          expect(unauthorized.status).toBe("BLOCKED");
+          if (unauthorized.status !== "BLOCKED") throw new Error(`${item.name} unexpectedly authorized`);
+          expect(unauthorized.code).toBe(item.code);
+          let transactions = 0;
+          const result = await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: unauthorized, asOf: item.at, scope: actualScope, apply: true, unitOfWork: makeObservedUnitOfWork(() => { transactions += 1; }) });
+          expect(result.status).toBe("BLOCKED");
+          expect(serialize(result)).not.toContain(credential);
+          expect(serialize(result)).not.toContain(new TextDecoder().decode(body));
+          expect(transactions).toBe(0);
+          expect(await readScopeCounts()).toEqual(before);
+          expect(transportRequests).toHaveLength(3);
+          checkedNegativeCaseCount += 1;
+        }
+        expect(checkedNegativeCaseCount).toBe(21);
+
+        const infrastructureAt = "2026-09-25T12:00:03.000Z";
+        const infrastructureAcquisition = await acquireAt(infrastructureAt);
+        const infrastructureError = new Error("M5_TEST_INFRASTRUCTURE_UNAVAILABLE");
+        let infrastructureTransactionBegan = false;
+        let infrastructureMaterialRowWritten = false;
+        const infrastructureUnitOfWork: ManualIngestionToLineageUnitOfWork = {
+          withTransaction: <T>(work: (repositories: ManualIngestionToLineageRepositories) => Promise<T>) => realHandoffUnitOfWork.withTransaction(async repositories => {
+            infrastructureTransactionBegan = true;
+            const decoratedRepositories: ManualIngestionToLineageRepositories = {
+              ...repositories,
+              requests: {
+                ...repositories.requests,
+                save: async input => {
+                  const saved = await repositories.requests.save(input);
+                  if (!await repositories.requests.readById(saved.ingestionRequestId)) throw new Error("M5_TEST_INFRASTRUCTURE_ROW_NOT_WRITTEN");
+                  infrastructureMaterialRowWritten = true;
+                  throw infrastructureError;
+                },
+              },
+            };
+            return work(decoratedRepositories);
+          }),
+        };
+        const infrastructureBefore = await readScopeCounts();
+        expect(infrastructureBefore).toEqual(expectedStableCounts);
+        let infrastructurePropagated: unknown;
+        try {
+          await handoff.executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: infrastructureAcquisition, asOf: infrastructureAt, scope: infrastructureAcquisition.ingestionHandoffBinding!, apply: true, unitOfWork: infrastructureUnitOfWork });
+        } catch (error) { infrastructurePropagated = error; }
+        expect(infrastructureTransactionBegan).toBe(true);
+        expect(infrastructureMaterialRowWritten).toBe(true);
+        expect(infrastructurePropagated).toBe(infrastructureError);
+        expect(infrastructurePropagated).toBeInstanceOf(Error);
+        expect(serialize(infrastructurePropagated)).not.toContain(credential);
+        expect(serialize(infrastructurePropagated)).not.toContain(new TextDecoder().decode(body));
+        expect(await readScopeCounts()).toEqual(infrastructureBefore);
       } finally { await reread.end({ timeout: 5 }); }
     } finally { await sql.end({ timeout: 5 }); vi.doUnmock(registryModule); vi.resetModules(); }
   });
