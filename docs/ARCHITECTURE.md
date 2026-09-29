@@ -614,6 +614,27 @@ directly to the adapter's fixed-point `bigint` representation. Exponent forms,
 negative values, scale above 18, and values outside the adapter's signed 64-bit
 atom bound are rejected; no `Number` conversion or implicit rounding occurs.
 
+### M5 CoinGecko market-source qualification
+
+The versioned `m5-coingecko-market-source-qualification/v1` contract and
+official-source evidence matrix are documented in
+[`M5_COINGECKO_MARKET_SOURCE_QUALIFICATION.md`](M5_COINGECKO_MARKET_SOURCE_QUALIFICATION.md).
+As checked on 2026-09-29, Pro `market_chart/range` exposes the expected
+`prices`, `market_caps`, and `total_volumes` pairs, but the official contract
+does not establish exact M5 daily-close, market-cap-basis/as-of, or rolling
+24-hour-window semantics. All three qualifications remain `PARTIAL`; the
+production projection guard therefore blocks and emits no metric authority.
+The successful Demo smoke proved transport, parsing and parseable field
+presence only; it did not prove close, as-of, or 24-hour-window semantics.
+
+The guard is server-only and requires a module-local configured qualification,
+exact Pro/WETH/Ethereum/USD-daily/dataset/metric scope and authentic same-runtime
+acquisition material. It has no provider, database, persistence or UoW port.
+`recordedAt` is excluded from qualification identity; evidence and review
+validity are fingerprinted. Existing readiness remains approval-gated and
+production aggregate readiness remains `BLOCKED`; qualification does not
+upgrade endpoint capability or usage approval automatically.
+
 ### M5 non-authoritative live smoke boundary
 
 `executeM5ProviderLiveSmoke()` is an independent, server-only, read-only
