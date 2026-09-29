@@ -732,9 +732,11 @@ acquisition service. A copied, JSON-deserialized, fabricated, or smoke result
 cannot carry that capability and is rejected before package parsing, a unit of
 work, repository, database, or persistence. Its explicit future-ready contract
 binds provider, dataset/version, Ethereum chain and contract address, Pro
-endpoint profile, exact request-plan fingerprint, approval authority ID and
-fingerprint, parser contract version, payload fingerprint, and exact canonical
-`asOf`. The normalized package is then passed unchanged to the established
+endpoint profile/hostname/path/canonical-query fingerprint, exact request-plan
+fingerprint, approval authority ID and fingerprint, parser contract version,
+payload fingerprint, and exact canonical `asOf`. The handoff also verifies that
+the authoritative execution receipt is the normalized records' retrieval and
+effective-availability time. The normalized package is then passed unchanged to the established
 manual-ingestion boundary; it retains lossless decimal strings and bigint-derived
 atoms without `Number` conversion.
 

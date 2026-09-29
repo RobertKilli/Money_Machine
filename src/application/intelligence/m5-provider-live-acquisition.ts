@@ -84,6 +84,9 @@ export type M5ProviderAcquisitionIngestionHandoffBinding = Readonly<{
   chain: "ethereum";
   contractAddress: string;
   endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_PRO";
+  endpointHostname: "pro-api.coingecko.com";
+  endpointPath: string;
+  canonicalQueryFingerprint: string;
   requestPlanFingerprint: string;
   approvalAuthorityId: string;
   approvalAuthorityFingerprint: string;
@@ -188,7 +191,8 @@ function coinGeckoHandoffBinding(input: M5ProviderLiveAcquisitionDependencies, p
   if (!source?.approvalAuthorityId || !source.approvalAuthorityFingerprint) throw new M5ProviderInfrastructureError("M5_PROVIDER_LIVE_PROJECTION_INVALID");
   return freeze({ providerId: "coingecko", datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/range-v1", chain: "ethereum",
     contractAddress: input.request.providerId === "coingecko" ? input.request.contractAddress.toLowerCase() : "",
-    endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_PRO", requestPlanFingerprint: planFingerprint,
+    endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_PRO", endpointHostname: "pro-api.coingecko.com", endpointPath: plan.endpointPath,
+    canonicalQueryFingerprint: canonicalSha256(plan.query), requestPlanFingerprint: planFingerprint,
     approvalAuthorityId: source.approvalAuthorityId, approvalAuthorityFingerprint: source.approvalAuthorityFingerprint,
     parserContractVersion: plan.parserContractVersion, payloadFingerprint });
 }

@@ -18,6 +18,9 @@ export type M5CoinGeckoAcquisitionIngestionRequest = Readonly<{
     chain: "ethereum";
     contractAddress: string;
     endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_PRO";
+    endpointHostname: "pro-api.coingecko.com";
+    endpointPath: string;
+    canonicalQueryFingerprint: string;
     requestPlanFingerprint: string;
     approvalAuthorityId: string;
     approvalAuthorityFingerprint: string;
@@ -43,11 +46,12 @@ function bindingMatches(request: M5CoinGeckoAcquisitionIngestionRequest, acquisi
   const binding = acquisition.ingestionHandoffBinding;
   if (!binding || acquisition.status !== "READY") return "M5_ACQUISITION_HANDOFF_BINDING_MISSING";
   if (!canonicalTime(request.asOf) || request.asOf !== acquisition.asOf) return "M5_ACQUISITION_HANDOFF_AS_OF_MISMATCH";
-  if (!same(binding, request.scope, ["providerId", "datasetId", "datasetVersion", "chain", "contractAddress", "endpointProfile", "requestPlanFingerprint", "approvalAuthorityId", "approvalAuthorityFingerprint", "parserContractVersion", "payloadFingerprint"])) return "M5_ACQUISITION_HANDOFF_SCOPE_MISMATCH";
+  if (!same(binding, request.scope, ["providerId", "datasetId", "datasetVersion", "chain", "contractAddress", "endpointProfile", "endpointHostname", "endpointPath", "canonicalQueryFingerprint", "requestPlanFingerprint", "approvalAuthorityId", "approvalAuthorityFingerprint", "parserContractVersion", "payloadFingerprint"])) return "M5_ACQUISITION_HANDOFF_SCOPE_MISMATCH";
   if (acquisition.scope.providerId !== binding.providerId || acquisition.scope.datasetId !== binding.datasetId || acquisition.scope.datasetVersion !== binding.datasetVersion || acquisition.payloadFingerprint !== binding.payloadFingerprint) return "M5_ACQUISITION_HANDOFF_MATERIAL_MISMATCH";
-  if (acquisition.planFingerprints.length !== 1 || acquisition.planFingerprints[0] !== binding.requestPlanFingerprint || acquisition.executions.length !== 1 || acquisition.executions[0]?.payloadFingerprint !== binding.payloadFingerprint) return "M5_ACQUISITION_HANDOFF_REQUEST_MISMATCH";
+  const execution = acquisition.executions[0];
+  if (binding.endpointHostname !== "pro-api.coingecko.com" || binding.endpointPath !== `/api/v3/coins/ethereum/contract/${binding.contractAddress}/market_chart/range` || acquisition.planFingerprints.length !== 1 || acquisition.planFingerprints[0] !== binding.requestPlanFingerprint || acquisition.executions.length !== 1 || execution?.payloadFingerprint !== binding.payloadFingerprint || execution.planFingerprint !== binding.requestPlanFingerprint || execution.scope.providerId !== binding.providerId || execution.scope.datasetId !== binding.datasetId || execution.scope.datasetVersion !== binding.datasetVersion || execution.receipt.providerId !== binding.providerId || execution.receipt.datasetId !== binding.datasetId || execution.receipt.datasetVersion !== binding.datasetVersion || execution.receipt.planFingerprint !== binding.requestPlanFingerprint || execution.receipt.receivedAt !== execution.receipt.effectiveAvailableAt) return "M5_ACQUISITION_HANDOFF_REQUEST_MISMATCH";
   const pkg = acquisition.normalizedPackage;
-  if (pkg.providerId !== binding.providerId || pkg.datasetId !== binding.datasetId || pkg.datasetVersion !== binding.datasetVersion || pkg.parserContractVersion !== binding.parserContractVersion || pkg.requestScope.contractAddress !== binding.contractAddress || pkg.records.some(record => record.payloadFingerprint !== binding.payloadFingerprint)) return "M5_ACQUISITION_HANDOFF_MATERIAL_MISMATCH";
+  if (pkg.providerId !== binding.providerId || pkg.datasetId !== binding.datasetId || pkg.datasetVersion !== binding.datasetVersion || pkg.parserContractVersion !== binding.parserContractVersion || pkg.requestScope.network !== "eth" || pkg.requestScope.coinId !== "ethereum" || pkg.requestScope.contractAddress !== binding.contractAddress || pkg.executionInput.endpointPath !== `https://${binding.endpointHostname}/api/v3/coins/ethereum/contract/{address}/market_chart/range` || pkg.records.some(record => record.payloadFingerprint !== binding.payloadFingerprint || record.retrievedAt !== execution.receipt.receivedAt)) return "M5_ACQUISITION_HANDOFF_MATERIAL_MISMATCH";
   return undefined;
 }
 
