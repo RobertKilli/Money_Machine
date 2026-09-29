@@ -627,8 +627,8 @@ configuration are unchanged and remain `BLOCKED`.
 
 Executable smoke supports only the exact CoinGecko Demo profile and requires
 an `m5-provider-live-smoke-authorization/v1` ID and fingerprint in the
-separate, source-controlled local smoke trust registry. The registry is empty
-in this slice. Its resolver copies and freezes its input, rejects
+separate, source-controlled local smoke trust registry. The registry contains
+only the active reviewed Demo smoke authority pair. Its resolver copies and freezes its input, rejects
 duplicate/conflicting entries, pins the supported provider, Ethereum chain,
 exact lowercase contract address, dataset/version, capabilities and endpoint
 profile, and checks canonical caller `asOf`, `effectiveFrom`, `reviewedAt`, and
@@ -653,16 +653,19 @@ in-process rate lease before late credential lookup, and no scheduling or
 polling. CoinGecko Demo dry-run reads only a JSON authorization/request file
 under `config/m5/provider-live-smoke/`, displays the fixed request plan and
 credential reference, and does not resolve credentials, perform DNS or send
-HTTP. The initial reviewable Demo scope is
+HTTP. The reviewable Demo scope is
 `coingecko-demo-first-call.json`, pinned to WETH's Ethereum contract
 `0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2`, Ethereum,
 `coingecko-market-chart/range-v1`, and the Demo range profile. Its exact
 authorization ID/fingerprint pair is held in a separate server-only
 LOCAL_SMOKE registry. The CLI dry-run and execution both resolve that pair;
-neither uses the production provider approval registry. The reviewed window
-is time-bounded and currently expires at `2026-09-28T22:00:00.000Z`.
-The authorization fingerprints one request, one page, a 512000-byte response
-cap, a 5000 ms request timeout, and zero retries.
+neither uses the production provider approval registry. The previous
+authority expired at `2026-09-28T22:00:00.000Z` and is no longer registered.
+The current reviewed window starts at `2026-09-29T14:01:07.000Z` and expires
+exactly 72 hours later at `2026-10-02T14:01:07.000Z`. The authorization
+fingerprints one request, one page, a 512000-byte response cap, a 5000 ms
+request timeout, and zero retries. Reauthorization remains
+`NON_AUTHORITATIVE_SMOKE`; production readiness and approval remain `BLOCKED`.
 Etherscan dry-run reports the unsupported authentication transport
 without reading its authorization/config file.
 

@@ -15,5 +15,5 @@ const registry: readonly M5ProviderSmokeAuthorizationRegistryEntry[] = Object.fr
   Object.freeze({ authorizationId: smokeConfig.authorization.authorizationId, fingerprint: smokeConfig.authorization.fingerprint }),
 ]);
 
-/** Server-only LOCAL_SMOKE trust anchors; never consumed by production approval/readiness. */
+/** The sole active server-only LOCAL_SMOKE trust anchor; never consumed by production readiness. */
 export const M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY = registry;

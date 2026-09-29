@@ -4,7 +4,7 @@ import { createM5ProviderSmokeAuthorization, isTrustedM5ProviderSmokeAuthorizati
 import { M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG, M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY } from "@/application/intelligence/m5-provider-live-smoke-registry";
 import { executeM5ProviderLiveSmoke, parseM5ProviderSmokeConfig, planM5ProviderLiveSmoke, previewM5ProviderLiveSmoke } from "@/application/intelligence/m5-provider-live-smoke";
 import { buildManualIngestionToLineagePlan } from "@/application/intelligence/manual-ingestion-to-lineage";
-import { assertM5ProviderReadinessForExecution } from "@/application/intelligence/evaluate-m5-provider-readiness";
+import { assertM5ProviderReadinessForExecution, evaluateM5ProviderReadinessConfig } from "@/application/intelligence/evaluate-m5-provider-readiness";
 import { isTrustedM5ProviderReadinessAggregate } from "@/application/intelligence/evaluate-m5-provider-readiness-aggregate";
 import { isTrustedM5ProviderReadinessEvaluation, type ProviderReadinessEvaluation } from "@/domain/intelligence/m5-provider-readiness";
 import type { M5ProviderCredentialPort, M5ProviderHttpTransport, M5ProviderHttpTransportResponse, M5ProviderRateLimitLease } from "@/application/intelligence/m5-provider-execution-boundary";
@@ -135,13 +135,15 @@ describe("M5 provider live smoke authorization", () => {
   it("loads one factory-derived, immutable Demo smoke authority from the separate server registry", () => {
     const authorization = parseM5ProviderSmokeAuthorization(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.authorization);
     expect(authorization).toMatchObject({
-      authorizationId: "m5-smoke-003cdeab0a209dd76795d48c",
-      fingerprint: "e05f45995ada2205c54f0c9b76a6ce717f4de580993d006a3ca2bd75d874024c",
+      authorizationId: "m5-smoke-c8670845ddf7b2f73895395d",
+      fingerprint: "c6d2fcb3794915959b9a56836149566c8fcb0aa74a74580c1b7e297e263e5453",
       providerId: "coingecko", chainId: "ethereum", assetId: wethAddress,
       datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/range-v1",
       endpointProfile: "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_DEMO", maximumRequests: 1,
       maximumPages: 1, maximumResponseBytes: 512_000, requestTimeoutMs: 5_000, maximumRetries: 0,
+      effectiveFrom: "2026-09-29T14:01:07.000Z", reviewedAt: "2026-09-29T14:01:07.000Z", expiresAt: "2026-10-02T14:01:07.000Z",
     });
+    expect(Date.parse(authorization.expiresAt) - Date.parse(authorization.reviewedAt)).toBe(72 * 60 * 60 * 1000);
     expect(M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY).toEqual([{ authorizationId: authorization.authorizationId, fingerprint: authorization.fingerprint }]);
     expect(Object.isFrozen(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG)).toBe(true);
     expect(Object.isFrozen(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.authorization.capabilities)).toBe(true);
@@ -160,15 +162,22 @@ describe("M5 provider live smoke authorization", () => {
       reviewReference: authorization.reviewReference,
       recordedAt: authorization.recordedAt,
     })).toEqual(authorization);
+    const reRecorded = auth({ assetId: authorization.assetId, effectiveFrom: authorization.effectiveFrom, reviewedAt: authorization.reviewedAt,
+      expiresAt: authorization.expiresAt, operatorReference: authorization.operatorReference, reviewReference: authorization.reviewReference,
+      recordedAt: "2026-09-29T14:02:07.000Z" });
+    expect(reRecorded).toMatchObject({ authorizationId: authorization.authorizationId, fingerprint: authorization.fingerprint });
     const resolved = resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.reviewedAt });
     expect(isTrustedM5ProviderSmokeAuthorization(resolved)).toBe(true);
     expect(isTrustedM5ProviderSmokeAuthorization(JSON.parse(JSON.stringify(resolved)))).toBe(false);
-    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: "2026-09-26T21:54:59.999Z" })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
-    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.effectiveFrom })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
+    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: "2026-09-29T14:01:06.999Z" })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
+    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: "2026-10-02T14:01:06.999Z" })).not.toThrow();
+    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.expiresAt })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
     expect(isTrustedM5ProviderReadinessEvaluation(resolved as unknown as ProviderReadinessEvaluation)).toBe(false);
     expect(() => assertM5ProviderReadinessForExecution(resolved as unknown as ProviderReadinessEvaluation)).toThrow();
     expect(isTrustedM5ProviderReadinessAggregate(resolved)).toBe(false);
-    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.expiresAt })).toThrow("M5_PROVIDER_SMOKE_AUTHORIZATION_EXPIRED");
+    const formerAuthorization = auth({ assetId: wethAddress, effectiveFrom: "2026-09-26T21:55:00.000Z", reviewedAt: "2026-09-26T22:00:00.000Z", expiresAt: "2026-09-28T22:00:00.000Z", recordedAt: "2026-09-26T22:02:24.000Z" });
+    expect(formerAuthorization).toMatchObject({ authorizationId: "m5-smoke-003cdeab0a209dd76795d48c", fingerprint: "e05f45995ada2205c54f0c9b76a6ce717f4de580993d006a3ca2bd75d874024c" });
+    expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization: formerAuthorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.reviewedAt })).toThrow("M5_PROVIDER_SMOKE_AUTHORITY_NOT_TRUSTED");
     expect(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.request.contractAddress).toBe(authorization.assetId);
     expect(M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.request.coinId).toBe("ethereum");
     const dryRun = planM5ProviderLiveSmoke({ config: M5_PROVIDER_LIVE_SMOKE_AUTHORIZATION_CONFIG.request, authorization, providerId: "coingecko", environment: "LOCAL_SMOKE", asOf: authorization.reviewedAt, trustedRegistry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY });
@@ -178,6 +187,12 @@ describe("M5 provider live smoke authorization", () => {
     expect(authorization.assetId).not.toBe("0xabcdef0123456789abcdef0123456789abcdef01");
     const fixtureAuthorization = auth({ assetId: "0xabcdef0123456789abcdef0123456789abcdef01", maximumResponseBytes: 512_000 });
     expect(() => resolveTrustedM5ProviderSmokeAuthorization({ authorization: fixtureAuthorization, registry: M5_PROVIDER_SMOKE_AUTHORITY_REGISTRY, asOf: authorization.reviewedAt })).toThrow("M5_PROVIDER_SMOKE_AUTHORITY_NOT_TRUSTED");
+  });
+
+  it("keeps production readiness BLOCKED despite local smoke reauthorization", async () => {
+    const productionConfig = JSON.parse(await readFile(new URL("../../config/m5/provider-readiness.production.json", import.meta.url), "utf8")) as unknown;
+    const result = evaluateM5ProviderReadinessConfig({ config: productionConfig, evaluatedAt: "2026-09-29T14:01:07.000Z" });
+    expect(result.result).toBe("BLOCKED");
   });
 
   it("keeps the smoke boundary free of persistence, storage, DB, and scheduler wiring", async () => {
