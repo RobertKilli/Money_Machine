@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ManualIngestionToLineageRepositories, ManualIngestionToLineageUnitOfWork } from "@/application/intelligence/manual-ingestion-to-lineage-uow";
 import type { AvailabilityClaim, IngestionAttempt, LifecycleEvent, SourceArtifact, SourceEnvelope, SourceObservation } from "@/domain/intelligence/ingestion-provenance";
 import type { SourceLineage, SourceLineageMember } from "@/domain/intelligence/source-lineage";
@@ -8,7 +8,22 @@ const now = "2026-09-25T12:00:00.000Z";
 const expiry = "2027-09-25T12:00:00.000Z";
 const registryModule = fileURLToPath(new URL("../../config/m5/provider-approval-authorities.production.json", import.meta.url));
 
+afterEach(() => {
+  vi.doUnmock(registryModule);
+  vi.resetModules();
+});
+
 describe("M5 configured approval registry module replacement", () => {
+  it("keeps the production registry default blocked for CoinGecko", async () => {
+    vi.doUnmock(registryModule);
+    vi.resetModules();
+    const resolver = await import("@/application/intelligence/resolve-m5-provider-approval-authority");
+    const result = resolver.resolveConfiguredM5ProviderApprovalAuthority({ approvalAuthorityId: "m5-provider-approval-authority:synthetic", approvalAuthorityFingerprint: "0".repeat(64), providerId: "coingecko", datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/range-v1", asOf: now });
+    expect(result.result).toBe("BLOCKED");
+    expect(result.blockers).toContain("M5_APPROVAL_AUTHORITY_NOT_ALLOWLISTED");
+    expect(resolver.isTrustedConfiguredM5ProviderApprovalAuthorityResolution(result)).toBe(false);
+  });
+
   it("issues configured, module-local aggregate trust only from the replacement registry", async () => {
     vi.resetModules();
     const approval = (await import("@/domain/intelligence/m5-provider-approval-authority")).createM5ProviderApprovalAuthority({ contractVersion: "m5-provider-approval-authority/v1", policyVersion: "m5-provider-approval-policy/v1", authorityVersion: "test/v1", providerId: "coingecko", datasetId: "coingecko-market-chart", datasetVersion: "coingecko-market-chart/range-v1", reviewedAt: now, effectiveFrom: now, expiresAt: expiry, recordedAt: now, usageDecisions: ["AUTHORITY_PERSISTENCE","COMMERCIAL_USE","NETWORK_ACQUISITION","NORMALIZED_STORAGE","RAW_PAYLOAD_PROCESSING","RAW_PAYLOAD_STORAGE","REDISTRIBUTION"].map(usage => ({ usage, decision: "APPROVED", evidence: [{ kind: "IDENTIFIER", value: "review/synthetic-approval/v1" }] })), retentionDecision: { decision: "APPROVED", evidence: [{ kind: "SHA256", value: "a".repeat(64) }] } });

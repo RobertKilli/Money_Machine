@@ -35,6 +35,10 @@ export const M5_DEFAULT_REQUESTED_USAGES: readonly M5ProviderUsage[] = [
 ];
 
 const satisfiesExecutionRequest = (request: ProviderReadinessExecutionRequest, evaluation: ProviderReadinessEvaluation): boolean => {
+  if (!Array.isArray(request.requiredCapabilities) || request.requiredCapabilities.length === 0 ||
+    !Array.isArray(request.requestedUsages) || request.requestedUsages.length === 0 ||
+    new Set(request.requiredCapabilities.map(item => item.capability)).size !== request.requiredCapabilities.length ||
+    new Set(request.requestedUsages).size !== request.requestedUsages.length) return false;
   const evaluatedCapabilities = new Map(evaluation.requiredCapabilities.map(item => [item.capability, item.completeness]));
   return request.requiredCapabilities.every(item => {
     const evaluated = evaluatedCapabilities.get(item.capability);
