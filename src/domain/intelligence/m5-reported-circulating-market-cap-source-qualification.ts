@@ -1,0 +1,48 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- strict own-property descriptor inspection is the trust boundary. */
+import { canonicalSha256 } from "./ingestion-provenance";
+
+export const M5_REPORTED_CIRCULATING_MARKET_CAP_QUALIFICATION_VERSION = "m5-reported-circulating-market-cap-source-qualification/v1" as const;
+export type M5ReportedCapStatus = "QUALIFIED" | "PARTIAL" | "BLOCKED" | "INVALID";
+export type M5ReportedCapProvider = "coinmarketcap" | "coingecko";
+export type M5ReportedCapApproval = "APPROVED" | "REQUIRES_APPROVAL" | "NOT_APPROVED";
+export type M5ReportedCapQualification = Readonly<{
+  contractVersion: typeof M5_REPORTED_CIRCULATING_MARKET_CAP_QUALIFICATION_VERSION;
+  qualificationId: string; qualificationFingerprint: string; metricKind: "REPORTED_CIRCULATING_MARKET_CAP";
+  providerId: M5ReportedCapProvider; datasetId: string; datasetVersion: string; providerAssetId: string;
+  chain: string; contractAddress: string; providerAssetName: string; providerAssetSymbol: string;
+  canonicalRepresentation: string; expectedCanonicalAssetId: string; mappingRevisionId: string; mappingRevisionFingerprint: string;
+  quoteCurrency: string; reportedValueBasis: "PROVIDER_CALCULATED_CIRCULATING" | "SELF_REPORTED" | "TOTAL_SUPPLY" | "FDV" | "UNKNOWN";
+  supplyBasis: "CIRCULATING" | "SELF_REPORTED_CIRCULATING" | "TOTAL" | "UNKNOWN"; priceBasis: string; providerMethodologyVersion: string;
+  providerValueTimestamp: string | null; supplyTimestamp: string | null; quoteTimestamp: string | null; effectiveAsOf: string | null;
+  nullMissingPolicy: string; freshnessPolicy: string; correctionRevisionPolicy: string;
+  evidenceReferences: readonly Readonly<{ url: string; title: string; checkedAt: string; classification: "DOCUMENTED" | "OBSERVED" | "INFERRED" | "UNKNOWN"; claims: readonly string[] }>[];
+  usageApproval: M5ReportedCapApproval; storageApproval: M5ReportedCapApproval; retentionApproval: M5ReportedCapApproval; redistributionApproval: M5ReportedCapApproval; commercialApproval: M5ReportedCapApproval;
+  blockers: readonly string[]; reviewedAt: string; effectiveFrom: string; expiresAt: string; recordedAt: string; status: M5ReportedCapStatus;
+}>;
+export type M5ReportedCapParse = Readonly<{ status: "VALID"; qualification: M5ReportedCapQualification }> | Readonly<{ status: "INVALID"; blockers: readonly ["M5_REPORTED_CAP_QUALIFICATION_INVALID"] }>;
+const INVALID: M5ReportedCapParse = Object.freeze({ status: "INVALID", blockers: ["M5_REPORTED_CAP_QUALIFICATION_INVALID"] as const });
+const trusted = new WeakSet<object>();
+const freeze = <T>(x: T): T => { if (x && typeof x === "object" && !Object.isFrozen(x)) { for (const y of Object.values(x as object)) freeze(y); Object.freeze(x); } return x; };
+const ts = (x: unknown): x is string => typeof x === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(x) && Number.isFinite(Date.parse(x)) && new Date(x).toISOString() === x;
+const exact = (x: unknown, keys: readonly string[]): x is Record<string, any> => { try { return !!x && typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype && Reflect.ownKeys(x).length === keys.length && Reflect.ownKeys(x).every(k => typeof k === "string" && keys.includes(k) && Object.getOwnPropertyDescriptor(x,k)?.value !== undefined && !Object.getOwnPropertyDescriptor(x,k)?.get && !Object.getOwnPropertyDescriptor(x,k)?.set); } catch { return false; } };
+const ID = /^[a-z0-9][a-z0-9._:/-]{0,127}$/;
+const strictArray = (x: unknown): x is unknown[] => { try { if (!Array.isArray(x) || Object.getPrototypeOf(x)!==Array.prototype) return false; const k=Reflect.ownKeys(x); if(k.length!==x.length+1||k.some(y=>typeof y!=="string"))return false; for(let i=0;i<x.length;i++){const d=Object.getOwnPropertyDescriptor(x,String(i));if(!d||!("value" in d)||d.get||d.set)return false;} return true; } catch { return false; } };
+const REQUIRED_CLAIMS = ["STABLE_PROVIDER_ASSET_ID","PROVIDER_CALCULATED_CIRCULATING_VALUE","CIRCULATING_SUPPLY_METHODOLOGY","VALUE_SUPPLY_QUOTE_TIMESTAMP_BOUND","NULL_MISSING_POLICY","FRESHNESS_POLICY","CORRECTION_REVISION_POLICY","QUOTE_CURRENCY"] as const;
+const keys = ["contractVersion","metricKind","providerId","datasetId","datasetVersion","providerAssetId","chain","contractAddress","providerAssetName","providerAssetSymbol","canonicalRepresentation","expectedCanonicalAssetId","mappingRevisionId","mappingRevisionFingerprint","quoteCurrency","reportedValueBasis","supplyBasis","priceBasis","providerMethodologyVersion","providerValueTimestamp","supplyTimestamp","quoteTimestamp","effectiveAsOf","nullMissingPolicy","freshnessPolicy","correctionRevisionPolicy","evidenceReferences","usageApproval","storageApproval","retentionApproval","redistributionApproval","commercialApproval","blockers","reviewedAt","effectiveFrom","expiresAt","recordedAt"] as const;
+export function parseM5ReportedCirculatingMarketCapQualification(input: unknown): M5ReportedCapParse {
+  try {
+    if (!exact(input, keys)) return INVALID; const x=input;
+    if (x.contractVersion !== M5_REPORTED_CIRCULATING_MARKET_CAP_QUALIFICATION_VERSION || x.metricKind !== "REPORTED_CIRCULATING_MARKET_CAP" || !["coinmarketcap","coingecko"].includes(x.providerId) || ![x.datasetId,x.datasetVersion,x.providerAssetId,x.expectedCanonicalAssetId,x.mappingRevisionId,x.priceBasis,x.providerMethodologyVersion,x.nullMissingPolicy,x.freshnessPolicy,x.correctionRevisionPolicy].every(v=>typeof v === "string" && ID.test(v) && !/https?:|api.?key|secret|token/i.test(v)) || typeof x.canonicalRepresentation!=="string"||!/^[A-Z][A-Z0-9._:/-]{0,127}$/.test(x.canonicalRepresentation)||typeof x.providerAssetName!=="string"||!x.providerAssetName.trim()||typeof x.providerAssetSymbol!=="string"||!/^[A-Z0-9]{2,16}$/.test(x.providerAssetSymbol)||!/^0x[0-9a-f]{40}$/.test(x.contractAddress) || !/^eip155:[1-9][0-9]*$/.test(x.chain) || !/^[A-Z]{3,8}$/.test(x.quoteCurrency) || !/^[a-f0-9]{64}$/.test(x.mappingRevisionFingerprint)) return INVALID;
+    if (![null,x.providerValueTimestamp].every(v=>v===null||ts(v)) || ![null,x.supplyTimestamp].every(v=>v===null||ts(v)) || ![null,x.quoteTimestamp].every(v=>v===null||ts(v)) || ![null,x.effectiveAsOf].every(v=>v===null||ts(v))) return INVALID;
+    if (!["PROVIDER_CALCULATED_CIRCULATING","SELF_REPORTED","TOTAL_SUPPLY","FDV","UNKNOWN"].includes(x.reportedValueBasis) || !["CIRCULATING","SELF_REPORTED_CIRCULATING","TOTAL","UNKNOWN"].includes(x.supplyBasis) || !["APPROVED","REQUIRES_APPROVAL","NOT_APPROVED"].every((_,i)=>[x.usageApproval,x.storageApproval,x.retentionApproval,x.redistributionApproval,x.commercialApproval][i] && ["APPROVED","REQUIRES_APPROVAL","NOT_APPROVED"].includes([x.usageApproval,x.storageApproval,x.retentionApproval,x.redistributionApproval,x.commercialApproval][i]))) return INVALID;
+    if ([x.providerValueTimestamp,x.supplyTimestamp,x.quoteTimestamp,x.effectiveAsOf].some(v=>v===null) || new Set([x.providerValueTimestamp,x.supplyTimestamp,x.quoteTimestamp,x.effectiveAsOf]).size!==1 || ["TOTAL_SUPPLY","FDV"].includes(x.reportedValueBasis)) return INVALID;
+    if (!strictArray(x.evidenceReferences) || x.evidenceReferences.length===0 || !strictArray(x.blockers) || x.blockers.some((b:unknown)=>typeof b!=="string"||!/^M5_[A-Z0-9_]+$/.test(b)) || new Set(x.blockers).size!==x.blockers.length) return INVALID;
+    const refs=[] as any[]; for(const r of x.evidenceReferences){ if(!exact(r,["url","title","checkedAt","classification","claims"])||!ts(r.checkedAt)||r.checkedAt>x.reviewedAt||typeof r.title!=="string"||!r.title.trim()||/https?:|api.?key|secret|token/i.test(r.title)||!strictArray(r.claims)||r.claims.some((c:unknown)=>typeof c!=="string"||!/^[A-Z][A-Z0-9_]{1,95}$/.test(c))||new Set(r.claims).size!==r.claims.length||!["DOCUMENTED","OBSERVED","INFERRED","UNKNOWN"].includes(r.classification)) return INVALID; const u=new URL(r.url); const domains=x.providerId==="coinmarketcap"?["coinmarketcap.com","pro.coinmarketcap.com"]:["docs.coingecko.com","coingecko.com"]; if(u.protocol!=="https:"||!domains.some(d=>u.hostname===d||u.hostname.endsWith(`.${d}`))||u.username||u.password||u.search||u.hash||u.href!==r.url) return INVALID; refs.push({url:r.url,title:r.title,checkedAt:r.checkedAt,classification:r.classification,claims:[...r.claims].sort()}); }
+    if(new Set(refs.map(r=>r.url)).size!==refs.length) return INVALID;
+    for(const t of [x.reviewedAt,x.effectiveFrom,x.expiresAt,x.recordedAt]) if(!ts(t)) return INVALID; if(x.reviewedAt>x.effectiveFrom||x.effectiveFrom>=x.expiresAt) return INVALID;
+    const body={...x,evidenceReferences:refs,blockers:[...x.blockers].sort()}; delete (body as any).recordedAt;
+    const fp=canonicalSha256(body); const claims=new Set(refs.filter(r=>r.classification==="DOCUMENTED").flatMap(r=>r.claims)); const approvals=[x.usageApproval,x.storageApproval,x.retentionApproval,x.redistributionApproval,x.commercialApproval]; const proven=REQUIRED_CLAIMS.every(c=>claims.has(c))&&x.reportedValueBasis==="PROVIDER_CALCULATED_CIRCULATING"&&x.supplyBasis==="CIRCULATING"&&approvals.every(a=>a==="APPROVED"); const status: M5ReportedCapStatus=x.blockers.length===0&&proven?"QUALIFIED":claims.size===0?"BLOCKED":"PARTIAL";
+    const result=freeze({...body,qualificationId:`m5-reported-circulating-market-cap-source-qualification:${fp}`,qualificationFingerprint:fp,recordedAt:x.recordedAt,status}) as unknown as M5ReportedCapQualification; trusted.add(result); return freeze({status:"VALID",qualification:result});
+  } catch { return INVALID; }
+}
+export const isAuthenticM5ReportedCapQualification=(x:unknown):x is M5ReportedCapQualification=>!!x&&typeof x==="object"&&trusted.has(x);
