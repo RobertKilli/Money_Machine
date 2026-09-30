@@ -98,3 +98,12 @@ The SEC Form 8-K/8-K/A source profile is separately qualified in
 its production acquisition remains BLOCKED. That profile does not issue event
 authority or qualify Form 6-K, 10-K, 10-Q, registration statements, or XBRL
 facts.
+
+The synthetic SEC 8-K follow-on implements a fixture-only reconciliation,
+artifact and deterministic claim pipeline. It stops at normalized candidate
+claims explicitly classified `NON_AUTHORITATIVE_EVENT_CLAIMS`; it cannot
+upgrade source qualification, establish issuer/asset mappings, issue event
+authority, persist data or generate signals. See
+`docs/SEC_EDGAR_8K_FIXTURE_CLAIM_PIPELINE.md`. Synthetic tests do not establish
+SEC response behavior, real-world extraction accuracy, corroboration, or
+permission to acquire or retain source material.

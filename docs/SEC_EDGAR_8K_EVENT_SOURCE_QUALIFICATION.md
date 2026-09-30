@@ -47,3 +47,15 @@ SEC requires an identifying User-Agent with contact details and documents a maxi
 **OBSERVED:** no filings, RSS entries, API response, or live endpoint was requested in this slice. **INFERRED:** metadata plus an archive index should allow a later pipeline to reconcile filing IDs and identify primary/exhibit locators, subject to corrections and acquisition errors. **UNKNOWN:** operational completeness, acceptable retention, redistribution/commercial approvals, availability/error budgets, content-type guarantees for every document, and full correction/revision behavior.
 
 Before the first fixture pipeline: define synthetic submissions/archive/RSS fixtures, parser and fingerprint contracts, correction lineage, MIME/size caps and tests. Before the first live request: separately approve an identifiable User-Agent, documented fair-access ceiling and local request budget, host/redirect policy, timeout/size/retry behavior, network access, storage/retention/redistribution/commercial terms, and observability that never logs raw bodies. This slice performs none of those operations.
+
+## Fixture claim pipeline boundary
+
+The fixture-only follow-on is documented in
+`docs/SEC_EDGAR_8K_FIXTURE_CLAIM_PIPELINE.md`. It accepts only synthetic
+`SYNTH-*` filing packages, reconciles metadata against synthetic document
+descriptors, and emits content-addressed artifacts and normalized
+`NON_AUTHORITATIVE_EVENT_CLAIMS`. This does not observe an SEC response,
+upgrade this PARTIAL qualification, enable requests, or establish event
+authority. The fixture pipeline preserves original and 8-K/A amendment claims
+as append-only correction lineage; it does not treat the amendment as
+destructive replacement.

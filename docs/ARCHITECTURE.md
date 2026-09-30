@@ -839,3 +839,13 @@ filing identity, but remains PARTIAL; it does not enable acquisition or event
 authority. Form 6-K, 10-K, 10-Q, registration statements and XBRL facts are
 outside this qualification. See
 `docs/SEC_EDGAR_8K_EVENT_SOURCE_QUALIFICATION.md`.
+
+The fixture-only implementation in
+`src/domain/intelligence/sec-edgar-8k-fixture-claim-pipeline.ts` reconciles
+synthetic submissions, index and document material, creates separate
+immutable artifacts, and extracts deterministic normalized claims. Its result
+is always `NON_AUTHORITATIVE_EVENT_CLAIMS`; source qualification, issuer/asset
+mapping, corroboration, event authority, persistence and signals are separate
+boundaries and remain blocked. Receipt/effective availability is tracked
+separately from document and claim identity. See
+`docs/SEC_EDGAR_8K_FIXTURE_CLAIM_PIPELINE.md`.
