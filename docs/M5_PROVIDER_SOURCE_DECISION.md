@@ -25,6 +25,12 @@ readiness result.
 
 The machine-readable file [`config/m5/provider-readiness.production.json`](../config/m5/provider-readiness.production.json) is scoped only to CoinGecko's `coingecko-market-chart` dataset/version. It records the three market-series capabilities exposed by that dataset and all seven usages as `REQUIRES_APPROVAL`. It does not represent the other providers or the combined production stack. The existing `m5-provider-readiness-config/v1` contract binds one provider/dataset/version; the separate `m5-provider-readiness-aggregate/v1` composes authentic, scope-matched results without changing that contract.
 
+The follow-on [M5 market metric source-gap decision](M5_MARKET_METRIC_SOURCE_GAP_DECISION.md)
+assesses candidates separately for each metric. It leaves daily close, market
+cap, and rolling 24-hour volume BLOCKED, keeps CoinGecko qualification PARTIAL,
+and introduces no source selection, legal/usage approval, storage entitlement,
+or readiness change.
+
 The authoritative single-scope usage enum contains exactly seven values: `NETWORK_ACQUISITION`, `RAW_PAYLOAD_PROCESSING`, `RAW_PAYLOAD_STORAGE`, `NORMALIZED_STORAGE`, `AUTHORITY_PERSISTENCE`, `REDISTRIBUTION`, and `COMMERCIAL_USE`. Aggregate policy carries those exact seven values independently for each provider; provider access remains `NETWORK_ACQUISITION`, and raw storage remains `RAW_PAYLOAD_STORAGE`. It also records a separate `RETENTION` decision. Retention is a data-lifecycle constraint (how long material may be kept and when it must be deleted), not an additional value in the existing provider usage enum. It is checked independently and cannot authorize raw storage, normalized storage or any other usage. Thus the aggregate has seven inherited usage decisions plus one separate retention decision per source; it does not redefine the seven-value source contract.
 
 ## What M5 needs
