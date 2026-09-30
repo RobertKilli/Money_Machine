@@ -96,6 +96,7 @@ const freeze = <T>(value: T): T => {
   return value;
 };
 const INVALID: M5CoinGeckoQualificationParseResult = freeze({ status: "INVALID" as const, blockers: ["M5_CG_QUALIFICATION_INVALID"] as const });
+const authenticQualifications = new WeakSet<object>();
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const exact = (value: unknown, keys: readonly string[]): value is Record<string, unknown> => {
   try {
@@ -167,7 +168,14 @@ function parseQualification(input: unknown): M5CoinGeckoQualificationParseResult
     blockers, status,
   };
   const qualificationFingerprint = canonicalSha256(body);
-  return freeze({ status: "VALID", qualification: freeze({ ...body, qualificationId: `m5-coingecko-market-source-qualification:${qualificationFingerprint}`, qualificationFingerprint, recordedAt: row.recordedAt }) });
+  const qualification = freeze({ ...body, qualificationId: `m5-coingecko-market-source-qualification:${qualificationFingerprint}`, qualificationFingerprint, recordedAt: row.recordedAt });
+  authenticQualifications.add(qualification);
+  return freeze({ status: "VALID", qualification });
+}
+
+/** Runtime-local provenance check for guards that consume parsed qualifications. */
+export function isAuthenticM5CoinGeckoMarketSourceQualification(value: unknown): value is M5CoinGeckoMarketSourceQualification {
+  return typeof value === "object" && value !== null && authenticQualifications.has(value);
 }
 
 export function parseM5CoinGeckoMarketSourceQualification(input: unknown): M5CoinGeckoQualificationParseResult {

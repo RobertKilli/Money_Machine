@@ -69,6 +69,22 @@ The production decisions are all BLOCKED. They do not select a source, grant leg
 
 First obtain Robert’s product decisions listed above. Then implement only a **synthetic, test-only semantics proof** for the chosen daily-close source: pin an exact venue/instrument identity and documented UTC candle rule, plus history/gap/correction fixtures; do not add provider calls or persistence. In parallel, prepare a separate versioned proposal for the market-cap basis and one for rolling-vs-bucket volume. Do not begin production acquisition until field-level source guarantees and usage/storage/legal approval are explicit. Do not change readiness to READY in that slice.
 
+## Additive product decision: precise scoped metrics (2026-09-30)
+
+Robert selected **PRESISE SCOPED METRICS**. The follow-on
+`m5-scoped-market-metric-direction/v1` records the chosen definitions while
+leaving all three `BLOCKED`: `NAMED_VENUE_DAILY_CLOSE`,
+`REPORTED_CIRCULATING_MARKET_CAP`, and
+`DECLARED_VENUE_SET_ROLLING_24H_VOLUME`. This is a product-definition choice,
+not provider selection, source qualification, usage/legal approval, readiness,
+or permission to persist. Existing global source-gap records and authority
+contracts remain intact. `totalSupply × price` is not circulating market cap;
+an aggregate or daily bucket is not proof of an exact rolling 24-hour window.
+The next implementation should qualify concrete provider fields and venue or
+instrument scope against the new contract, with an explicit canonical asset
+mapping, then review additive persistence separately. See
+`docs/M5_SCOPED_MARKET_METRIC_CONTRACTS.md`.
+
 ## Official references checked 2026-09-30 01:47 UTC
 
 All URLs below are official provider, standards, or Ethereum Foundation sources. “Documented” means the cited page states the narrow claim; it does not imply that the evidence meets the complete M5 contract.
