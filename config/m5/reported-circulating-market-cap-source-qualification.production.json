@@ -7,11 +7,20 @@
   "recordedAt": "2026-09-30T04:40:00.000Z",
   "selectedSource": null,
   "productionProjection": "BLOCKED",
-  "usageApproval": "NOT_APPROVED",
+  "usageApprovals": [
+    { "usage": "AUTHORITY_PERSISTENCE", "approval": "NOT_APPROVED" },
+    { "usage": "COMMERCIAL_USE", "approval": "NOT_APPROVED" },
+    { "usage": "NETWORK_ACQUISITION", "approval": "NOT_APPROVED" },
+    { "usage": "NORMALIZED_STORAGE", "approval": "NOT_APPROVED" },
+    { "usage": "RAW_PAYLOAD_PROCESSING", "approval": "NOT_APPROVED" },
+    { "usage": "RAW_PAYLOAD_STORAGE", "approval": "NOT_APPROVED" },
+    { "usage": "REDISTRIBUTION", "approval": "NOT_APPROVED" }
+  ],
   "storageApproval": "NOT_APPROVED",
   "retentionApproval": "NOT_APPROVED",
   "redistributionApproval": "NOT_APPROVED",
   "commercialApproval": "NOT_APPROVED",
+  "mappingAuthority": null,
   "candidates": [
     {
       "providerId": "coinmarketcap",
@@ -40,7 +49,7 @@
       "correctionRevisionPolicy": "PROVIDER_CORRECTION_AND_REVISION_POLICY_UNKNOWN",
       "evidenceReferences": [
         { "url": "https://coinmarketcap.com/api/documentation/pro-api-reference/cryptocurrency", "title": "CoinMarketCap Cryptocurrency API Documentation", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CMC_STABLE_NUMERIC_ID_SEMANTICS_DOCUMENTED", "CMC_PLATFORM_AND_TOKEN_ADDRESS_FIELDS_DOCUMENTED", "CMC_QUOTES_HISTORICAL_HAS_POINT_TIMESTAMP_AND_QUOTE_TIMESTAMP"] },
-        { "url": "https://support.coinmarketcap.com/hc/en-us/articles/360043396252-Supply-Circulating-Total-Max", "title": "Supply (Circulating, Total, Max) – CoinMarketCap", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CMC_CIRCULATING_CAP_PUBLIC_FLOAT_TIMES_PRICE_DOCUMENTED", "CMC_VERIFIED_SUPPLY_METHODOLOGY_DOCUMENTED", "CMC_CIRCULATING_AND_SELF_REPORTED_FIELDS_DISTINCT", "CMC_MARKET_CAP_AND_FDV_FIELDS_DISTINCT"] },
+        { "url": "https://support.coinmarketcap.com/hc/en-us/articles/360043396252-Supply-Circulating-Total-Max", "title": "Supply (Circulating, Total, Max) - CoinMarketCap", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CMC_CIRCULATING_CAP_PUBLIC_FLOAT_TIMES_PRICE_DOCUMENTED", "CMC_VERIFIED_SUPPLY_METHODOLOGY_DOCUMENTED", "CMC_CIRCULATING_AND_SELF_REPORTED_FIELDS_DISTINCT", "CMC_MARKET_CAP_AND_FDV_FIELDS_DISTINCT"] },
         { "url": "https://coinmarketcap.com/api/pricing/", "title": "CoinMarketCap API Pricing Plans", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CMC_REFRESH_AND_PLAN_LIMITS_DOCUMENTED"] },
         { "url": "https://pro.coinmarketcap.com/user-agreement-commercial/", "title": "CoinMarketCap API Commercial Terms of Use", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CMC_TERMS_USAGE_SCOPE_DOCUMENTED"] },
         { "url": "https://coinmarketcap.com/api/documentation/guides/get-historical-price-data", "title": "Get Historical Price Data with CoinMarketCap API", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CMC_HISTORICAL_QUOTES_MAY_SKIP_EMPTY_INTERVALS"] }
@@ -52,7 +61,7 @@
       "providerId": "coingecko",
       "datasetId": "coingecko-contract-market-chart",
       "datasetVersion": "coingecko-contract-market-chart/range-v1",
-      "providerAssetId": "coingecko-asset-id-unverified",
+      "providerAssetId": "weth",
       "chainId": "eip155:1",
       "contractAddress": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
       "providerAssetName": "WETH",
@@ -74,12 +83,15 @@
       "freshnessPolicy": "DAILY_CHART_AVAILABILITY_DOCUMENTED; MARKET_CAP_VALUE_FRESHNESS_AND_SUPPLY_ASOF_NOT_PROVEN",
       "correctionRevisionPolicy": "PROVIDER_CORRECTION_AND_REVISION_POLICY_UNKNOWN",
       "evidenceReferences": [
-        { "url": "https://docs.coingecko.com/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Pro API Reference)", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_CONTRACT_ADDRESS_LOOKUP_DOCUMENTED", "CG_MARKET_CAP_SUPPLY_TOTAL_SUPPLY_AND_FDV_FIELDS_DOCUMENTED", "CG_HISTORICAL_MARKET_CAP_TIMESTAMP_PAIRS_DOCUMENTED"] },
-        { "url": "https://docs.coingecko.com/v3.0.1/changelog/15072020", "title": "CoinGecko API Changelog: Contract Market Data and Historical Supply", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_MARKET_CAP_FORMULA_NOT_DOCUMENTED", "CG_NULL_AND_CORRECTION_POLICY_NOT_DOCUMENTED"] },
+        { "url": "https://docs.coingecko.com/reference/coins-contract-address", "title": "Coin Data by Token Address", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_EXAMPLE_WETH_ID_SYMBOL_NAME_ETHEREUM_AND_CONTRACT_DOCUMENTED", "CG_EXAMPLE_MARKET_CAP_FDV_TOTAL_SUPPLY_CIRCULATING_SUPPLY_AND_LAST_UPDATED_FIELDS_DOCUMENTED"] },
+        { "url": "https://docs.coingecko.com/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_CONTRACT_ADDRESS_MARKET_CHART_ROUTE_DOCUMENTED", "CG_HISTORICAL_MARKET_CAP_TIMESTAMP_VALUE_PAIRS_DOCUMENTED", "CG_PLAN_HISTORY_GRANULARITY_AND_DAILY_REFRESH_DOCUMENTED"] },
+        { "url": "https://support.coingecko.com/hc/en-us/articles/4499342867609-How-to-Add-or-Update-Your-Token-s-Circulating-Supply-and-Market-Cap", "title": "How to Add or Update Your Token's Circulating Supply and Market Cap", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_GENERAL_MARKET_CAP_PRICE_TIMES_CIRCULATING_SUPPLY_FORMULA_DOCUMENTED"] },
+        { "url": "https://support.coingecko.com/hc/en-us/articles/32294647667865-CoinGecko-Supply-Methodology", "title": "CoinGecko Supply Methodology", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_GENERAL_CIRCULATING_SUPPLY_METHODOLOGY_DOCUMENTED"] },
+        { "url": "https://support.coingecko.com/hc/en-us/articles/35567073957145-CoinGecko-Supply-Update-FAQ", "title": "CoinGecko Supply Update FAQ", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_WRAPPED_ASSETS_TRACKED_BUT_EXCLUDED_FROM_GLOBAL_MARKET_CAP_DOCUMENTED"] },
         { "url": "https://www.coingecko.com/en/api_terms", "title": "CoinGecko API Terms of Service", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_API_TERMS_RESTRICT_STORAGE_AND_REDISTRIBUTION"] },
-        { "url": "https://www.coingecko.com/en/api/pricing", "title": "Crypto API Pricing Plans: historical supply endpoints", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_HISTORY_DOES_NOT_BIND_SUPPLY_TO_MARKET_CAP_ASOF"] }
+        { "url": "https://www.coingecko.com/en/api/pricing", "title": "Crypto API Pricing Plans", "classification": "DOCUMENTED", "checkedAt": "2026-09-30T04:40:00.000Z", "claims": ["CG_PLAN_HISTORY_LIMITS_DOCUMENTED"] }
       ],
-      "blockers": ["CG_MARKET_CAP_CIRCULATING_FORMULA_NOT_DOCUMENTED", "CG_HISTORICAL_SUPPLY_VALUE_ASOF_BINDING_NOT_DOCUMENTED", "CG_NULL_AND_CORRECTION_POLICY_NOT_DOCUMENTED", "CG_USAGE_STORAGE_RETENTION_REDISTRIBUTION_AND_COMMERCIAL_APPROVAL_REQUIRED", "MAPPING_AUTHORITY_REQUIRED", "RUNTIME_DATA_APPROVALS_NOT_GRANTED"],
+      "blockers": ["CG_EXAMPLE_SCHEMA_DOES_NOT_VERIFY_RUNTIME_WETH_OBSERVATION", "CG_HISTORICAL_POINT_CIRCULATING_BASIS_AND_COMMON_ASOF_NOT_PROVEN", "CG_WRAPPED_ASSET_GLOBAL_MARKET_CAP_EXCLUSION_REQUIRES_ASSET_SPECIFIC_SCOPE_REVIEW", "CG_NULL_AND_CORRECTION_POLICY_UNKNOWN", "CG_USAGE_STORAGE_RETENTION_REDISTRIBUTION_AND_COMMERCIAL_APPROVAL_REQUIRED", "MAPPING_AUTHORITY_REQUIRED", "RUNTIME_DATA_APPROVALS_NOT_GRANTED"],
       "status": "PARTIAL"
     }
   ]
