@@ -32,4 +32,6 @@ Provider representation and canonical asset identity are distinct. A contract ad
 
 Later implementation should proceed in separate reviewed slices: (1) choose a venue/instrument, canonical asset mapping and lawful use scope; (2) qualify field-level source semantics and coverage using synthetic fixtures first; (3) design a new additive persistence/SourceLineage migration for the new versioned records; (4) only after independent approval, implement acquisition and persistence. No migration, provider call, scheduler or canonical write is part of this change.
 
+The source review in [M5 named venue daily close source qualification](M5_NAMED_VENUE_DAILY_CLOSE_SOURCE_QUALIFICATION.md) binds its candidate records to this contract version. Coinbase Exchange ETH-USD is PARTIAL and Kraken Spot ETH/USD is BLOCKED; no provider is selected. Neither source qualification creates mapping authority or use/storage/commercial approval, and both produce a zero projection under the additional candidate guard. Other metrics and legacy consumers remain unchanged and blocked.
+
 The scoped guard is server-only and pure: it has no transport, UoW, database, persistence or side effects. It returns only READY/BLOCKED/INVALID and sanitized blocker codes. With current PARTIAL qualification and no mapping authority, it does not grant READY.

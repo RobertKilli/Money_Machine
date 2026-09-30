@@ -1,5 +1,13 @@
 # Architecture
 
+M5 scoped daily-close source qualification is an additive, versioned domain
+boundary. The Coinbase Exchange ETH-USD candidate is PARTIAL and Kraken Spot
+ETH/USD is BLOCKED; neither is selected, mapped, approved, or enabled. Their
+official documentation does not establish every required daily UTC boundary,
+gap, correction, history, identity, and usage condition. The pure server-only
+projection guard returns no output unless qualification and exact source scope
+match. See [M5 named venue daily close source qualification](M5_NAMED_VENUE_DAILY_CLOSE_SOURCE_QUALIFICATION.md).
+
 Milestone 1 financial behavior is locked in [Financial Policies](FINANCIAL_POLICIES.md). Architectural modules must consume those versioned policies rather than duplicate constants or rounding logic.
 
 ## 1. Decision: account-scoped modular monolith

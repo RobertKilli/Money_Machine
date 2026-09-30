@@ -1,0 +1,29 @@
+{
+  "version": "m5-named-venue-daily-close-source-qualification/v1",
+  "reviewedAt": "2026-09-30T03:57:19.000Z",
+  "selectedSource": null,
+  "productionStatus": "BLOCKED",
+  "candidates": [
+    {
+      "venueId": "coinbase-exchange",
+      "instrumentId": "ETH-USD",
+      "baseAsset": "ETH",
+      "quoteAsset": "USD",
+      "marketType": "SPOT",
+      "qualificationStatus": "PARTIAL",
+      "blockers": ["M5_DAILY_CLOSE_PRODUCT_CURRENT_IDENTITY_UNVERIFIED", "M5_DAILY_CLOSE_UTC_BOUNDARY_UNSPECIFIED", "M5_DAILY_CLOSE_GAP_POLICY_UNQUALIFIED", "M5_DAILY_CLOSE_CORRECTION_FINALITY_UNKNOWN", "M5_DAILY_CLOSE_HISTORY_COVERAGE_UNPROVEN", "M5_DAILY_CLOSE_MAPPING_AUTHORITY_REQUIRED", "M5_DAILY_CLOSE_USAGE_STORAGE_APPROVAL_REQUIRED"]
+    },
+    {
+      "venueId": "kraken-spot",
+      "instrumentId": "ETH/USD",
+      "baseAsset": "ETH",
+      "quoteAsset": "USD",
+      "marketType": "SPOT",
+      "qualificationStatus": "BLOCKED",
+      "blockers": ["M5_DAILY_CLOSE_CANONICAL_PAIR_ID_UNVERIFIED", "M5_DAILY_CLOSE_UTC_BOUNDARY_UNSPECIFIED", "M5_DAILY_CLOSE_CURRENT_CANDLE_MUST_BE_FILTERED", "M5_DAILY_CLOSE_GAP_POLICY_UNQUALIFIED", "M5_DAILY_CLOSE_CORRECTION_FINALITY_UNKNOWN", "M5_DAILY_CLOSE_HISTORY_LIMIT_720", "M5_DAILY_CLOSE_MAPPING_AUTHORITY_REQUIRED", "M5_DAILY_CLOSE_USAGE_STORAGE_APPROVAL_REQUIRED"]
+    }
+  ],
+  "otherScopedMetrics": "BLOCKED",
+  "mappingAuthority": null,
+  "usageStorageCommercialApproval": null
+}
