@@ -782,3 +782,15 @@ the acquisition usages. Retention is not an authority grant: it does not imply
 raw-payload storage, normalized storage, or authority persistence. Repository
 and database errors deliberately propagate; the handoff has no repair,
 newest-wins, UPDATE, or DELETE behavior.
+
+### M5 scoped market metric contracts
+
+The additive `m5-scoped-market-metric-contract/v1` defines named-venue UTC daily
+close, provider-reported circulating market cap, and rolling 24-hour volume for
+an explicit venue set. These scoped definitions do not rewrite the older
+global metric authorities or upgrade readiness. A server-only, side-effect-free
+guard requires an authentic exact source qualification and explicit canonical
+asset mapping authority. The current qualification schema does not bind the
+scoped metric hash, and this pure guard does not resolve mapping authority, so
+both are blockers; CoinGecko is also PARTIAL. These records remain blocked. See
+`docs/M5_SCOPED_MARKET_METRIC_CONTRACTS.md`.
