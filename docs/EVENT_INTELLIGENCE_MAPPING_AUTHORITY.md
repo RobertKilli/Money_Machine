@@ -30,9 +30,10 @@ canonical-asset registry, revise M5 mapping tables, or add persistence.
 Issuer mapping is separate. `event-intelligence-issuer-mapping-authority/v1`
 maps a source registrant key and normalized CIK to a canonical issuer and legal
 entity. For the fixture source, the synthetic registrant key is explicitly
-paired in the reviewed authority with a ten-digit normalized CIK; the fixture
-key itself is not an SEC CIK. For `SEC_EDGAR`, the source registrant key must be
-the same canonical zero-padded CIK.
+paired in the reviewed authority with a ten-digit zero-padded synthetic CIK
+whose digits are mechanically bound to the fixture key; the fixture key itself
+is not an SEC CIK. For `SEC_EDGAR`, the source registrant key must be the same
+canonical zero-padded CIK.
 
 ## Issuer authority
 
@@ -66,6 +67,10 @@ identity assertion ID/fingerprint, evidence, interval, revocation and
 supersession. The chain and address must match the existing typed provider
 identity assertion; the canonical representation ID must match the existing
 mapping revision's canonical identifier.
+The event binding additionally requires the identifier's explicit
+`representation:<chain-id>:<erc20|bridged|wrapped>:<stable-id>` grammar to
+agree with its chain and representation fields. It cannot label an ERC-20
+revision as wrapped/bridged, or the reverse.
 
 The currently reusable provider identity contract supports EVM contract
 addresses. This event binding therefore accepts explicit ERC-20, wrapped, or
@@ -83,11 +88,18 @@ scope, and material fingerprints before minting module-local runtime trust.
 Strict parse output is immutable but untrusted. Spread, clone, serialization,
 and fabricated lookalikes do not retain runtime trust. Production configuration
 contains no authority; passing a record in a caller-created registry does not
-make it trusted.
+make it trusted. Resolver registry entries are all runtime-checked before any
+record fields are inspected.
 
 The side-effect-free resolvers return only `RESOLVED`, `INCOMPLETE`, `CONFLICT`,
 `EXPIRED`, `REVOKED`, or `INVALID`. No first-match or newest-wins behavior is
-used. The assembler requires an authentic fixture pipeline result and a claim
+used. Each `RESOLVED` witness carries its exact query `asOf`; the assembler
+requires both witnesses to match the explicit `mappingAsOf`, which is
+`claim.announcementAt` in this fixture-only contract. Filing/acceptance/receipt,
+signing, completion, and review timestamps are never silently substituted.
+Authorities reviewed after that point are excluded; future `effectiveFrom`
+records are not active. Forked supersession chains invalidate the registry,
+including for historical lookups. The assembler requires an authentic fixture pipeline result and a claim
 that is a member of its trusted sealed claim set, plus an exact issuer authority,
 an exact asset mention binding, compatible source/extraction scope, and both
 mappings valid at the claim announcement time. It rejects claims connected to
@@ -96,10 +108,12 @@ correction claims and unsupported lifecycle states cannot be assembled.
 
 Assembly returns a deep-frozen
 `MAPPED_NON_AUTHORITATIVE_EVENT_CLAIM`, binding original claim identity,
-issuer authority, canonical legal entity, existing asset mapping revision,
-canonical asset representation, and mapping `asOf`. Its runtime trust is
-module-local. It is not an authoritative event, corroboration result, signal,
-or order. `rejectMappedClaimAsEventAuthority` always returns `null`.
+filing package ID/fingerprint, source artifact ID/fingerprint, issuer
+authority, canonical legal entity, mention-binding ID/fingerprint, existing
+asset mapping revision, canonical asset representation, and mapping `asOf`.
+Its runtime trust is module-local. It is not an authoritative event,
+corroboration result, signal, or order. `rejectMappedClaimAsEventAuthority`
+always returns `null`.
 
 ## Production posture and next slice
 

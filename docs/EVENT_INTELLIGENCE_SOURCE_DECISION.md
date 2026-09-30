@@ -89,6 +89,8 @@ Its production registries remain empty and event claims can only reach
 upgrade those mappings. Corroboration and event-authority policy remain the
 next upstream review boundary. See
 [`EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md`](EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md).
+Mapping assembly uses the claim's explicit `announcementAt` as `mappingAsOf`;
+it does not substitute filing, receipt, signing, or completion time.
 
 Before the first live acquisition, a separate reviewed slice must:
 

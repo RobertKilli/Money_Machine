@@ -2,7 +2,7 @@ import "server-only";
 import { types as utilTypes } from "node:util";
 import { assertAssetMappingRevision, type AssetMappingRevision } from "@/domain/intelligence/asset-mapping-revision";
 import { assertProviderAssetIdentityAssertion, type ProviderAssetIdentityAssertion } from "@/domain/intelligence/provider-asset-identity-assertion";
-import { isAuthenticSecEdgar8kFixtureClaim, isAuthenticSecEdgar8kFixtureResult, SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION, type SecEdgar8kFixtureClaim, type SecEdgar8kFixtureResult } from "@/domain/intelligence/sec-edgar-8k-fixture-claim-pipeline";
+import { isAuthenticSecEdgar8kFixtureArtifact, isAuthenticSecEdgar8kFixtureClaim, isAuthenticSecEdgar8kFixturePackage, isAuthenticSecEdgar8kFixtureResult, SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION, type SecEdgar8kFixtureClaim, type SecEdgar8kFixtureResult } from "@/domain/intelligence/sec-edgar-8k-fixture-claim-pipeline";
 import { canonicalSha256 } from "@/domain/intelligence/ingestion-provenance";
 
 export const EVENT_ISSUER_MAPPING_VERSION = "event-intelligence-issuer-mapping-authority/v1" as const;
@@ -65,6 +65,7 @@ export type EventAssetMentionBinding = Readonly<{
   providerAssetIdentityAssertionFingerprint: string;
   evidence: readonly EvidenceReference[];
   effectiveFrom: string;
+  reviewedAt: string;
   expiresAt: string | null;
   revokedAt: string | null;
   supersedesBindingId: string | null;
@@ -76,10 +77,12 @@ export type EventAssetMentionBinding = Readonly<{
 export type IssuerMappingResolution = Readonly<{
   status: "RESOLVED" | "INCOMPLETE" | "CONFLICT" | "EXPIRED" | "REVOKED" | "INVALID";
   authority: EventIssuerMappingAuthority | null;
+  asOf: string | null;
 }>;
 export type AssetMappingResolution = Readonly<{
   status: "RESOLVED" | "INCOMPLETE" | "CONFLICT" | "EXPIRED" | "REVOKED" | "INVALID";
   binding: EventAssetMentionBinding | null;
+  asOf: string | null;
 }>;
 
 export type MappedNonAuthoritativeEventClaim = Readonly<{
@@ -89,12 +92,18 @@ export type MappedNonAuthoritativeEventClaim = Readonly<{
   fingerprint: string;
   claimId: string;
   claimFingerprint: string;
+  sourceFilingPackageId: string;
+  sourceFilingPackageFingerprint: string;
+  sourceArtifactId: string;
+  sourceArtifactFingerprint: string;
   issuerAuthorityId: string;
   issuerAuthorityFingerprint: string;
   canonicalIssuerId: string;
   canonicalLegalEntityId: string;
   assetBindingId: string;
   assetBindingFingerprint: string;
+  mentionBindingId: string;
+  mentionBindingFingerprint: string;
   mappingRevisionId: string;
   mappingRevisionFingerprint: string;
   canonicalAssetId: string;
@@ -116,6 +125,7 @@ const CIK = /^\d{10}$/;
 const SOURCE_ID = /^[A-Z][A-Z0-9_:-]{2,95}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$/;
 const LOWER_ADDRESS = /^0x[0-9a-f]{40}$/;
+const CANONICAL_REPRESENTATION = /^representation:(eip155:[1-9][0-9]*):(erc20|bridged|wrapped):[A-Za-z0-9:_-]{1,96}$/;
 const OBJECT_INTRINSICS = new Set<PropertyKey>(["constructor", "__defineGetter__", "__defineSetter__", "hasOwnProperty", "__lookupGetter__", "__lookupSetter__", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString", "toString", "valueOf", "__proto__"]);
 const ARRAY_INTRINSICS = new Set<PropertyKey>(["length", "constructor", "at", "concat", "copyWithin", "fill", "find", "findIndex", "findLast", "findLastIndex", "lastIndexOf", "pop", "push", "reverse", "shift", "unshift", "slice", "sort", "splice", "includes", "indexOf", "join", "keys", "entries", "values", "forEach", "filter", "flat", "flatMap", "map", "every", "some", "reduce", "reduceRight", "toLocaleString", "toString", "toReversed", "toSorted", "toSpliced", "with", Symbol.iterator, Symbol.unscopables]);
 
@@ -133,6 +143,13 @@ function strictArray(value: unknown): value is unknown[] {
     return keys.length === value.length + 1 && keys.every(key => key === "length" || (typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key) && Number(key) < value.length && (() => { const d = Object.getOwnPropertyDescriptor(value, key); return !!d && "value" in d && !d.get && !d.set; })()));
   } catch { return false; }
 }
+function strictDataRecord(value: unknown, required: readonly string[], optional: readonly string[] = []): value is Record<string, unknown> {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value) || utilTypes.isProxy(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+    const own = Reflect.ownKeys(value);
+    return required.every(key => own.includes(key)) && own.length >= required.length && own.length <= required.length + optional.length && own.every(key => typeof key === "string" && [...required, ...optional].includes(key) && (() => { const descriptor = Object.getOwnPropertyDescriptor(value, key); return !!descriptor && "value" in descriptor && !descriptor.get && !descriptor.set; })());
+  } catch { return false; }
+}
 function fail(code: string): never { throw new Error(code); }
 function text(value: unknown, code: string, max = 160): string {
   if (typeof value !== "string" || value !== value.trim() || value.length < 1 || value.length > max || /[\u0000-\u001f\u007f]/.test(value) || /https?:\/\/|www\.|\b(?:api[_-]?key|secret|token|password)\b/i.test(value)) return fail(code);
@@ -147,11 +164,11 @@ function hash(value: unknown, code: string): string { const result = text(value,
 function usableAt(status: IssuerMappingStatus, effectiveFrom: string, expiresAt: string | null, revokedAt: string | null, asOf: string): boolean {
   return (status === "ACTIVE" || status === "SUPERSEDED" || (status === "REVOKED" && revokedAt !== null && asOf < revokedAt)) && effectiveFrom <= asOf && (expiresAt === null || asOf < expiresAt);
 }
-function issuerResolution(status: IssuerMappingResolution["status"], authority: EventIssuerMappingAuthority | null = null): IssuerMappingResolution {
-  const result = Object.freeze({ status, authority }); if (status === "RESOLVED") issuerResolutionTrust.add(result); return result;
+function issuerResolution(status: IssuerMappingResolution["status"], authority: EventIssuerMappingAuthority | null = null, asOf: string | null = null): IssuerMappingResolution {
+  const result = Object.freeze({ status, authority, asOf }); if (status === "RESOLVED") issuerResolutionTrust.add(result); return result;
 }
-function assetResolution(status: AssetMappingResolution["status"], binding: EventAssetMentionBinding | null = null): AssetMappingResolution {
-  const result = Object.freeze({ status, binding }); if (status === "RESOLVED") assetResolutionTrust.add(result); return result;
+function assetResolution(status: AssetMappingResolution["status"], binding: EventAssetMentionBinding | null = null, asOf: string | null = null): AssetMappingResolution {
+  const result = Object.freeze({ status, binding, asOf }); if (status === "RESOLVED") assetResolutionTrust.add(result); return result;
 }
 function evidence(values: unknown): readonly EvidenceReference[] {
   if (!strictArray(values) || values.length === 0 || values.length > 32) return fail("EVENT_MAPPING_EVIDENCE_INVALID");
@@ -177,11 +194,11 @@ function issuerMaterial(input: IssuerMappingInput | EventIssuerMappingAuthority)
   const sourceRegistrantId = text(input.sourceRegistrantId, "EVENT_ISSUER_SOURCE_REGISTRANT_INVALID");
   if (sourceNamespace !== "SEC_EDGAR" && sourceNamespace !== "SEC_EDGAR_8K_FIXTURE") return fail("EVENT_ISSUER_SOURCE_INVALID");
   if (input.jurisdiction !== "US" || input.regulator !== "SEC") return fail("EVENT_ISSUER_REGULATOR_SCOPE_INVALID");
-  if ((sourceNamespace === "SEC_EDGAR" && sourceRegistrantId !== normalizedCik) || (sourceNamespace === "SEC_EDGAR_8K_FIXTURE" && !/^SYNTH-CIK-[0-9]{4}$/.test(sourceRegistrantId))) return fail("EVENT_ISSUER_SOURCE_REGISTRANT_INVALID");
+  if ((sourceNamespace === "SEC_EDGAR" && sourceRegistrantId !== normalizedCik) || (sourceNamespace === "SEC_EDGAR_8K_FIXTURE" && (!/^SYNTH-CIK-[0-9]{4}$/.test(sourceRegistrantId) || normalizedCik !== sourceRegistrantId.slice(-4).padStart(10, "0")))) return fail("EVENT_ISSUER_SOURCE_REGISTRANT_INVALID");
   const mappingKind = input.mappingKind;
   if (!["EXACT_REGISTRANT", "EXACT_SUBSIDIARY", "PARENT_RELATIONSHIP", "SUCCESSOR"].includes(String(mappingKind))) return fail("EVENT_ISSUER_MAPPING_KIND_INVALID");
   const parent = input.parentCanonicalIssuerId === null ? null : text(input.parentCanonicalIssuerId, "EVENT_ISSUER_PARENT_INVALID");
-  if ((mappingKind === "EXACT_SUBSIDIARY" || mappingKind === "PARENT_RELATIONSHIP") !== (parent !== null)) return fail("EVENT_ISSUER_PARENT_SCOPE_INVALID");
+  if ((mappingKind === "EXACT_SUBSIDIARY" || mappingKind === "PARENT_RELATIONSHIP") !== (parent !== null) || (parent !== null && parent === input.canonicalIssuerId)) return fail("EVENT_ISSUER_PARENT_SCOPE_INVALID");
   const expiresAt = input.expiresAt === null ? null : time(input.expiresAt, "EVENT_ISSUER_EXPIRY_INVALID");
   const revokedAt = input.revokedAt === null ? null : time(input.revokedAt, "EVENT_ISSUER_REVOCATION_INVALID");
   const effectiveFrom = time(input.effectiveFrom, "EVENT_ISSUER_EFFECTIVE_FROM_INVALID");
@@ -228,28 +245,32 @@ export function isAuthenticEventIssuerMappingAuthority(value: unknown): value is
 
 function issuerLineageValid(records: readonly EventIssuerMappingAuthority[]): boolean {
   const byId = new Map<string, EventIssuerMappingAuthority>();
+  const childCounts = new Map<string, number>();
   for (const item of records) { if (!isAuthenticEventIssuerMappingAuthority(item) || byId.has(item.authorityId)) return false; byId.set(item.authorityId, item); }
   for (const item of records) if (item.supersedesAuthorityId !== null) {
     const prior = byId.get(item.supersedesAuthorityId);
     if (!prior || prior.fingerprint !== item.supersedesFingerprint || prior.status !== "SUPERSEDED" || prior.expiresAt !== item.effectiveFrom || prior.sourceNamespace !== item.sourceNamespace || prior.jurisdiction !== item.jurisdiction || prior.regulator !== item.regulator || prior.normalizedCik !== item.normalizedCik || prior.sourceRegistrantId !== item.sourceRegistrantId) return false;
+    childCounts.set(prior.authorityId, (childCounts.get(prior.authorityId) ?? 0) + 1);
     const seen = new Set([item.authorityId]); let current: EventIssuerMappingAuthority | undefined = prior;
     while (current) { if (seen.has(current.authorityId)) return false; seen.add(current.authorityId); current = current.supersedesAuthorityId === null ? undefined : byId.get(current.supersedesAuthorityId); }
   }
-  return true;
+  return [...childCounts.values()].every(count => count === 1);
 }
 
 export function resolveEventIssuerMapping(input: { readonly registry: readonly EventIssuerMappingAuthority[]; readonly sourceNamespace: string; readonly jurisdiction: string; readonly regulator: string; readonly cik: string; readonly sourceRegistrantId: string; readonly asOf: string }): IssuerMappingResolution {
   try {
     if (!strictObject(input, ["registry", "sourceNamespace", "jurisdiction", "regulator", "cik", "sourceRegistrantId", "asOf"]) || !strictArray(input.registry) || !TIME.test(input.asOf) || new Date(input.asOf).toISOString() !== input.asOf || !CIK.test(input.cik) || !SOURCE_ID.test(input.sourceNamespace) || !/^[A-Z]{2,3}$/.test(input.jurisdiction) || !SOURCE_ID.test(input.regulator) || !SAFE_ID.test(input.sourceRegistrantId)) return issuerResolution("INVALID");
+    if (input.registry.some(record => !isAuthenticEventIssuerMappingAuthority(record))) return issuerResolution("INVALID");
+    if (!issuerLineageValid(input.registry)) return issuerResolution("INVALID", null, input.asOf);
     const matches = input.registry.filter(record => record.sourceNamespace === input.sourceNamespace && record.jurisdiction === input.jurisdiction && record.regulator === input.regulator && record.normalizedCik === input.cik && record.sourceRegistrantId === input.sourceRegistrantId);
-    if (matches.some(record => !isAuthenticEventIssuerMappingAuthority(record)) || !issuerLineageValid(matches)) return issuerResolution("INVALID");
-    const active = matches.filter(record => (record.status === "ACTIVE" || record.status === "SUPERSEDED" || (record.status === "REVOKED" && record.revokedAt !== null && input.asOf < record.revokedAt)) && record.effectiveFrom <= input.asOf && (record.expiresAt === null || input.asOf < record.expiresAt));
-    if (active.length > 1) return issuerResolution("CONFLICT");
-    if (active.length === 1) return issuerResolution("RESOLVED", active[0]!);
-    if (matches.some(record => record.status === "REVOKED" && record.revokedAt !== null && record.revokedAt <= input.asOf)) return issuerResolution("REVOKED");
-    if (matches.some(record => record.status === "INVALID")) return issuerResolution("INVALID");
-    if (matches.some(record => (record.status === "ACTIVE" || record.status === "SUPERSEDED") && record.effectiveFrom <= input.asOf && record.expiresAt !== null && record.expiresAt <= input.asOf)) return issuerResolution("EXPIRED");
-    return issuerResolution("INCOMPLETE");
+    const known = matches.filter(record => record.reviewedAt <= input.asOf);
+    const active = known.filter(record => (record.status === "ACTIVE" || record.status === "SUPERSEDED" || (record.status === "REVOKED" && record.revokedAt !== null && input.asOf < record.revokedAt)) && record.effectiveFrom <= input.asOf && (record.expiresAt === null || input.asOf < record.expiresAt));
+    if (active.length > 1) return issuerResolution("CONFLICT", null, input.asOf);
+    if (active.length === 1) return issuerResolution("RESOLVED", active[0]!, input.asOf);
+    if (known.some(record => record.status === "REVOKED" && record.revokedAt !== null && record.revokedAt <= input.asOf)) return issuerResolution("REVOKED", null, input.asOf);
+    if (known.some(record => record.status === "INVALID")) return issuerResolution("INVALID", null, input.asOf);
+    if (known.some(record => (record.status === "ACTIVE" || record.status === "SUPERSEDED") && record.effectiveFrom <= input.asOf && record.expiresAt !== null && record.expiresAt <= input.asOf)) return issuerResolution("EXPIRED", null, input.asOf);
+    return issuerResolution("INCOMPLETE", null, input.asOf);
   } catch { return issuerResolution("INVALID"); }
 }
 
@@ -264,6 +285,7 @@ export type EventAssetMentionBindingInput = Readonly<{
   readonly providerIdentity: ProviderAssetIdentityAssertion;
   readonly evidence: readonly EvidenceReference[];
   readonly effectiveFrom: string;
+  readonly reviewedAt: string;
   readonly expiresAt: string | null;
   readonly revokedAt?: string | null;
   readonly supersedesBindingId?: string | null;
@@ -274,16 +296,19 @@ export type EventAssetMentionBindingInput = Readonly<{
 
 export function createEventAssetMentionBinding(input: EventAssetMentionBindingInput): EventAssetMentionBinding | null {
   try {
-    const required = ["sourceNamespace", "claim", "chainId", "contractAddress", "representation", "canonicalRepresentationId", "mappingRevision", "providerIdentity", "evidence", "effectiveFrom", "expiresAt", "status", "recordedAt"] as const;
+    const required = ["sourceNamespace", "claim", "chainId", "contractAddress", "representation", "canonicalRepresentationId", "mappingRevision", "providerIdentity", "evidence", "effectiveFrom", "reviewedAt", "expiresAt", "status", "recordedAt"] as const;
     const complete = [...required, "revokedAt", "supersedesBindingId", "supersedesFingerprint"];
     if (!strictObject(input, required) && !strictObject(input, complete)) return null;
-    if (!isAuthenticSecEdgar8kFixtureClaim(input.claim)) return null;
+    if (!isAuthenticSecEdgar8kFixtureClaim(input.claim) || input.sourceNamespace !== "SEC_EDGAR_8K_FIXTURE") return null;
+    if (!strictDataRecord(input.mappingRevision, ["mappingRevisionId", "mappingRevisionVersion", "providerId", "datasetId", "datasetVersion", "sourceLineageId", "providerAssetIdentityAssertionId", "providerAssetNamespace", "providerAssetId", "canonicalAssetId", "canonicalIdentifier", "assetClass", "validFrom", "observedAt", "availableAt", "sourceRecordIds", "payloadFingerprint", "fingerprint", "recordedAt"], ["validTo"]) || !strictArray(input.mappingRevision.sourceRecordIds)) return null;
+    if (!strictDataRecord(input.providerIdentity, ["contractVersion", "providerAssetIdentityAssertionId", "providerId", "datasetId", "datasetVersion", "providerSourceNamespace", "providerAssetId", "identityType", "identityNamespace", "identityValue", "sourceArtifactId", "sourceEnvelopeId", "parserVersion", "envelopeSchemaVersion", "sourcePayloadFingerprint", "fingerprint", "recordedAt"])) return null;
     assertAssetMappingRevision(input.mappingRevision); assertProviderAssetIdentityAssertion(input.providerIdentity);
     const claim = input.claim; const mapping = input.mappingRevision; const identity = input.providerIdentity;
     const chainId = text(input.chainId, "EVENT_ASSET_CHAIN_INVALID"); const contractAddress = text(input.contractAddress, "EVENT_ASSET_ADDRESS_INVALID");
-    if (!/^eip155:[1-9][0-9]*$/.test(chainId) || !LOWER_ADDRESS.test(contractAddress) || identity.identityNamespace !== chainId || identity.identityValue !== contractAddress || identity.providerAssetId !== mapping.providerAssetId || identity.providerId !== mapping.providerId || identity.datasetId !== mapping.datasetId || identity.datasetVersion !== mapping.datasetVersion || identity.providerSourceNamespace !== mapping.providerAssetNamespace || identity.providerAssetIdentityAssertionId !== mapping.providerAssetIdentityAssertionId || mapping.canonicalIdentifier !== input.canonicalRepresentationId || mapping.validFrom > claim.announcementAt || (mapping.validTo !== undefined && claim.announcementAt >= mapping.validTo)) return null;
+    const representationMatch = CANONICAL_REPRESENTATION.exec(input.canonicalRepresentationId);
+    if (!/^eip155:[1-9][0-9]*$/.test(chainId) || !LOWER_ADDRESS.test(contractAddress) || identity.identityNamespace !== chainId || identity.identityValue !== contractAddress || identity.providerAssetId !== mapping.providerAssetId || mapping.providerAssetId !== claim.assetIdentityCandidate.syntheticAssetId || identity.providerId !== mapping.providerId || identity.datasetId !== mapping.datasetId || identity.datasetVersion !== mapping.datasetVersion || identity.providerSourceNamespace !== mapping.providerAssetNamespace || identity.providerAssetIdentityAssertionId !== mapping.providerAssetIdentityAssertionId || mapping.canonicalIdentifier !== input.canonicalRepresentationId || !representationMatch || representationMatch[1] !== chainId || representationMatch[2].toUpperCase() !== input.representation || mapping.validFrom > claim.announcementAt || (mapping.validTo !== undefined && claim.announcementAt >= mapping.validTo)) return null;
     if (!["ERC20", "BRIDGED", "WRAPPED"].includes(input.representation)) return null;
-    const effectiveFrom = time(input.effectiveFrom, "EVENT_ASSET_EFFECTIVE_FROM_INVALID"); const expiresAt = input.expiresAt === null ? null : time(input.expiresAt, "EVENT_ASSET_EXPIRY_INVALID");
+    const effectiveFrom = time(input.effectiveFrom, "EVENT_ASSET_EFFECTIVE_FROM_INVALID"); const reviewedAt = time(input.reviewedAt, "EVENT_ASSET_REVIEWED_AT_INVALID"); const expiresAt = input.expiresAt === null ? null : time(input.expiresAt, "EVENT_ASSET_EXPIRY_INVALID");
     if (expiresAt !== null && expiresAt <= effectiveFrom) return null;
     if (!["ACTIVE", "SUPERSEDED", "REVOKED", "INVALID"].includes(input.status)) return null;
     const revokedAt = input.revokedAt == null ? null : time(input.revokedAt, "EVENT_ASSET_REVOCATION_INVALID");
@@ -291,7 +316,7 @@ export function createEventAssetMentionBinding(input: EventAssetMentionBindingIn
     const supersedesBindingId = input.supersedesBindingId == null ? null : text(input.supersedesBindingId, "EVENT_ASSET_SUPERSESSION_INVALID");
     const supersedesFingerprint = input.supersedesFingerprint == null ? null : hash(input.supersedesFingerprint, "EVENT_ASSET_SUPERSESSION_INVALID");
     if ((supersedesBindingId === null) !== (supersedesFingerprint === null)) return null;
-    const body = Object.freeze({ sourceNamespace: text(input.sourceNamespace, "EVENT_ASSET_SOURCE_INVALID"), extractionVersion: claim.extractionVersion, claimId: claim.claimId, claimFingerprint: claim.fingerprint, assetCandidateId: text(claim.assetIdentityCandidate.syntheticAssetId, "EVENT_ASSET_CANDIDATE_INVALID"), assetCandidateName: text(claim.assetIdentityCandidate.displayName, "EVENT_ASSET_CANDIDATE_INVALID"), locator: text(claim.locator, "EVENT_ASSET_LOCATOR_INVALID"), excerptFingerprint: hash(claim.excerptFingerprint, "EVENT_ASSET_EXCERPT_FINGERPRINT_INVALID"), chainId, contractAddress, representation: input.representation, canonicalAssetId: mapping.canonicalAssetId, canonicalRepresentationId: text(input.canonicalRepresentationId, "EVENT_ASSET_REPRESENTATION_ID_INVALID"), mappingRevisionId: mapping.mappingRevisionId, mappingRevisionFingerprint: hash(mapping.fingerprint, "EVENT_ASSET_MAPPING_REVISION_INVALID"), providerAssetIdentityAssertionId: identity.providerAssetIdentityAssertionId, providerAssetIdentityAssertionFingerprint: identity.fingerprint, evidence: evidence(input.evidence), effectiveFrom, expiresAt, revokedAt, supersedesBindingId, supersedesFingerprint, status: input.status });
+    const body = Object.freeze({ sourceNamespace: text(input.sourceNamespace, "EVENT_ASSET_SOURCE_INVALID"), extractionVersion: claim.extractionVersion, claimId: claim.claimId, claimFingerprint: claim.fingerprint, assetCandidateId: text(claim.assetIdentityCandidate.syntheticAssetId, "EVENT_ASSET_CANDIDATE_INVALID"), assetCandidateName: text(claim.assetIdentityCandidate.displayName, "EVENT_ASSET_CANDIDATE_INVALID"), locator: text(claim.locator, "EVENT_ASSET_LOCATOR_INVALID"), excerptFingerprint: hash(claim.excerptFingerprint, "EVENT_ASSET_EXCERPT_FINGERPRINT_INVALID"), chainId, contractAddress, representation: input.representation, canonicalAssetId: mapping.canonicalAssetId, canonicalRepresentationId: text(input.canonicalRepresentationId, "EVENT_ASSET_REPRESENTATION_ID_INVALID"), mappingRevisionId: mapping.mappingRevisionId, mappingRevisionFingerprint: hash(mapping.fingerprint, "EVENT_ASSET_MAPPING_REVISION_INVALID"), providerAssetIdentityAssertionId: identity.providerAssetIdentityAssertionId, providerAssetIdentityAssertionFingerprint: identity.fingerprint, evidence: evidence(input.evidence), effectiveFrom, reviewedAt, expiresAt, revokedAt, supersedesBindingId, supersedesFingerprint, status: input.status });
     const bindingId = `event-asset-mention:${digest({ contractVersion: EVENT_ASSET_MENTION_BINDING_VERSION, ...body })}`; const fingerprint = digest({ contractVersion: EVENT_ASSET_MENTION_BINDING_VERSION, bindingId, ...body });
     const result = freeze({ contractVersion: EVENT_ASSET_MENTION_BINDING_VERSION, bindingId, fingerprint, ...body, recordedAt: time(input.recordedAt, "EVENT_ASSET_RECORDED_AT_INVALID") });
     assetBindingTrust.add(result); return result;
@@ -301,28 +326,32 @@ export function isAuthenticEventAssetMentionBinding(value: unknown): value is Ev
 
 function assetLineageValid(records: readonly EventAssetMentionBinding[]): boolean {
   const byId = new Map<string, EventAssetMentionBinding>();
+  const childCounts = new Map<string, number>();
   for (const item of records) { if (!isAuthenticEventAssetMentionBinding(item) || byId.has(item.bindingId)) return false; byId.set(item.bindingId, item); }
   for (const item of records) if (item.supersedesBindingId !== null) {
     const prior = byId.get(item.supersedesBindingId);
     if (!prior || prior.fingerprint !== item.supersedesFingerprint || prior.status !== "SUPERSEDED" || prior.expiresAt !== item.effectiveFrom || prior.claimId !== item.claimId || prior.claimFingerprint !== item.claimFingerprint || prior.sourceNamespace !== item.sourceNamespace || prior.assetCandidateId !== item.assetCandidateId) return false;
+    childCounts.set(prior.bindingId, (childCounts.get(prior.bindingId) ?? 0) + 1);
     const seen = new Set([item.bindingId]); let current: EventAssetMentionBinding | undefined = prior;
     while (current) { if (seen.has(current.bindingId)) return false; seen.add(current.bindingId); current = current.supersedesBindingId === null ? undefined : byId.get(current.supersedesBindingId); }
   }
-  return true;
+  return [...childCounts.values()].every(count => count === 1);
 }
 
 export function resolveEventAssetMentionBinding(input: { readonly registry: readonly EventAssetMentionBinding[]; readonly claim: SecEdgar8kFixtureClaim; readonly asOf: string }): AssetMappingResolution {
   try {
     if (!strictObject(input, ["registry", "claim", "asOf"]) || !isAuthenticSecEdgar8kFixtureClaim(input.claim) || !strictArray(input.registry) || !TIME.test(input.asOf) || new Date(input.asOf).toISOString() !== input.asOf) return assetResolution("INVALID");
+    if (input.registry.some(item => !isAuthenticEventAssetMentionBinding(item))) return assetResolution("INVALID");
+    if (!assetLineageValid(input.registry)) return assetResolution("INVALID", null, input.asOf);
     const claim = input.claim; const matches = input.registry.filter(item => item.claimId === claim.claimId && item.claimFingerprint === claim.fingerprint && item.assetCandidateId === claim.assetIdentityCandidate.syntheticAssetId && item.locator === claim.locator && item.excerptFingerprint === claim.excerptFingerprint && item.extractionVersion === claim.extractionVersion);
-    if (matches.some(item => !isAuthenticEventAssetMentionBinding(item)) || !assetLineageValid(matches)) return assetResolution("INVALID");
-    const active = matches.filter(item => (item.status === "ACTIVE" || item.status === "SUPERSEDED" || (item.status === "REVOKED" && item.revokedAt !== null && input.asOf < item.revokedAt)) && item.effectiveFrom <= input.asOf && (item.expiresAt === null || input.asOf < item.expiresAt));
-    if (active.length > 1) return assetResolution("CONFLICT");
-    if (active.length === 1) return assetResolution("RESOLVED", active[0]!);
-    if (matches.some(item => item.status === "REVOKED" && item.revokedAt !== null && item.revokedAt <= input.asOf)) return assetResolution("REVOKED");
-    if (matches.some(item => item.status === "INVALID")) return assetResolution("INVALID");
-    if (matches.some(item => (item.status === "ACTIVE" || item.status === "SUPERSEDED") && item.effectiveFrom <= input.asOf && item.expiresAt !== null && item.expiresAt <= input.asOf)) return assetResolution("EXPIRED");
-    return assetResolution("INCOMPLETE");
+    const known = matches.filter(item => item.reviewedAt <= input.asOf);
+    const active = known.filter(item => (item.status === "ACTIVE" || item.status === "SUPERSEDED" || (item.status === "REVOKED" && item.revokedAt !== null && input.asOf < item.revokedAt)) && item.effectiveFrom <= input.asOf && (item.expiresAt === null || input.asOf < item.expiresAt));
+    if (active.length > 1) return assetResolution("CONFLICT", null, input.asOf);
+    if (active.length === 1) return assetResolution("RESOLVED", active[0]!, input.asOf);
+    if (known.some(item => item.status === "REVOKED" && item.revokedAt !== null && item.revokedAt <= input.asOf)) return assetResolution("REVOKED", null, input.asOf);
+    if (known.some(item => item.status === "INVALID")) return assetResolution("INVALID", null, input.asOf);
+    if (known.some(item => (item.status === "ACTIVE" || item.status === "SUPERSEDED") && item.effectiveFrom <= input.asOf && item.expiresAt !== null && item.expiresAt <= input.asOf)) return assetResolution("EXPIRED", null, input.asOf);
+    return assetResolution("INCOMPLETE", null, input.asOf);
   } catch { return assetResolution("INVALID"); }
 }
 
@@ -334,10 +363,13 @@ export function assembleMappedNonAuthoritativeEventClaim(input: { readonly sourc
     if (!sourceResult.claims.includes(claim) || !sourceResult.claimSet.claimIds.includes(claim.claimId) || sourceResult.correctionLineage.some(edge => edge.originalClaimId === claim.claimId || edge.amendedClaimId === claim.claimId)) return null;
     if (!isAuthenticSecEdgar8kFixtureClaim(claim) || claim.form === "8-K/A" || claim.correctionOfClaimId !== null || claim.lifecycleStatusCandidate === "CONDITIONAL" || issuer.status !== "RESOLVED" || asset.status !== "RESOLVED" || !issuerResolutionTrust.has(issuer as object) || !assetResolutionTrust.has(asset as object) || !issuer.authority || !asset.binding || !isAuthenticEventIssuerMappingAuthority(issuer.authority) || !isAuthenticEventAssetMentionBinding(asset.binding)) return null;
     const asOf = time(input.mappingAsOf, "EVENT_MAPPED_CLAIM_AS_OF_INVALID"); const i = issuer.authority; const a = asset.binding;
-    if (asOf !== claim.announcementAt || (i.mappingKind !== "EXACT_REGISTRANT" && i.mappingKind !== "EXACT_SUBSIDIARY") || i.sourceRegistrantId !== claim.issuerIdentityCandidate.syntheticCik || i.registrantLegalName !== claim.issuerIdentityCandidate.displayName || !usableAt(i.status, i.effectiveFrom, i.expiresAt, i.revokedAt, asOf)) return null;
-    if (a.claimId !== claim.claimId || a.claimFingerprint !== claim.fingerprint || a.sourceNamespace !== i.sourceNamespace || a.extractionVersion !== claim.extractionVersion || !usableAt(a.status, a.effectiveFrom, a.expiresAt, a.revokedAt, asOf)) return null;
+    const filing = sourceResult.filings.find(item => item.filing.cik === claim.cik && item.filing.accession === claim.accession && item.filing.form === claim.form);
+    const artifact = sourceResult.artifacts.find(item => item.artifactId === claim.sourceArtifactId && item.fingerprint === claim.sourceArtifactFingerprint);
+    if (!filing || !isAuthenticSecEdgar8kFixturePackage(filing) || !artifact || !isAuthenticSecEdgar8kFixtureArtifact(artifact)) return null;
+    if (asOf !== claim.announcementAt || issuer.asOf !== asOf || asset.asOf !== asOf || (i.mappingKind !== "EXACT_REGISTRANT" && i.mappingKind !== "EXACT_SUBSIDIARY") || i.sourceRegistrantId !== claim.issuerIdentityCandidate.syntheticCik || i.registrantLegalName !== claim.issuerIdentityCandidate.displayName || i.reviewedAt > asOf || !usableAt(i.status, i.effectiveFrom, i.expiresAt, i.revokedAt, asOf)) return null;
+    if (a.claimId !== claim.claimId || a.claimFingerprint !== claim.fingerprint || a.sourceNamespace !== i.sourceNamespace || a.extractionVersion !== claim.extractionVersion || a.reviewedAt > asOf || !usableAt(a.status, a.effectiveFrom, a.expiresAt, a.revokedAt, asOf)) return null;
     if (claim.lifecycleStatusCandidate === "COMPLETED" && (claim.itemCode !== "2.01" || claim.completionDate === null)) return null;
-    const body = { contractVersion: EVENT_MAPPED_CLAIM_VERSION, classification: EVENT_MAPPED_CLAIM_KIND, claimId: claim.claimId, claimFingerprint: claim.fingerprint, issuerAuthorityId: i.authorityId, issuerAuthorityFingerprint: i.fingerprint, canonicalIssuerId: i.canonicalIssuerId, canonicalLegalEntityId: i.canonicalLegalEntityId, assetBindingId: a.bindingId, assetBindingFingerprint: a.fingerprint, mappingRevisionId: a.mappingRevisionId, mappingRevisionFingerprint: a.mappingRevisionFingerprint, canonicalAssetId: a.canonicalAssetId, canonicalRepresentationId: a.canonicalRepresentationId, mappingAsOf: asOf, eventTypeCandidate: claim.eventTypeCandidate, lifecycleStatusCandidate: claim.lifecycleStatusCandidate };
+    const body = { contractVersion: EVENT_MAPPED_CLAIM_VERSION, classification: EVENT_MAPPED_CLAIM_KIND, claimId: claim.claimId, claimFingerprint: claim.fingerprint, sourceFilingPackageId: filing.filingPackageId, sourceFilingPackageFingerprint: filing.filingPackageFingerprint, sourceArtifactId: artifact.artifactId, sourceArtifactFingerprint: artifact.fingerprint, issuerAuthorityId: i.authorityId, issuerAuthorityFingerprint: i.fingerprint, canonicalIssuerId: i.canonicalIssuerId, canonicalLegalEntityId: i.canonicalLegalEntityId, assetBindingId: a.bindingId, assetBindingFingerprint: a.fingerprint, mentionBindingId: a.bindingId, mentionBindingFingerprint: a.fingerprint, mappingRevisionId: a.mappingRevisionId, mappingRevisionFingerprint: a.mappingRevisionFingerprint, canonicalAssetId: a.canonicalAssetId, canonicalRepresentationId: a.canonicalRepresentationId, mappingAsOf: asOf, eventTypeCandidate: claim.eventTypeCandidate, lifecycleStatusCandidate: claim.lifecycleStatusCandidate };
     const fingerprint = digest(body); const mappedClaimId = `mapped-event-claim:${fingerprint}`;
     const result = freeze({ ...body, fingerprint, mappedClaimId }); mappedClaimTrust.add(result); return result;
   } catch { return null; }

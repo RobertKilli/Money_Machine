@@ -857,3 +857,5 @@ table is added. The time-scoped resolvers fail closed, and assembly stops at
 `MAPPED_NON_AUTHORITATIVE_EVENT_CLAIM`. Production registries, persistence,
 event authority, and signal generation remain blocked. See
 `docs/EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md`.
+Resolver witnesses carry the exact announcement-time `asOf`; mapped identity
+also binds filing-package, source-artifact, and mention-binding fingerprints.

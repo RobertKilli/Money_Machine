@@ -57,3 +57,6 @@ canonical asset record or infer a mapping from ticker, symbol, name, price, or
 peg. Its result is `MAPPED_NON_AUTHORITATIVE_EVENT_CLAIM`, still not an
 authoritative event. Production mapping registries remain empty. See
 [`EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md`](EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md).
+That follow-on resolves mappings at the explicit claim `announcementAt`,
+requires the resolver witnesses to carry that same `asOf`, and includes filing
+package/artifact plus mention-binding fingerprints in the mapped-claim identity.

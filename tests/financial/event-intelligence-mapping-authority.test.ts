@@ -39,12 +39,12 @@ function issuerForClaim(target: typeof claim, overrides: Partial<EventIssuerMapp
   return issuer({ normalizedCik: SYNTHETIC_NORMALIZED_CIK[target.issuerIdentityCandidate.syntheticCik]!, sourceRegistrantId: target.issuerIdentityCandidate.syntheticCik, registrantLegalName: target.issuerIdentityCandidate.displayName, ...overrides });
 }
 
-function assetBinding(input: { address?: string; declaredAddress?: string; declaredChainId?: string; candidateClaim?: typeof claim; recordedAt?: string; status?: "ACTIVE" | "SUPERSEDED" | "REVOKED" | "INVALID"; effectiveFrom?: string; expiresAt?: string | null; supersedesBindingId?: string | null; supersedesFingerprint?: string | null } = {}) {
+function assetBinding(input: { address?: string; declaredAddress?: string; declaredChainId?: string; providerAssetId?: string; candidateClaim?: typeof claim; recordedAt?: string; reviewedAt?: string; representation?: "ERC20" | "BRIDGED" | "WRAPPED"; status?: "ACTIVE" | "SUPERSEDED" | "REVOKED" | "INVALID"; effectiveFrom?: string; expiresAt?: string | null; supersedesBindingId?: string | null; supersedesFingerprint?: string | null } = {}) {
   const targetClaim = input.candidateClaim ?? claim;
   const address = input.address ?? "0x1111111111111111111111111111111111111111";
   const identity = createProviderAssetIdentityAssertion({
     providerId: "synthetic-event-review", datasetId: "event-mention", datasetVersion: "v1",
-    providerSourceNamespace: "synthetic:sec-fixture", providerAssetId: targetClaim.assetIdentityCandidate.syntheticAssetId,
+    providerSourceNamespace: "synthetic:sec-fixture", providerAssetId: input.providerAssetId ?? targetClaim.assetIdentityCandidate.syntheticAssetId,
     identityType: "EVM_CONTRACT_ADDRESS", identityNamespace: "eip155:1", identityValue: address,
     sourceArtifactId: "synthetic-asset-artifact-0001", sourceEnvelopeId: "synthetic-asset-envelope-0001",
     parserVersion: "synthetic-review/v1", envelopeSchemaVersion: "synthetic-envelope/v1", sourcePayloadFingerprint: HASH,
@@ -62,9 +62,9 @@ function assetBinding(input: { address?: string; declaredAddress?: string; decla
   });
   return createEventAssetMentionBinding({
     sourceNamespace: "SEC_EDGAR_8K_FIXTURE", claim: targetClaim, chainId: input.declaredChainId ?? "eip155:1", contractAddress: input.declaredAddress ?? address,
-    representation: "ERC20", canonicalRepresentationId: "representation:eip155:1:erc20:gossamer-0001", mappingRevision: mapping,
+    representation: input.representation ?? "ERC20", canonicalRepresentationId: "representation:eip155:1:erc20:gossamer-0001", mappingRevision: mapping,
     providerIdentity: identity, evidence: [{ referenceId: "synthetic-asset-review-0001", classification: "OBSERVED", fingerprint: HASH }],
-    effectiveFrom: input.effectiveFrom ?? "2026-04-01T00:00:00.000Z", expiresAt: input.expiresAt ?? null, revokedAt: input.status === "REVOKED" ? "2026-04-11T00:00:00.000Z" : null,
+    effectiveFrom: input.effectiveFrom ?? "2026-04-01T00:00:00.000Z", reviewedAt: input.reviewedAt ?? "2026-04-10T14:00:00.000Z", expiresAt: input.expiresAt ?? null, revokedAt: input.status === "REVOKED" ? "2026-04-11T00:00:00.000Z" : null,
     supersedesBindingId: input.supersedesBindingId ?? null, supersedesFingerprint: input.supersedesFingerprint ?? null, status: input.status ?? "ACTIVE",
     recordedAt: input.recordedAt ?? "2026-04-10T14:01:00.000Z",
   });
@@ -91,7 +91,7 @@ describe("event intelligence issuer and asset mapping authority", () => {
     expect(mapped?.claimFingerprint).toBe(completedClaim.fingerprint);
     expect(Object.isFrozen(mapped)).toBe(true); expect(isAuthenticMappedNonAuthoritativeEventClaim(mapped)).toBe(true);
     expect(rejectMappedClaimAsEventAuthority(mapped)).toBeNull();
-    expect(assembleMappedNonAuthoritativeEventClaim({ sourceResult: claimsResult, claim: completedClaim, issuer: { status: "RESOLVED", authority: issuerAuthority }, asset: { status: "RESOLVED", binding }, mappingAsOf: COMPLETED_AS_OF })).toBeNull();
+    expect(assembleMappedNonAuthoritativeEventClaim({ sourceResult: claimsResult, claim: completedClaim, issuer: { status: "RESOLVED", authority: issuerAuthority, asOf: COMPLETED_AS_OF }, asset: { status: "RESOLVED", binding, asOf: COMPLETED_AS_OF }, mappingAsOf: COMPLETED_AS_OF })).toBeNull();
   });
 
   it("excludes recordedAt from authority and binding identity and keeps parser output untrusted", () => {
@@ -120,11 +120,16 @@ describe("event intelligence issuer and asset mapping authority", () => {
     expect(isAuthenticEventAssetMentionBinding(JSON.parse(JSON.stringify(binding)))).toBe(false);
     const clonedClaim = structuredClone(claim);
     expect(resolveEventAssetMentionBinding({ registry: [binding], claim: clonedClaim, asOf: AS_OF }).status).toBe("INVALID");
-    expect(createEventAssetMentionBinding({ sourceNamespace: "SEC_EDGAR_8K_FIXTURE", claim: clonedClaim, chainId: "eip155:1", contractAddress: "0x1111111111111111111111111111111111111111", representation: "ERC20", canonicalRepresentationId: "x", mappingRevision: {} as never, providerIdentity: {} as never, evidence: [], effectiveFrom: AS_OF, expiresAt: null, status: "ACTIVE", recordedAt: AS_OF })).toBeNull();
+    expect(createEventAssetMentionBinding({ sourceNamespace: "SEC_EDGAR_8K_FIXTURE", claim: clonedClaim, chainId: "eip155:1", contractAddress: "0x1111111111111111111111111111111111111111", representation: "ERC20", canonicalRepresentationId: "x", mappingRevision: {} as never, providerIdentity: {} as never, evidence: [], effectiveFrom: AS_OF, reviewedAt: AS_OF, expiresAt: null, status: "ACTIVE", recordedAt: AS_OF })).toBeNull();
+    let proxyReads = 0;
+    const hostileMapping = new Proxy({}, { get() { proxyReads += 1; throw new Error("SYNTHETIC_SENTINEL"); } });
+    expect(createEventAssetMentionBinding({ sourceNamespace: "SEC_EDGAR_8K_FIXTURE", claim, chainId: "eip155:1", contractAddress: "0x1111111111111111111111111111111111111111", representation: "ERC20", canonicalRepresentationId: "representation:eip155:1:erc20:gossamer-0001", mappingRevision: hostileMapping as never, providerIdentity: {} as never, evidence: [], effectiveFrom: AS_OF, reviewedAt: AS_OF, expiresAt: null, status: "ACTIVE", recordedAt: AS_OF })).toBeNull();
+    expect(proxyReads).toBe(0);
     expect(assetBinding({ declaredChainId: "eip155:2" })).toBeNull();
     expect(assetBinding({ declaredAddress: "0x2222222222222222222222222222222222222222" })).toBeNull();
+    expect(assetBinding({ representation: "WRAPPED" })).toBeNull();
     const fabricated = { ...claim } as typeof claim;
-    expect(assembleMappedNonAuthoritativeEventClaim({ sourceResult: claimsResult, claim: fabricated, issuer: { status: "RESOLVED", authority }, asset: { status: "RESOLVED", binding }, mappingAsOf: AS_OF })).toBeNull();
+    expect(assembleMappedNonAuthoritativeEventClaim({ sourceResult: claimsResult, claim: fabricated, issuer: { status: "RESOLVED", authority, asOf: AS_OF }, asset: { status: "RESOLVED", binding, asOf: AS_OF }, mappingAsOf: AS_OF })).toBeNull();
   });
 
   it("fails closed on CIK, scope, legal entity, conflicts, expiry and revocation", () => {
@@ -144,12 +149,17 @@ describe("event intelligence issuer and asset mapping authority", () => {
     expect(() => createEventIssuerMappingAuthority({ ...issuer(), mappingKind: "EXACT_SUBSIDIARY", parentCanonicalIssuerId: null } as never)).toThrow("EVENT_ISSUER_PARENT_SCOPE_INVALID");
   });
 
+  it("rejects issuer and provider asset identities that do not match the source claim", () => {
+    expect(() => issuerForClaim(completedClaim, { normalizedCik: "0000000001" })).toThrow("EVENT_ISSUER_SOURCE_REGISTRANT_INVALID");
+    expect(assetBinding({ providerAssetId: "asset:synthetic:different-candidate" })).toBeNull();
+  });
+
   it("requires exact claim, chain, address, representation revision and effective time", () => {
     const issuerAuthority = issuer(); const binding = assetBinding()!;
     const resolvedIssuer = resolveEventIssuerMapping({ ...issuerLookup(), registry: [issuerAuthority] });
     const resolvedAsset = resolveEventAssetMentionBinding({ registry: [binding], claim, asOf: AS_OF });
     expect(assembleMappedNonAuthoritativeEventClaim({ sourceResult: claimsResult, claim, issuer: resolvedIssuer, asset: resolvedAsset, mappingAsOf: "2026-04-10T14:03:00.000Z" })).toBeNull();
-    expect(createEventAssetMentionBinding({ sourceNamespace: "SEC_EDGAR_8K_FIXTURE", claim, chainId: "eip155:2", contractAddress: "0x1111111111111111111111111111111111111111", representation: "ERC20", canonicalRepresentationId: "representation", mappingRevision: {} as never, providerIdentity: {} as never, evidence: [], effectiveFrom: AS_OF, expiresAt: null, status: "ACTIVE", recordedAt: AS_OF })).toBeNull();
+    expect(createEventAssetMentionBinding({ sourceNamespace: "SEC_EDGAR_8K_FIXTURE", claim, chainId: "eip155:2", contractAddress: "0x1111111111111111111111111111111111111111", representation: "ERC20", canonicalRepresentationId: "representation", mappingRevision: {} as never, providerIdentity: {} as never, evidence: [], effectiveFrom: AS_OF, reviewedAt: AS_OF, expiresAt: null, status: "ACTIVE", recordedAt: AS_OF })).toBeNull();
     expect(resolveEventAssetMentionBinding({ registry: [binding], claim, asOf: "2026-04-10T14:02:00.001Z" }).status).toBe("RESOLVED");
     expect(resolveEventAssetMentionBinding({ registry: [binding, assetBinding({ address: "0x2222222222222222222222222222222222222222" })!], claim, asOf: AS_OF }).status).toBe("CONFLICT");
     expect(resolveEventAssetMentionBinding({ registry: [assetBinding({ status: "REVOKED" })!], claim, asOf: "2026-04-12T00:00:00.000Z" }).status).toBe("REVOKED");
@@ -206,5 +216,38 @@ describe("event intelligence issuer and asset mapping authority", () => {
     expect(resolveEventAssetMentionBinding({ registry: [oldAsset, newAsset], claim, asOf: "2026-04-10T14:01:59.999Z" }).binding?.bindingId).toBe(oldAsset.bindingId);
     expect(resolveEventAssetMentionBinding({ registry: [oldAsset, newAsset], claim, asOf: AS_OF }).binding?.bindingId).toBe(newAsset.bindingId);
     expect(resolveEventAssetMentionBinding({ registry: [newAsset], claim, asOf: AS_OF }).status).toBe("INVALID");
+  });
+
+  it("binds resolver and mapped identities to exact asOf, source package, artifact and mention revision", () => {
+    const authority = issuerForClaim(completedClaim); const binding = assetBinding({ candidateClaim: completedClaim });
+    const issuerResolution = resolveEventIssuerMapping(issuerLookupForClaim(completedClaim, [authority]));
+    const assetResolution = resolveEventAssetMentionBinding({ registry: [binding!], claim: completedClaim, asOf: COMPLETED_AS_OF });
+    const mapped = assembleMappedNonAuthoritativeEventClaim({ sourceResult: claimsResult, claim: completedClaim, issuer: issuerResolution, asset: assetResolution, mappingAsOf: COMPLETED_AS_OF });
+    expect(mapped).toMatchObject({
+      sourceFilingPackageId: expect.stringMatching(/^sec-edgar-fixture-filing:/),
+      sourceFilingPackageFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      sourceArtifactId: completedClaim.sourceArtifactId,
+      sourceArtifactFingerprint: completedClaim.sourceArtifactFingerprint,
+      mentionBindingId: binding?.bindingId,
+      mentionBindingFingerprint: binding?.fingerprint,
+    });
+    expect(assembleMappedNonAuthoritativeEventClaim({ sourceResult: claimsResult, claim: completedClaim, issuer: issuerResolution, asset: assetResolution, mappingAsOf: "2026-04-10T14:03:00.000Z" })).toBeNull();
+    const futureReviewedIssuer = issuerForClaim(completedClaim, { reviewedAt: "2027-04-10T14:03:00.000Z" });
+    expect(resolveEventIssuerMapping(issuerLookupForClaim(completedClaim, [futureReviewedIssuer])).status).toBe("INCOMPLETE");
+    const futureReviewedAsset = assetBinding({ candidateClaim: completedClaim, reviewedAt: "2027-04-10T14:03:00.000Z" });
+    expect(resolveEventAssetMentionBinding({ registry: [futureReviewedAsset!], claim: completedClaim, asOf: COMPLETED_AS_OF }).status).toBe("INCOMPLETE");
+  });
+
+  it("rejects supersession forks before selecting either historical or current authority", () => {
+    const cutover = AS_OF;
+    const oldIssuer = issuer({ status: "SUPERSEDED", expiresAt: cutover });
+    const issuerA = issuer({ effectiveFrom: cutover, canonicalIssuerId: "issuer:synthetic:successor-a", canonicalLegalEntityId: "legal-entity:synthetic:successor-a", mappingKind: "SUCCESSOR", supersedesAuthorityId: oldIssuer.authorityId, supersedesFingerprint: oldIssuer.fingerprint });
+    const issuerB = issuer({ effectiveFrom: cutover, canonicalIssuerId: "issuer:synthetic:successor-b", canonicalLegalEntityId: "legal-entity:synthetic:successor-b", mappingKind: "SUCCESSOR", supersedesAuthorityId: oldIssuer.authorityId, supersedesFingerprint: oldIssuer.fingerprint });
+    expect(resolveEventIssuerMapping({ ...issuerLookup({ asOf: "2026-04-10T14:01:59.999Z" }), registry: [oldIssuer, issuerA, issuerB] }).status).toBe("INVALID");
+
+    const oldBinding = assetBinding({ status: "SUPERSEDED", expiresAt: cutover })!;
+    const childA = assetBinding({ address: "0x2222222222222222222222222222222222222222", effectiveFrom: cutover, supersedesBindingId: oldBinding.bindingId, supersedesFingerprint: oldBinding.fingerprint })!;
+    const childB = assetBinding({ address: "0x3333333333333333333333333333333333333333", effectiveFrom: cutover, supersedesBindingId: oldBinding.bindingId, supersedesFingerprint: oldBinding.fingerprint })!;
+    expect(resolveEventAssetMentionBinding({ registry: [oldBinding, childA, childB], claim, asOf: "2026-04-10T14:01:59.999Z" }).status).toBe("INVALID");
   });
 });
