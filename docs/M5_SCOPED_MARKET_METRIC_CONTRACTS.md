@@ -8,7 +8,7 @@ The existing `m5-daily-series-authority/v1` and `m5-market-metrics-authority/v1`
 
 | New metric | Exact claim in v1 | What it does not claim | Still blocked by |
 |---|---|---|---|
-| `NAMED_VENUE_DAILY_CLOSE` | One named spot/DEX-spot instrument's UTC P1D close at the exact midnight boundary, with fixed close basis, correction and gap policy. A separate record identifies venue, instrument, base/quote and mapping revision. | A market-wide or asset-wide close; automatic provider granularity; a sample/snapshot; inferred ticker/address mapping. | Venue/instrument selection, source qualification, history/gap/correction proof, mapping authority, approvals. |
+| `NAMED_VENUE_DAILY_CLOSE` | One named spot/DEX-spot instrument's UTC P1D close at the exact midnight boundary, represented as unsigned integer `closePriceAtoms` plus `priceScale`, with quote asset equal to currency and fixed close basis, correction and gap policy. | A market-wide or asset-wide close; automatic provider granularity; a sample/snapshot; inferred ticker/address mapping. | Venue/instrument selection, source qualification, history/gap/correction proof, mapping authority, approvals. |
 | `REPORTED_CIRCULATING_MARKET_CAP` | An explicitly provider-reported value for a canonical asset/currency at `asOf`, whose provider says its supply basis is circulating and identifies methodology/version. | Total supply value, FDV, WETH supply standing in for ETH circulating supply, or an internal `price × supply` calculation. | Provider's circulating basis, as-of/null/history proof, qualification, mapping and approvals. |
 | `DECLARED_VENUE_SET_ROLLING_24H_VOLUME` | A rolling exactly-24-hour value ending at `asOf` for only the explicit sorted venue/instrument/market-type set named in the record. | Global volume, every market, a daily bucket, or an implicit “complete market” claim. | Venue set and aggregation methodology, exact source window/as-of, coverage/history, qualification and approvals. |
 
@@ -16,7 +16,7 @@ All monetary/quantity values are decimal integer strings with explicit scale. No
 
 ## Valid and invalid material
 
-A valid daily-close material states a UTC daily candle from `00:00Z` to the next `00:00Z`, interval `P1D`, explicit venue and instrument IDs, and `LAST_TRADE_AT_OR_BEFORE_BOUNDARY`; it cannot use `AUTO`, a point sample, or a non-UTC boundary. The data contract's correction policy is versioned restatement and gaps block the declared series. A provider still must document and qualify these rules; a syntactically valid record alone is not proof that it happened.
+A valid daily-close material states a UTC daily candle from `00:00Z` to the next `00:00Z`, interval `P1D`, explicit venue and instrument IDs, exact integer close price and scale, quote asset equal to currency, and `LAST_TRADE_AT_OR_BEFORE_BOUNDARY`; it cannot use `AUTO`, a point sample, or a non-UTC boundary. The data contract's correction policy is versioned restatement and gaps block the declared series. A provider still must document and qualify these rules; a syntactically valid record alone is not proof that it happened.
 
 A valid reported market-cap record has `supplyBasis=CIRCULATING` and `valueKind=PROVIDER_REPORTED`. `TOTAL_SUPPLY`, `FULLY_DILUTED`, null/missing values, and internal derivations are invalid for this metric. A future total-supply valuation needs a separately approved metric and contract; this slice does not define one.
 

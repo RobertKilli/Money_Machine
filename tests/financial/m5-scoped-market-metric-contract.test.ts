@@ -29,7 +29,7 @@ const closeInput = (): Record<string, any> => {
     sourceQualification: { contractVersion: q.contractVersion, qualificationId: q.qualificationId, qualificationFingerprint: q.qualificationFingerprint, providerId: q.providerId, datasetId: q.datasetId, datasetVersion: q.datasetVersion, metric: q.metric, metricScopeFingerprint: "0".repeat(64) },
     methodologyVersion: "UTC_DAILY_CLOSE_V1", completeness: "COMPLETE_DECLARED_SCOPE",
     evidenceReferences: [{ url: "https://docs.coingecko.com/reference/contract-address-market-chart-range", title: "Synthetic contract fixture", evidenceId: "evidence:close:v1", checkedAt: at }],
-    venueId: "venue:synthetic", instrumentId: "instrument:weth-usd", baseAsset: "WETH", quoteAsset: "USD", marketType: "SPOT", timezone: "UTC", sessionBoundary: "00:00:00Z", candleInterval: "P1D", candleOpen: "2026-09-29T00:00:00.000Z", candleClose: at,
+    venueId: "venue:synthetic", instrumentId: "instrument:weth-usd", baseAsset: "WETH", quoteAsset: "USD", marketType: "SPOT", timezone: "UTC", sessionBoundary: "00:00:00Z", candleInterval: "P1D", candleOpen: "2026-09-29T00:00:00.000Z", candleClose: at, closePriceAtoms: "234567890123", priceScale: 2,
     closePriceBasis: "LAST_TRADE_AT_OR_BEFORE_BOUNDARY", correctionPolicy: "VERSIONED_RESTATEMENT", gapPolicy: "GAPS_BLOCK", recordedAt: "2026-09-30T00:10:00.000Z",
   };
   (body.sourceQualification as Record<string, unknown>).metricScopeFingerprint = m5ScopedMetricQualificationScopeFingerprint(body);
@@ -37,7 +37,7 @@ const closeInput = (): Record<string, any> => {
 };
 const marketCapInput = (): Record<string, any> => {
   const q = qualification("MARKET_CAP"); const row: Record<string, any> = closeInput();
-  for (const key of ["venueId", "instrumentId", "baseAsset", "quoteAsset", "marketType", "timezone", "sessionBoundary", "candleInterval", "candleOpen", "candleClose", "closePriceBasis", "correctionPolicy", "gapPolicy"]) delete row[key];
+  for (const key of ["venueId", "instrumentId", "baseAsset", "quoteAsset", "marketType", "timezone", "sessionBoundary", "candleInterval", "candleOpen", "candleClose", "closePriceAtoms", "priceScale", "closePriceBasis", "correctionPolicy", "gapPolicy"]) delete row[key];
   Object.assign(row, { metricKind: "REPORTED_CIRCULATING_MARKET_CAP", sourceQualification: { contractVersion: q.contractVersion, qualificationId: q.qualificationId, qualificationFingerprint: q.qualificationFingerprint, providerId: q.providerId, datasetId: q.datasetId, datasetVersion: q.datasetVersion, metric: "MARKET_CAP", metricScopeFingerprint: "0".repeat(64) }, reportedValueAtoms: "987654321012345678901234", scale: 18, supplyBasis: "CIRCULATING", providerMethodologyVersion: "CMC_CAP_METHODOLOGY_V1", valueKind: "PROVIDER_REPORTED" });
   row.sourceQualification.metricScopeFingerprint = m5ScopedMetricQualificationScopeFingerprint(row);
   row.fingerprint = fingerprintM5ScopedMarketMetricContract(row);
@@ -93,6 +93,7 @@ describe("M5 scoped market metric contracts", () => {
     for (const mutate of [
       (x: any) => { x.timezone = "Europe/Oslo"; }, (x: any) => { x.sessionBoundary = "23:59:59Z"; },
       (x: any) => { x.candleInterval = "AUTO"; }, (x: any) => { x.candleClose = "2026-09-30T00:00:01.000Z"; },
+      (x: any) => { x.quoteAsset = "EUR"; }, (x: any) => { x.closePriceAtoms = null; }, (x: any) => { x.priceScale = 1.5; },
       (x: any) => { x.closePriceBasis = "SNAPSHOT"; }, (x: any) => { x.gapPolicy = "FILL_FORWARD"; },
       (x: any) => { x.correctionPolicy = "SILENT_OVERWRITE"; }, (x: any) => { x.venueId = ""; },
     ]) { const x = closeInput() as any; mutate(x); x.fingerprint = fingerprintM5ScopedMarketMetricContract(x); expect(parseM5ScopedMarketMetricContract(x).status).toBe("INVALID"); }
@@ -127,7 +128,7 @@ describe("M5 scoped market metric contracts", () => {
   it("requires an exact rolling 24h window and a sorted unique declared venue/instrument set", () => {
     const q = qualification("VOLUME_24H");
     const row: any = closeInput();
-    delete row.venueId; delete row.instrumentId; delete row.baseAsset; delete row.quoteAsset; delete row.marketType; delete row.timezone; delete row.sessionBoundary; delete row.candleInterval; delete row.candleOpen; delete row.candleClose; delete row.closePriceBasis; delete row.correctionPolicy; delete row.gapPolicy;
+    delete row.venueId; delete row.instrumentId; delete row.baseAsset; delete row.quoteAsset; delete row.marketType; delete row.timezone; delete row.sessionBoundary; delete row.candleInterval; delete row.candleOpen; delete row.candleClose; delete row.closePriceAtoms; delete row.priceScale; delete row.closePriceBasis; delete row.correctionPolicy; delete row.gapPolicy;
     Object.assign(row, { metricKind: "DECLARED_VENUE_SET_ROLLING_24H_VOLUME", sourceQualification: { contractVersion: q.contractVersion, qualificationId: q.qualificationId, qualificationFingerprint: q.qualificationFingerprint, providerId: q.providerId, datasetId: q.datasetId, datasetVersion: q.datasetVersion, metric: "VOLUME_24H", metricScopeFingerprint: "0".repeat(64) }, venues: [{ venueId: "venue:a", instrumentId: "weth-usd", marketType: "SPOT" }, { venueId: "venue:b", instrumentId: "weth-usd", marketType: "SPOT" }], windowStart: "2026-09-29T00:00:00.000Z", windowEnd: at, aggregationMethodologyVersion: "ROLLING_V1", duplicateMarketPolicy: "CANONICAL_INSTRUMENT_DEDUPLICATION", correctionPolicy: "VERSIONED_RESTATEMENT", reportedValueAtoms: "123456789012345678901234", scale: 18 });
     row.sourceQualification.metricScopeFingerprint = m5ScopedMetricQualificationScopeFingerprint(row);
     row.fingerprint = fingerprintM5ScopedMarketMetricContract(row);
