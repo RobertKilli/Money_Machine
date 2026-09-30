@@ -34,7 +34,7 @@ or readiness change.
 The follow-on [M5 declared venue-set rolling 24-hour volume source
 qualification](M5_DECLARED_VENUE_SET_ROLLING_24H_VOLUME_SOURCE_QUALIFICATION.md)
 checked official Coinbase Exchange, Kraken Spot, and CoinMarketCap sources on
-2026-09-30 05:32 UTC. Coinbase and Kraken remain `PARTIAL`; CMC aggregate is
+2026-09-30 05:59 UTC. Coinbase and Kraken remain `PARTIAL`; CMC aggregate is
 `BLOCKED` for the explicit declared-set metric. No exact provider response,
 complete venue membership, mapping authority, or usage/storage approval is
 inferred from API schemas or field names.

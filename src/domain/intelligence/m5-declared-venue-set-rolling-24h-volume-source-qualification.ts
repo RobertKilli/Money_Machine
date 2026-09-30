@@ -39,8 +39,9 @@ const authentic = new WeakSet<object>();
 const ISO = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const SHA = /^[a-f0-9]{64}$/;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
-const SECRET = /(?:https?:|api[_-]?key|token|authorization|bearer|password|secret|credential)/i;
+const SECRET = /(?:https?:|ftp:|www\.|\b[a-z0-9-]+\.(?:com|net|org|io|dev|app|co|uk|de|xyz)\b|api[_-]?key|token|authorization|bearer|password|secret|credential)/i;
 const time = (x: unknown): x is string => typeof x === "string" && ISO.test(x) && Number.isFinite(Date.parse(x)) && new Date(x).toISOString() === x;
+const sha = (x: unknown): x is string => typeof x === "string" && SHA.test(x);
 const safeId = (x: unknown): x is string => typeof x === "string" && ID.test(x) && !SECRET.test(x);
 const safeField = (x: unknown): x is string => typeof x === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}$/.test(x) && !SECRET.test(x);
 const exact = (x: unknown, keys: readonly string[]): x is Record<string, any> => {
@@ -65,10 +66,10 @@ export function parseM5DeclaredVenueSetRolling24hVolumeQualification(input: unkn
   try {
     if (!exact(input, rawKeys)) return INVALID;
     const x = input;
-    if (x.contractVersion !== M5_DECLARED_VENUE_SET_ROLLING_24H_VOLUME_QUALIFICATION_VERSION || x.scopedContractVersion !== "m5-scoped-market-metric-contract/v1" || x.metricKind !== "DECLARED_VENUE_SET_ROLLING_24H_VOLUME" || !(x.providerId in expected)) return INVALID;
+    if (x.contractVersion !== M5_DECLARED_VENUE_SET_ROLLING_24H_VOLUME_QUALIFICATION_VERSION || x.scopedContractVersion !== "m5-scoped-market-metric-contract/v1" || x.metricKind !== "DECLARED_VENUE_SET_ROLLING_24H_VOLUME" || typeof x.providerId !== "string" || !Object.hasOwn(expected, x.providerId)) return INVALID;
     const [, dataset, version, venue, instrument] = expected[x.providerId as keyof typeof expected];
     if (x.datasetId !== dataset || x.datasetVersion !== version || x.canonicalAssetId !== "eip155:1/native:ETH" || x.representation !== "ETH" || x.chainId !== "eip155:1" || x.contractAddress !== null || x.mappingRevisionId !== null || x.mappingRevisionFingerprint !== null) return INVALID;
-    if (!safeId(x.canonicalAssetId) || !safeId(x.representation) || !safeId(x.chainId) || !safeId(x.datasetId) || !safeId(x.datasetVersion) || !safeId(x.quoteCurrency) || x.quoteCurrency !== "USD" || !safeId(x.aggregationPolicy) || !SHA.test(x.scopedMetricContractFingerprint) || !["NONE", "SEPARATE_AUTHORITY_REQUIRED"].includes(x.currencyConversionPolicy)) return INVALID;
+    if (!safeId(x.canonicalAssetId) || !safeId(x.representation) || !safeId(x.chainId) || !safeId(x.datasetId) || !safeId(x.datasetVersion) || !safeId(x.quoteCurrency) || x.quoteCurrency !== "USD" || !safeId(x.aggregationPolicy) || !sha(x.scopedMetricContractFingerprint) || !["NONE", "SEPARATE_AUTHORITY_REQUIRED"].includes(x.currencyConversionPolicy)) return INVALID;
     if (!(x.venueUniverse === "EXPLICIT_SEALED_DECLARED" || x.venueUniverse === "TOP_N" || x.venueUniverse === "SAMPLE" || x.venueUniverse === "PROVIDER_SELECTED" || x.venueUniverse === "UNKNOWN") || !strictArray(x.venues, 1, 16)) return INVALID;
     const venues: M5DeclaredVenueMember[] = [];
     for (const raw of x.venues) {
@@ -84,21 +85,22 @@ export function parseM5DeclaredVenueSetRolling24hVolumeQualification(input: unkn
     if (venues.some(v => v.windowStart !== first.windowStart || v.windowEnd !== first.windowEnd || v.asOf !== first.asOf || v.volumeUnit !== x.aggregationVolumeUnit || v.quoteAsset !== x.quoteCurrency)) return INVALID;
     if (x.venueUniverse === "EXPLICIT_SEALED_DECLARED" && venues.some(v => v.venueCoverage !== "EXPLICIT_SEALED")) return INVALID;
     if (!strictArray(x.evidenceReferences, 1, 32) || !strictArray(x.usageApprovals, 7, 7) || !strictArray(x.blockers, 1, 64)) return INVALID;
+    for (const t of [x.reviewedAt, x.effectiveFrom, x.expiresAt, x.recordedAt]) if (!time(t)) return INVALID;
+    if (x.reviewedAt > x.effectiveFrom || x.effectiveFrom >= x.expiresAt) return INVALID;
     const refs: any[] = []; const claims = new Set<string>();
     for (const r of x.evidenceReferences) {
-      if (!exact(r, refKeys) || !time(r.checkedAt) || r.checkedAt > x.reviewedAt || typeof r.title !== "string" || !r.title.trim() || SECRET.test(r.title) || !safeId(r.evidenceId) || !strictArray(r.claims, 1, 32) || !["DOCUMENTED", "OBSERVED", "INFERRED", "UNKNOWN"].includes(r.classification)) return INVALID;
+      if (!exact(r, refKeys) || typeof r.url !== "string" || !time(r.checkedAt) || r.checkedAt > x.reviewedAt || typeof r.title !== "string" || !r.title.trim() || SECRET.test(r.title) || !safeId(r.evidenceId) || !strictArray(r.claims, 1, 32) || !["DOCUMENTED", "OBSERVED", "INFERRED", "UNKNOWN"].includes(r.classification)) return INVALID;
       const url = new URL(r.url); const hosts = x.providerId === "coinbase-exchange" ? ["docs.cdp.coinbase.com", "www.coinbase.com"] : x.providerId === "kraken-spot" ? ["docs.kraken.com", "support.kraken.com", "docs-legacy.kraken.com", "www.kraken.com"] : ["coinmarketcap.com", "support.coinmarketcap.com"];
       if (url.protocol !== "https:" || !hosts.some(h => url.hostname === h || url.hostname.endsWith(`.${h}`)) || url.username || url.password || url.search || url.hash || url.href !== r.url) return INVALID;
       for (const c of r.claims) { if (typeof c !== "string" || !/^[A-Z][A-Z0-9_]{1,95}$/.test(c) || claims.has(c)) return INVALID; claims.add(c); }
       refs.push({ ...r, claims: [...r.claims].sort() });
     }
     if (new Set(refs.map(r => r.url)).size !== refs.length || new Set(refs.map(r => r.evidenceId)).size !== refs.length) return INVALID;
+    refs.sort((a, b) => a.url < b.url ? -1 : a.url > b.url ? 1 : 0);
     const usageMap = new Map<string, string>();
     for (const a of x.usageApprovals) { if (!exact(a, ["usage", "approval"]) || !M5_DECLARED_VOLUME_USAGES.includes(a.usage) || !approvals.includes(a.approval) || usageMap.has(a.usage)) return INVALID; usageMap.set(a.usage, a.approval); }
     if (M5_DECLARED_VOLUME_USAGES.some(u => !usageMap.has(u)) || ![x.storageApproval, x.retentionApproval, x.redistributionApproval, x.commercialApproval].every(a => approvals.includes(a))) return INVALID;
     if (!x.blockers.every((b: unknown) => typeof b === "string" && /^M5_[A-Z0-9_]+$/.test(b)) || new Set(x.blockers).size !== x.blockers.length) return INVALID;
-    for (const t of [x.reviewedAt, x.effectiveFrom, x.expiresAt, x.recordedAt]) if (!time(t)) return INVALID;
-    if (x.reviewedAt > x.effectiveFrom || x.effectiveFrom >= x.expiresAt) return INVALID;
     const status: M5DeclaredVolumeStatus = x.providerId === "coinmarketcap" || ["TOP_N", "SAMPLE", "PROVIDER_SELECTED"].includes(x.venueUniverse) || venues.some(v => ["TOP_N", "SAMPLED", "PROVIDER_SELECTED"].includes(v.venueCoverage)) ? "BLOCKED" : "PARTIAL";
     if (x.blockers.length === 0) return INVALID;
     const material: Record<string, unknown> = { ...x, venues, evidenceReferences: refs, usageApprovals: M5_DECLARED_VOLUME_USAGES.map(usage => ({ usage, approval: usageMap.get(usage) })), blockers: [...x.blockers].sort(), status };

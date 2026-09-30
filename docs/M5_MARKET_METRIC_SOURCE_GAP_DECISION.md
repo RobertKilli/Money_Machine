@@ -89,7 +89,7 @@ mapping, then review additive persistence separately. See
 
 The separate [declared venue-set rolling 24-hour volume source qualification](M5_DECLARED_VENUE_SET_ROLLING_24H_VOLUME_SOURCE_QUALIFICATION.md)
 reviewed Coinbase Exchange, Kraken Spot, and CoinMarketCap aggregate using
-official documentation on 2026-09-30 05:32 UTC. Coinbase and Kraken remain
+official documentation on 2026-09-30 05:59 UTC. Coinbase and Kraken remain
 `PARTIAL`; CMC aggregate remains `BLOCKED` for the declared venue-set contract.
 That review distinguishes response field documentation from record-specific
 window, asOf, coverage, and approval evidence; it does not change legacy source

@@ -1,13 +1,13 @@
 # M5 declared venue set rolling 24-hour volume source qualification
 
-Status: source review implemented as an immutable descriptive qualification and side-effect-free fail-closed projection boundary. No source, venue set, mapping, or production usage is selected or authorized. Review checked 2026-09-30 05:32 UTC.
+Status: source review implemented as an immutable descriptive qualification and side-effect-free fail-closed projection boundary. No source, venue set, mapping, or production usage is selected or authorized. Review checked 2026-09-30 06:05 UTC.
 
 ## Decision
 
 | Candidate | Status | Decision |
 |---|---|---|
 | Coinbase Exchange ETH-USD product stats/ticker/trades | `PARTIAL` | Product field documentation gives useful candidate semantics, but not a complete exact rolling-window/asOf and complete-trade proof. |
-| Kraken Spot ETH/USD ticker/OHLC/trades | `PARTIAL` | The ticker distinguishes daily and 24-hour values, but the reviewed documentation does not bind all required pair, unit, window, and asOf semantics for the selected response. |
+| Kraken Spot ETH/USD ticker/OHLC/trades | `PARTIAL` | The ticker example shows a two-value `v` array, but docs do not identify the values or bind pair, unit, exact window, and asOf. |
 | CoinMarketCap `volume_24h` aggregate | `BLOCKED` | Negative control only: aggregate volume covers CMC's tracked/provider-screened market universe, not an explicit sealed M5 venue set. |
 
 There is no selected source, no authorized declared venue set, no mapping authority, no approved usage, and no production projection. The production decision is kept in `config/m5/declared-venue-set-rolling-24h-volume-source-qualification.production.json`. ETH remains native Ethereum ETH (`eip155:1/native:ETH`). WETH is a separate representation and is not mapped by ticker or price similarity.
@@ -30,15 +30,25 @@ The existing scoped contract remains authoritative for its own schema. This qual
 
 **DOCUMENTED.** [Get product trades](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-trades) and [Exchange REST API Pagination](https://docs.cdp.coinbase.com/exchange/rest-api/pagination) describe paged trade retrieval with bounded page sizes/cursors. The public documentation does not prove that a client has retrieved every trade for an arbitrary interval, that termination implies complete interval coverage, or how late trades, gaps, duplicates, and corrections are finalized. [REST Rate Limits Overview](https://docs.cdp.coinbase.com/exchange/rest-api/rate-limits) documents request throttling; rate limits do not establish completeness or freshness.
 
+The REST rate-limit page documents public endpoints at 10 requests per second per IP, with bursts up to 15, and says some endpoints may have custom limits. This is a published ceiling, not a completeness or freshness guarantee.
+
 **UNKNOWN.** Current ETH-USD availability/state as observed from a provider response; exact boundaries and asOf for the stats/ticker volume; treatment of current/incomplete data; a complete trade-history proof and correction/finality policy; storage, retention, derived use, redistribution, and commercial approvals. The [Coinbase Market Data Terms of Use](https://www.coinbase.com/legal/market_data) was checked as a provider terms source; no agreement or product-specific permission was accepted or obtained. No legal conclusion is made.
+
+**DOCUMENTED — usage terms.** The [Market Data Terms of Use](https://www.coinbase.com/legal/market_data) (last updated 2026-08-07) describe a limited, revocable license for personal or research use by the user/entity and its officers or employees, and say Market Data may not be used to build an application for other end users under that grant. The terms separately address redistribution/display and derived works. This records the published text only; it is not a legal conclusion or an approval for this product.
 
 ### Kraken Spot — `PARTIAL`
 
-**DOCUMENTED.** [Get Ticker Information](https://docs.kraken.com/api-reference/market-data/get-ticker-information) returns ticker volume array material distinguishing `today` from the last 24 hours; the documentation explains that the daily period starts at midnight UTC. This means “today” is not an exact rolling 24-hour window. The reviewed ticker schema does not provide a common exact `windowStart`, `windowEnd`, and volume `asOf` binding for all returned values. The docs do not establish a unit for the candidate ticker volume adequate to this contract.
+**DOCUMENTED.** [Get Ticker Information](https://docs.kraken.com/api-reference/market-data/get-ticker-information) shows a `v` field as a two-element array in its example and says “today's prices” start at midnight UTC. It does not document the meaning of either `v` index, the volume unit, or that the second index is an exact rolling 24-hour total. The sample shape alone does not establish those semantics.
+
+**INFERRED.** With no documented index labels or units and no `windowStart`, `windowEnd`, and volume `asOf` binding, neither array element can be qualified as this metric. The midnight-UTC note for prices cannot be transferred to a volume-array index.
 
 **DOCUMENTED.** [Get Tradable Asset Pairs](https://docs.kraken.com/api-reference/market-data/get-tradable-asset-pairs) exposes pair identifiers and base/quote metadata, but no response was fetched in this review; the exact current internal/display identity for ETH/USD is therefore not observed. [Get OHLC Data](https://docs.kraken.com/api-reference/market-data/get-ohlc-data) describes bucketed candles, notes the last row is the current uncommitted interval, and limits returned history. A bucket cannot silently substitute for a rolling 24-hour interval. [Get Recent Trades](https://docs.kraken.com/api-reference/market-data/get-recent-trades) documents bounded trade pages and a continuation value; that alone does not prove complete interval coverage, gap-free termination, no duplicate/late trades, or finality/corrections.
 
+The [Spot REST Rate Limits](https://docs.kraken.com/exchange/guides/rest/ratelimits) page documents a tiered call counter: Starter 15 with 0.33/s decay, Intermediate 20 with 0.5/s decay, and Pro 20 with 1/s decay. Trade-history calls count as two units; other calls count as one. The account tier is not known, and these limits do not prove historical completeness.
+
 **UNKNOWN.** Exact current ETH/USD pair record, suitable volume unit and exact rolling window/asOf semantics, complete trade coverage for the target interval, current/incomplete treatment, correction/finality, freshness, and storage/retention/redistribution/commercial permissions. [Kraken Global Terms](https://www.kraken.com/legal/global-terms) and [Kraken API documentation](https://docs.kraken.com/) were reviewed as provider sources; no terms acceptance or permission was obtained. No legal conclusion is made.
+
+**DOCUMENTED — usage terms.** [Global Terms of Service](https://www.kraken.com/legal/global-terms) contain restrictions concerning use of Kraken content and obtaining permission for uses beyond the stated permitted scope. The applicable terms, permissions, and data-rights scope for this proposed product remain unapproved and are not determined here.
 
 ### CoinMarketCap aggregate — `BLOCKED` negative control
 
@@ -60,7 +70,7 @@ The existing scoped contract remains authoritative for its own schema. This qual
 
 ## Evidence and remaining blockers before `QUALIFIED`
 
-All provider-page checks listed here were performed 2026-09-30 05:32 UTC.
+All provider-page checks listed here were performed 2026-09-30 06:05 UTC.
 
 - **DOCUMENTED:** only the narrow statements attributed to the official pages above.
 - **OBSERVED:** the listed static documentation pages were read at the control time; no product, pair, ticker, stats, OHLC, or trade API response was observed.
@@ -75,22 +85,21 @@ Before any source can become `QUALIFIED`, a later reviewed phase must supply: an
 
 | Title | Official URL | Control time | Narrow claim used |
 |---|---|---|---|
-| Get single product | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-single-product | 2026-09-30 05:32 UTC | Product schema; example does not prove current ETH-USD status. |
-| Get product stats | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-stats | 2026-09-30 05:32 UTC | 24h/30d stats; `volume` in base units; no exact volume boundaries/asOf schema. |
-| Get product ticker | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-ticker | 2026-09-30 05:32 UTC | Ticker snapshot says 24h volume; separate last trade time. |
-| Get product trades | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-trades | 2026-09-30 05:32 UTC | Paged trade records. |
-| Exchange REST API Pagination | https://docs.cdp.coinbase.com/exchange/rest-api/pagination | 2026-09-30 05:32 UTC | Cursor pagination and page bounds. |
-| REST Rate Limits Overview | https://docs.cdp.coinbase.com/exchange/rest-api/rate-limits | 2026-09-30 05:32 UTC | Request limits/throttling. |
-| Market Data Terms of Use | https://www.coinbase.com/legal/market_data | 2026-09-30 05:32 UTC | Provider market-data terms; no approval inferred. |
-| Get Ticker Information | https://docs.kraken.com/api-reference/market-data/get-ticker-information | 2026-09-30 05:32 UTC | Today versus last-24h ticker fields; today UTC day boundary. |
-| Get OHLC Data | https://docs.kraken.com/api-reference/market-data/get-ohlc-data | 2026-09-30 05:32 UTC | Bucketed data, current uncommitted row, bounded history. |
-| Get Recent Trades | https://docs.kraken.com/api-reference/market-data/get-recent-trades | 2026-09-30 05:32 UTC | Bounded trade pagination; does not prove complete interval history. |
-| Get Tradable Asset Pairs | https://docs.kraken.com/api-reference/market-data/get-tradable-asset-pairs | 2026-09-30 05:32 UTC | Pair metadata schema; selected ETH/USD record not observed. |
-| Spot REST Rate Limits | https://docs.kraken.com/exchange/guides/rest/ratelimits | 2026-09-30 05:32 UTC | Tiered public REST rate-limit policy. |
-| Global Terms of Service | https://www.kraken.com/legal/global-terms | 2026-09-30 05:32 UTC | Provider terms source; no approval inferred. |
-| CoinMarketCap API Documentation: Schemas | https://coinmarketcap.com/api/documentation/pro-api-reference/~schemas | 2026-09-30 05:32 UTC | Volume fields, adjusted/reported distinction, quote and timestamp schema. |
-| Volume & Open Interest (Market Pair, Cryptoasset, Exchange, Aggregate) | https://support.coinmarketcap.com/hc/en-us/articles/360043395912-Volume-Open-Interest-Market-Pair-Cryptoasset-Exchange-Aggregate | 2026-09-30 05:32 UTC | Exchange/asset/aggregate universe and screening definitions. |
-| CoinMarketCap API Pricing Plans | https://coinmarketcap.com/api/pricing/ | 2026-09-30 05:32 UTC | Pricing/plan page reviewed; no subscription or entitlement inferred. |
-| CoinMarketCap Commercial API Terms of Use | https://pro.coinmarketcap.com/user-agreement-commercial/ | 2026-09-30 05:32 UTC | Provider terms source; no approval inferred. |
+| Get single product | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-single-product | 2026-09-30 06:05 UTC | Product schema; example does not prove current ETH-USD status. |
+| Get product stats | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-stats | 2026-09-30 06:05 UTC | 24h/30d stats; `volume` in base units; no exact volume boundaries/asOf schema. |
+| Get product ticker | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-ticker | 2026-09-30 06:05 UTC | Ticker snapshot says 24h volume; separate last trade time. |
+| Get product trades | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-trades | 2026-09-30 06:05 UTC | Paged trade records. |
+| Exchange REST API Pagination | https://docs.cdp.coinbase.com/exchange/rest-api/pagination | 2026-09-30 06:05 UTC | Cursor pagination and page bounds. |
+| REST Rate Limits Overview | https://docs.cdp.coinbase.com/exchange/rest-api/rate-limits | 2026-09-30 06:05 UTC | Public 10 requests/s/IP, burst up to 15, with possible endpoint overrides. |
+| Market Data Terms of Use | https://www.coinbase.com/legal/market_data | 2026-09-30 06:05 UTC | Published use grant and restrictions; no approval inferred. |
+| Get Ticker Information | https://docs.kraken.com/api-reference/market-data/get-ticker-information | 2026-09-30 06:05 UTC | Two-value `v` example; `v` index semantics/unit are undocumented. Daily price note says midnight UTC. |
+| Get OHLC Data | https://docs.kraken.com/api-reference/market-data/get-ohlc-data | 2026-09-30 06:05 UTC | Bucketed data, current uncommitted row, bounded history. |
+| Get Recent Trades | https://docs.kraken.com/api-reference/market-data/get-recent-trades | 2026-09-30 06:05 UTC | Bounded trade pagination; does not prove complete interval history. |
+| Get Tradable Asset Pairs | https://docs.kraken.com/api-reference/market-data/get-tradable-asset-pairs | 2026-09-30 06:05 UTC | Pair metadata schema; selected ETH/USD record not observed. |
+| Spot REST Rate Limits | https://docs.kraken.com/exchange/guides/rest/ratelimits | 2026-09-30 06:05 UTC | Tiered call counter and trade-history call weighting. |
+| Global Terms of Service | https://www.kraken.com/legal/global-terms | 2026-09-30 06:05 UTC | Published terms source; no permission or approval inferred. |
+| CoinMarketCap API Documentation: Schemas | https://coinmarketcap.com/api/documentation/pro-api-reference/~schemas | 2026-09-30 06:05 UTC | Volume fields, adjusted/reported distinction, quote and timestamp schema. |
+| Volume & Open Interest (Market Pair, Cryptoasset, Exchange, Aggregate) | https://support.coinmarketcap.com/hc/en-us/articles/360043395912-Volume-Open-Interest-Market-Pair-Cryptoasset-Exchange-Aggregate | 2026-09-30 06:05 UTC | Exchange/asset/aggregate universe and screening definitions. |
+| CoinMarketCap API Pricing | https://coinmarketcap.com/api/pricing/ | 2026-09-30 06:05 UTC | Plan table and FAQ describe commercial-use scope and restrictions; selected plan/terms not accepted, no approval inferred. |
 
 No terms were accepted. This document is not legal advice.
