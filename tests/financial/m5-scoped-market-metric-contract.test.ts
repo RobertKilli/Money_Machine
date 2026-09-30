@@ -52,6 +52,9 @@ describe("M5 scoped market metric contracts", () => {
     if (result.status === "VALID") {
       expect(result.config.decisions.map(x => x.metricKind)).toEqual(["DECLARED_VENUE_SET_ROLLING_24H_VOLUME", "NAMED_VENUE_DAILY_CLOSE", "REPORTED_CIRCULATING_MARKET_CAP"]);
       expect(result.config.decisions.every(x => x.status === "BLOCKED")).toBe(true);
+      for (const code of ["M5_SCOPED_PROVIDER_NOT_SELECTED", "M5_SCOPED_SOURCE_QUALIFICATION_REQUIRED", "M5_SCOPED_ASSET_MAPPING_AUTHORITY_REQUIRED", "M5_SCOPED_USAGE_APPROVAL_REQUIRED", "M5_SCOPED_STORAGE_APPROVAL_REQUIRED", "M5_SCOPED_COMMERCIAL_APPROVAL_REQUIRED", "M5_SCOPED_RETENTION_APPROVAL_REQUIRED"]) {
+        expect(result.config.decisions.every(x => x.blockers.includes(code))).toBe(true);
+      }
       expect(Object.isFrozen(result.config.decisions[0]?.blockers)).toBe(true);
       const replay = structuredClone(raw); replay.recordedAt = "2026-10-01T00:00:00.000Z";
       for (const decision of replay.decisions) decision.recordedAt = replay.recordedAt;
@@ -118,6 +121,10 @@ describe("M5 scoped market metric contracts", () => {
     expect(parseM5ScopedMarketMetricContract(internal).status).toBe("INVALID");
     const noValue = marketCapInput(); noValue.reportedValueAtoms = null; noValue.fingerprint = fingerprintM5ScopedMarketMetricContract(noValue);
     expect(parseM5ScopedMarketMetricContract(noValue).status).toBe("INVALID");
+    const capFromClose = closeInput() as any; capFromClose.metricKind = "REPORTED_CIRCULATING_MARKET_CAP"; capFromClose.supplyBasis = "CIRCULATING";
+    capFromClose.sourceQualification.metric = "MARKET_CAP"; capFromClose.sourceQualification.metricScopeFingerprint = m5ScopedMetricQualificationScopeFingerprint(capFromClose);
+    capFromClose.fingerprint = fingerprintM5ScopedMarketMetricContract(capFromClose);
+    expect(parseM5ScopedMarketMetricContract(capFromClose).status).toBe("INVALID");
     const wethAsEth = marketCapInput(); wethAsEth.canonicalAssetId = "eip155:1/native:ETH"; wethAsEth.representation = "WETH";
     wethAsEth.sourceQualification.metricScopeFingerprint = m5ScopedMetricQualificationScopeFingerprint(wethAsEth); wethAsEth.fingerprint = fingerprintM5ScopedMarketMetricContract(wethAsEth);
     const noImplicitEth = evaluateM5ScopedMarketMetric(wethAsEth, qualification("MARKET_CAP"));
@@ -129,11 +136,11 @@ describe("M5 scoped market metric contracts", () => {
     const q = qualification("VOLUME_24H");
     const row: any = closeInput();
     delete row.venueId; delete row.instrumentId; delete row.baseAsset; delete row.quoteAsset; delete row.marketType; delete row.timezone; delete row.sessionBoundary; delete row.candleInterval; delete row.candleOpen; delete row.candleClose; delete row.closePriceAtoms; delete row.priceScale; delete row.closePriceBasis; delete row.correctionPolicy; delete row.gapPolicy;
-    Object.assign(row, { metricKind: "DECLARED_VENUE_SET_ROLLING_24H_VOLUME", sourceQualification: { contractVersion: q.contractVersion, qualificationId: q.qualificationId, qualificationFingerprint: q.qualificationFingerprint, providerId: q.providerId, datasetId: q.datasetId, datasetVersion: q.datasetVersion, metric: "VOLUME_24H", metricScopeFingerprint: "0".repeat(64) }, venues: [{ venueId: "venue:a", instrumentId: "weth-usd", marketType: "SPOT" }, { venueId: "venue:b", instrumentId: "weth-usd", marketType: "SPOT" }], windowStart: "2026-09-29T00:00:00.000Z", windowEnd: at, aggregationMethodologyVersion: "ROLLING_V1", duplicateMarketPolicy: "CANONICAL_INSTRUMENT_DEDUPLICATION", correctionPolicy: "VERSIONED_RESTATEMENT", reportedValueAtoms: "123456789012345678901234", scale: 18 });
+    Object.assign(row, { metricKind: "DECLARED_VENUE_SET_ROLLING_24H_VOLUME", sourceQualification: { contractVersion: q.contractVersion, qualificationId: q.qualificationId, qualificationFingerprint: q.qualificationFingerprint, providerId: q.providerId, datasetId: q.datasetId, datasetVersion: q.datasetVersion, metric: "VOLUME_24H", metricScopeFingerprint: "0".repeat(64) }, venues: [{ venueId: "venue:a", instrumentId: "weth-usd", baseAsset: "WETH", quoteAsset: "USD", marketType: "SPOT" }, { venueId: "venue:b", instrumentId: "weth-usd", baseAsset: "WETH", quoteAsset: "USD", marketType: "SPOT" }], windowStart: "2026-09-29T00:00:00.000Z", windowEnd: at, aggregationMethodologyVersion: "ROLLING_V1", duplicateMarketPolicy: "CANONICAL_INSTRUMENT_DEDUPLICATION", correctionPolicy: "VERSIONED_RESTATEMENT", reportedValueAtoms: "123456789012345678901234", scale: 18 });
     row.sourceQualification.metricScopeFingerprint = m5ScopedMetricQualificationScopeFingerprint(row);
     row.fingerprint = fingerprintM5ScopedMarketMetricContract(row);
     expect(parseM5ScopedMarketMetricContract(row).status).toBe("VALID");
-    for (const mutate of [(x: any) => { x.windowStart = "2026-09-29T01:00:00.000Z"; }, (x: any) => { x.windowEnd = "2026-09-29T23:59:59.999Z"; }, (x: any) => { x.venues.push(structuredClone(x.venues[0])); }, (x: any) => { x.venues.reverse(); }, (x: any) => { x.venues[0].marketType = "DEX_SPOT"; }, (x: any) => { x.venues.push({ venueId: "venue:c", instrumentId: "weth-usd", marketType: "SPOT" }); }, (x: any) => { x.venues.pop(); }]) {
+    for (const mutate of [(x: any) => { x.windowStart = "2026-09-29T01:00:00.000Z"; }, (x: any) => { x.windowEnd = "2026-09-29T23:59:59.999Z"; }, (x: any) => { x.venues.push(structuredClone(x.venues[0])); }, (x: any) => { x.venues.reverse(); }, (x: any) => { x.venues[0].marketType = "DEX_SPOT"; }, (x: any) => { x.venues[0].baseAsset = "ETH"; }, (x: any) => { x.venues[0].quoteAsset = "EUR"; }, (x: any) => { x.venues.push({ venueId: "venue:c", instrumentId: "weth-usd", baseAsset: "WETH", quoteAsset: "USD", marketType: "SPOT" }); }, (x: any) => { x.venues.pop(); }]) {
       const bad = structuredClone(row); mutate(bad); bad.fingerprint = fingerprintM5ScopedMarketMetricContract(bad); expect(parseM5ScopedMarketMetricContract(bad).status).toBe("INVALID");
     }
   });
