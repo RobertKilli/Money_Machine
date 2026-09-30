@@ -49,3 +49,11 @@ Synthetic tests prove parser, reconciliation, deterministic identity, receipt va
 Before a fixture pipeline consumes real fixture files, define fixture provenance and review controls separately. Before any live request, a separately approved acquisition slice must use the existing source qualification, approved server-side request identity, fair-access controls and bounded transport; this pipeline itself remains transport-free. Before authoritative events or persistence, add separately reviewed issuer and asset mapping revisions, corroboration, lifecycle/correction policy, source-artifact lineage, storage/retention/use approvals and an authority issuer that cannot be reached from fixture claims. Signal generation and trading remain later, separately gated contexts.
 
 The SEC source's documented scope and current blockers remain in [SEC EDGAR 8-K Event Source Qualification](SEC_EDGAR_8K_EVENT_SOURCE_QUALIFICATION.md). No additional SEC behavior is inferred from these synthetic fixtures.
+
+The mapping follow-on keeps registrant/legal-entity authority separate from
+cryptoasset identity. It binds a trusted claim mention to an existing
+`AssetMappingRevision` by exact revision ID/fingerprint; it does not create a
+canonical asset record or infer a mapping from ticker, symbol, name, price, or
+peg. Its result is `MAPPED_NON_AUTHORITATIVE_EVENT_CLAIM`, still not an
+authoritative event. Production mapping registries remain empty. See
+[`EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md`](EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md).

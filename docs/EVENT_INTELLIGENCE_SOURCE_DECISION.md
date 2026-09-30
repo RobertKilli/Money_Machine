@@ -82,6 +82,14 @@ An authoritative event is not a buy signal. Discovery scores are not authority; 
 
 Production config is intentionally `BLOCKED`: no selected source stack, no production acquisition, no event-authority persistence, no trading signals, no issuer/asset mapping authority, and every usage/retention/redistribution/commercial approval is `NOT_APPROVED`. No real company or investment watchlist is included.
 
+The follow-on mapping slice defines separate issuer legal-entity authority and
+event asset-mention binding to an existing canonical asset mapping revision.
+Its production registries remain empty and event claims can only reach
+`MAPPED_NON_AUTHORITATIVE_EVENT_CLAIM`; source decision does not issue or
+upgrade those mappings. Corroboration and event-authority policy remain the
+next upstream review boundary. See
+[`EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md`](EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md).
+
 Before the first live acquisition, a separate reviewed slice must:
 
 1. select a jurisdiction and a narrowly defined issuer universe without relying on ticker-only identity;

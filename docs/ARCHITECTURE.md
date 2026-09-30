@@ -849,3 +849,11 @@ mapping, corroboration, event authority, persistence and signals are separate
 boundaries and remain blocked. Receipt/effective availability is tracked
 separately from document and claim identity. See
 `docs/SEC_EDGAR_8K_FIXTURE_CLAIM_PIPELINE.md`.
+
+Event-intelligence issuer mapping is a separate legal-entity authority. Event
+asset mentions use a narrow binding to an existing canonical
+`AssetMappingRevision`; no parallel canonical asset registry or M5 mapping
+table is added. The time-scoped resolvers fail closed, and assembly stops at
+`MAPPED_NON_AUTHORITATIVE_EVENT_CLAIM`. Production registries, persistence,
+event authority, and signal generation remain blocked. See
+`docs/EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md`.
