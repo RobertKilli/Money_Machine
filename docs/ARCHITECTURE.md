@@ -375,6 +375,21 @@ reconstructed; no newest/best selection is allowed. This slice does not create
 venue authority, suspicious assessments, manifests, evaluator results or
 canonical M5. Provider/legal/production approval remains a separate blocker.
 
+### M5 market metric source-gap decision
+
+`m5-market-metric-source-gap-decision/v1` records the reviewed source decision
+for daily close, market cap, and rolling 24-hour volume independently. It is
+strict immutable decision evidence only: it does not grant provider usage or
+storage approval, create projection/ingestion authority, or change readiness.
+The current production record is `BLOCKED` for all three metrics. CoinGecko
+qualification remains `PARTIAL`; UTC daily candle volume is not interchangeable
+with rolling 24-hour volume, and a total-WETH-supply derivation would require a
+different market-cap contract basis. See
+[`M5_MARKET_METRIC_SOURCE_GAP_DECISION.md`](M5_MARKET_METRIC_SOURCE_GAP_DECISION.md)
+for contract details, candidate evidence, seven independent usage approvals,
+separate retention approval, and unresolved product decisions.
+No provider calls or persistence are introduced by this record.
+
 ### M5 venue-universe authority
 
 `m5-venue-universe-authority/v1` is a fixture-only, server-only authority

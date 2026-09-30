@@ -1,0 +1,104 @@
+{
+  "contractVersion": "m5-market-metric-source-gap-decision/v1",
+  "reviewedAt": "2026-09-30T01:47:43.000Z",
+  "recordedAt": "2026-09-30T01:47:43.000Z",
+  "decisions": [
+    {
+      "metric": "DAILY_CLOSE_SERIES",
+      "decision": "BLOCKED",
+      "recommendation": "EXTERNAL_PROVIDER",
+      "sourceCandidateId": "coinapi-venue-candles",
+      "methodologyId": "SINGLE_VENUE_UTC_1DAY_CLOSE_V1",
+      "sourceScope": "Ethereum mainnet WETH/USD or explicitly approved WETH quote on one named venue; exact symbol and contract mapping unverified",
+      "requiredInputs": ["canonical venue/symbol identity", "UTC 1DAY OHLCV candle with close", "history and correction policy", "receipt timestamps", "sealed SourceLineage"],
+      "methodology": "Use the close field from one explicitly selected UTC daily venue candle. Do not substitute ETH for WETH or describe an unspecified market-wide snapshot as a close.",
+      "completeness": "PARTIAL",
+      "evidenceReferences": [
+        { "url": "https://www.coinapi.io/products/market-data-api/docs/rest-api/ohlcv/ohlcv/symbol_id/history/get", "title": "Historical data by symbol_id", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["1DAY OHLCV candle schema is available for a specified symbol_id", "time_period_start and end bound candle period"] },
+        { "url": "https://www.coinapi.io/products/market-data-api/faq", "title": "Market Data API FAQ", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["1DAY period is aligned to UTC midnight"] },
+        { "url": "https://coinmarketcap.com/api/documentation/pro-api-reference/cryptocurrency", "title": "CoinMarketCap API Documentation: OHLCV Historical", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["Daily OHLCV includes explicit time_open, time_close and close quote"] },
+        { "url": "https://docs.coingecko.com/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Pro API Reference)", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["CoinGecko range response has timestamp/value pairs", "CoinGecko documentation does not define a daily close formula"] }
+      ],
+      "usageApprovals": [
+        { "usage": "NETWORK_ACQUISITION", "approval": "UNKNOWN" },
+        { "usage": "RAW_PAYLOAD_PROCESSING", "approval": "UNKNOWN" },
+        { "usage": "RAW_PAYLOAD_STORAGE", "approval": "UNKNOWN" },
+        { "usage": "NORMALIZED_STORAGE", "approval": "UNKNOWN" },
+        { "usage": "AUTHORITY_PERSISTENCE", "approval": "UNKNOWN" },
+        { "usage": "REDISTRIBUTION", "approval": "UNKNOWN" },
+        { "usage": "COMMERCIAL_USE", "approval": "UNKNOWN" }
+      ],
+      "retentionApproval": "UNKNOWN",
+      "pricing": { "status": "PUBLIC", "currency": "USD", "monthlyFrom": 79, "note": "CoinAPI Startup list price; does not establish required instrument coverage or total workload cost." },
+      "blockers": ["M5_DAILY_CLOSE_VENUE_AND_WETH_SYMBOL_UNDECIDED", "M5_COINAPI_WETH_INSTRUMENT_COVERAGE_UNVERIFIED", "M5_CORRECTIONS_AND_GAP_POLICY_UNPROVEN", "M5_PROVIDER_USAGE_AND_STORAGE_RIGHTS_UNAPPROVED"],
+      "reviewedAt": "2026-09-30T01:47:43.000Z",
+      "expiresAt": "2027-09-30T01:47:43.000Z",
+      "recordedAt": "2026-09-30T01:47:43.000Z"
+    },
+    {
+      "metric": "MARKET_CAP",
+      "decision": "BLOCKED",
+      "recommendation": "CONTRACT_CHANGE_REQUIRED",
+      "sourceCandidateId": "ethereum-weth-total-supply-times-approved-price",
+      "methodologyId": "WETH_TOTAL_SUPPLY_X_APPROVED_PRICE_V1",
+      "sourceScope": "WETH total minted supply at a finalized Ethereum block multiplied by a separately approved WETH/USD reference price; this is not circulating market cap",
+      "requiredInputs": ["WETH totalSupply at an explicit finalized block", "block timestamp and finality proof", "approved WETH/USD price and asOf", "exact integer arithmetic and declared scales", "sealed SourceLineage for both inputs"],
+      "methodology": "Potential deterministic derivation: market value = exact WETH totalSupply atoms at block b × approved USD-per-WETH price at the same declared asOf, with integer fixed-point multiplication and explicit rounding. This yields total-supply-based wrapped-asset value, not current MARKET_CAP_REPORTED/circulating basis.",
+      "completeness": "PARTIAL",
+      "evidenceReferences": [
+        { "url": "https://eips.ethereum.org/EIPS/eip-20", "title": "EIP-20: Token Standard", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["ERC-20 exposes totalSupply as total token supply"] },
+        { "url": "https://ethereum.org/developers/docs/apis/json-rpc/", "title": "Ethereum JSON-RPC API", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["eth_call supports querying contract state at a selected block"] },
+        { "url": "https://ethereum.org/developers/docs/nodes-and-clients/archive-nodes", "title": "Archive nodes", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["Historical state reads require archive-capable node data"] },
+        { "url": "https://support.coinmarketcap.com/hc/en-us/articles/360043396252-Supply-Circulating-Total-Max", "title": "Circulating, Total, and Max Supply", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["Circulating supply is a reviewed estimate of assets in public hands"] },
+        { "url": "https://docs.coingecko.com/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Pro API Reference)", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["CoinGecko returns a market_caps series but does not define its formula or null policy"] }
+      ],
+      "usageApprovals": [
+        { "usage": "NETWORK_ACQUISITION", "approval": "UNKNOWN" },
+        { "usage": "RAW_PAYLOAD_PROCESSING", "approval": "UNKNOWN" },
+        { "usage": "RAW_PAYLOAD_STORAGE", "approval": "UNKNOWN" },
+        { "usage": "NORMALIZED_STORAGE", "approval": "UNKNOWN" },
+        { "usage": "AUTHORITY_PERSISTENCE", "approval": "UNKNOWN" },
+        { "usage": "REDISTRIBUTION", "approval": "UNKNOWN" },
+        { "usage": "COMMERCIAL_USE", "approval": "UNKNOWN" }
+      ],
+      "retentionApproval": "UNKNOWN",
+      "pricing": { "status": "UNKNOWN", "currency": null, "monthlyFrom": null, "note": "Archive-state infrastructure and a compliant price source need workload-specific pricing." },
+      "blockers": ["M5_CURRENT_AUTHORITY_REQUIRES_MARKET_CAP_REPORTED_BASIS", "M5_TOTAL_WETH_SUPPLY_IS_NOT_CIRCULATING_SUPPLY", "M5_PRICE_SOURCE_AND_SAME_AS_OF_BINDING_UNSELECTED", "M5_ARCHIVE_STATE_AND_FINALITY_POLICY_UNSPECIFIED", "M5_CONTRACT_CHANGE_AND_PRODUCT_APPROVAL_REQUIRED"],
+      "reviewedAt": "2026-09-30T01:47:43.000Z",
+      "expiresAt": "2027-09-30T01:47:43.000Z",
+      "recordedAt": "2026-09-30T01:47:43.000Z"
+    },
+    {
+      "metric": "VOLUME_24H",
+      "decision": "BLOCKED",
+      "recommendation": "CONTRACT_CHANGE_REQUIRED",
+      "sourceCandidateId": "coinmarketcap-spot-volume-candidate",
+      "methodologyId": "CMC_AGGREGATE_SPOT_ROLLING_24H_CANDIDATE_V1",
+      "sourceScope": "Candidate describes aggregate cryptoasset 24-hour spot turnover across tracked exchanges; exact WETH historical window endpoints and complete coverage are unverified",
+      "requiredInputs": ["explicit market/venue universe and spot-only policy", "volume quote currency", "windowStart and windowEnd exactly 24 hours apart", "windowEnd bound to asOf", "duplicate/anomaly methodology", "sealed SourceLineage"],
+      "methodology": "Do not use UTC daily candle volume as rolling VOLUME_24H. CoinMarketCap describes an aggregate 24-hour spot measure and screening, but reviewed public docs do not bind each historical point to an exact rolling window start/end and asOf. If only UTC buckets can be proven, change and version the product metric contract explicitly.",
+      "completeness": "PARTIAL",
+      "evidenceReferences": [
+        { "url": "https://support.coinmarketcap.com/hc/en-us/articles/360043395912-Volume-Open-Interest-Market-Pair-Cryptoasset-Exchange-Aggregate", "title": "Volume, Open Interest, Market Pair, Cryptoasset, Exchange Aggregate", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["Cryptoasset volume is described as 24-hour spot trading across tracked exchanges", "Anomaly screening can exclude market-pair values"] },
+        { "url": "https://coinmarketcap.com/api/documentation/pro-api-reference/cryptocurrency", "title": "CoinMarketCap API Documentation: OHLCV Historical", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["Daily OHLCV volume is returned per named daily candle period"] },
+        { "url": "https://www.coinapi.io/products/market-data-api/docs/rest-api/ohlcv/ohlcv/symbol_id/history/get", "title": "Historical data by symbol_id", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["OHLCV volume is aggregated within a requested candle period"] },
+        { "url": "https://docs.coingecko.com/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Pro API Reference)", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-30T01:47:43.000Z", "claims": ["CoinGecko range returns total_volumes timestamp/value pairs", "CoinGecko does not document exact rolling 24-hour window boundaries"] }
+      ],
+      "usageApprovals": [
+        { "usage": "NETWORK_ACQUISITION", "approval": "UNKNOWN" },
+        { "usage": "RAW_PAYLOAD_PROCESSING", "approval": "UNKNOWN" },
+        { "usage": "RAW_PAYLOAD_STORAGE", "approval": "UNKNOWN" },
+        { "usage": "NORMALIZED_STORAGE", "approval": "UNKNOWN" },
+        { "usage": "AUTHORITY_PERSISTENCE", "approval": "UNKNOWN" },
+        { "usage": "REDISTRIBUTION", "approval": "UNKNOWN" },
+        { "usage": "COMMERCIAL_USE", "approval": "UNKNOWN" }
+      ],
+      "retentionApproval": "UNKNOWN",
+      "pricing": { "status": "PUBLIC", "currency": "USD", "monthlyFrom": 79, "note": "CoinMarketCap Startup list price; required endpoint tier/credit usage, license fit and asset coverage must be confirmed." },
+      "blockers": ["M5_EXACT_ROLLING_WINDOW_START_END_NOT_PROVEN", "M5_AS_OF_BINDING_AND_HISTORICAL_COVERAGE_UNPROVEN", "M5_SPOT_VENUE_UNIVERSE_AND_EXCLUSIONS_UNDECIDED", "M5_UTC_BUCKET_SUBSTITUTION_REQUIRES_CONTRACT_CHANGE", "M5_PROVIDER_USAGE_AND_STORAGE_RIGHTS_UNAPPROVED"],
+      "reviewedAt": "2026-09-30T01:47:43.000Z",
+      "expiresAt": "2027-09-30T01:47:43.000Z",
+      "recordedAt": "2026-09-30T01:47:43.000Z"
+    }
+  ]
+}
