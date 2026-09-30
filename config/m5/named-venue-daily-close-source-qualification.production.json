@@ -1,6 +1,8 @@
 {
   "version": "m5-named-venue-daily-close-source-qualification/v1",
-  "reviewedAt": "2026-09-30T03:57:19.000Z",
+  "scopedContractVersion": "m5-scoped-market-metric-contract/v1",
+  "metricKind": "NAMED_VENUE_DAILY_CLOSE",
+  "reviewedAt": "2026-09-30T04:13:11.000Z",
   "selectedSource": null,
   "productionStatus": "BLOCKED",
   "candidates": [
@@ -10,8 +12,16 @@
       "baseAsset": "ETH",
       "quoteAsset": "USD",
       "marketType": "SPOT",
+      "dataset": "coinbase-exchange/product-candles/official-doc-profile-2026-09",
       "qualificationStatus": "PARTIAL",
-      "blockers": ["M5_DAILY_CLOSE_PRODUCT_CURRENT_IDENTITY_UNVERIFIED", "M5_DAILY_CLOSE_UTC_BOUNDARY_UNSPECIFIED", "M5_DAILY_CLOSE_GAP_POLICY_UNQUALIFIED", "M5_DAILY_CLOSE_CORRECTION_FINALITY_UNKNOWN", "M5_DAILY_CLOSE_HISTORY_COVERAGE_UNPROVEN", "M5_DAILY_CLOSE_MAPPING_AUTHORITY_REQUIRED", "M5_DAILY_CLOSE_USAGE_STORAGE_APPROVAL_REQUIRED"]
+      "selected": false,
+      "mappingAuthority": null,
+      "usageApproval": "NOT_APPROVED",
+      "storageApproval": "NOT_APPROVED",
+      "retentionApproval": "NOT_APPROVED",
+      "redistributionApproval": "NOT_APPROVED",
+      "commercialApproval": "NOT_APPROVED",
+      "blockers": ["M5_DAILY_CLOSE_COMMERCIAL_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_CORRECTION_FINALITY_UNKNOWN", "M5_DAILY_CLOSE_CURRENT_CANDLE_SEMANTICS_UNKNOWN", "M5_DAILY_CLOSE_GAP_POLICY_UNQUALIFIED", "M5_DAILY_CLOSE_HISTORY_COVERAGE_UNPROVEN", "M5_DAILY_CLOSE_MAPPING_AUTHORITY_REQUIRED", "M5_DAILY_CLOSE_PRODUCT_CURRENT_IDENTITY_UNVERIFIED", "M5_DAILY_CLOSE_REDISTRIBUTION_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_RETENTION_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_STORAGE_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_USAGE_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_UTC_BOUNDARY_UNSPECIFIED"]
     },
     {
       "venueId": "kraken-spot",
@@ -19,11 +29,19 @@
       "baseAsset": "ETH",
       "quoteAsset": "USD",
       "marketType": "SPOT",
+      "dataset": "kraken/spot-ohlc/official-doc-profile-2026-09",
       "qualificationStatus": "BLOCKED",
-      "blockers": ["M5_DAILY_CLOSE_CANONICAL_PAIR_ID_UNVERIFIED", "M5_DAILY_CLOSE_UTC_BOUNDARY_UNSPECIFIED", "M5_DAILY_CLOSE_CURRENT_CANDLE_MUST_BE_FILTERED", "M5_DAILY_CLOSE_GAP_POLICY_UNQUALIFIED", "M5_DAILY_CLOSE_CORRECTION_FINALITY_UNKNOWN", "M5_DAILY_CLOSE_HISTORY_LIMIT_720", "M5_DAILY_CLOSE_MAPPING_AUTHORITY_REQUIRED", "M5_DAILY_CLOSE_USAGE_STORAGE_APPROVAL_REQUIRED"]
+      "selected": false,
+      "mappingAuthority": null,
+      "usageApproval": "NOT_APPROVED",
+      "storageApproval": "NOT_APPROVED",
+      "retentionApproval": "NOT_APPROVED",
+      "redistributionApproval": "NOT_APPROVED",
+      "commercialApproval": "NOT_APPROVED",
+      "blockers": ["M5_DAILY_CLOSE_CANONICAL_PAIR_ID_UNVERIFIED", "M5_DAILY_CLOSE_COMMERCIAL_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_CORRECTION_FINALITY_UNKNOWN", "M5_DAILY_CLOSE_CURRENT_CANDLE_MUST_BE_FILTERED", "M5_DAILY_CLOSE_GAP_POLICY_UNQUALIFIED", "M5_DAILY_CLOSE_HISTORY_COVERAGE_UNPROVEN", "M5_DAILY_CLOSE_MAPPING_AUTHORITY_REQUIRED", "M5_DAILY_CLOSE_REDISTRIBUTION_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_RETENTION_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_STORAGE_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_USAGE_APPROVAL_REQUIRED", "M5_DAILY_CLOSE_UTC_BOUNDARY_UNSPECIFIED"]
     }
   ],
   "otherScopedMetrics": "BLOCKED",
   "mappingAuthority": null,
-  "usageStorageCommercialApproval": null
+  "usageStorageRetentionRedistributionCommercialApproval": null
 }
