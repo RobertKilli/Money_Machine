@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   evaluateM5MarketMetricSourceGapDecision,
+  M5_SOURCE_USAGES,
   parseM5MarketMetricSourceGapDecisionConfig,
 } from "@/domain/intelligence/m5-market-metric-source-gap-decision";
 import { M5_COINGECKO_REQUIRED_SEMANTICS, parseM5CoinGeckoMarketSourceQualification, type M5CoinGeckoMarketMetric } from "@/domain/intelligence/m5-coingecko-market-source-qualification";
@@ -21,8 +22,10 @@ describe("M5 market metric source gap decision", () => {
     expect(config.contractVersion).toBe("m5-market-metric-source-gap-decision/v1");
     expect(config.decisions.map(item => item.metric)).toEqual(["DAILY_CLOSE_SERIES", "MARKET_CAP", "VOLUME_24H"]);
     expect(config.decisions.map(item => item.decision)).toEqual(["BLOCKED", "BLOCKED", "BLOCKED"]);
-    expect(config.decisions.every(item => item.usageApproval !== "APPROVED" && item.storageApproval !== "APPROVED")).toBe(true);
+    expect(config.decisions.every(item => item.usageApprovals.length === M5_SOURCE_USAGES.length && item.usageApprovals.every(approval => approval.approval === "UNKNOWN") && item.retentionApproval === "UNKNOWN")).toBe(true);
     expect(Object.isFrozen(config)).toBe(true);
+    expect(Object.isFrozen(M5_SOURCE_USAGES)).toBe(true);
+    expect(Object.isFrozen(config.decisions[0]?.usageApprovals)).toBe(true);
     expect(Object.isFrozen(config.decisions[0]?.evidenceReferences[0]?.claims)).toBe(true);
     expect(JSON.stringify(production())).not.toMatch(/api[_-]?key|access[_-]?token|credential|account[_-]?id/i);
   });
@@ -45,7 +48,8 @@ describe("M5 market metric source gap decision", () => {
 
   it("rejects duplicate metrics, unknown fields, unsafe shapes and unsafe URLs", () => {
     const duplicate = production();
-    duplicate.decisions = [...duplicate.decisions as unknown[], (duplicate.decisions as unknown[])[0]];
+    const decisions = duplicate.decisions as unknown[];
+    duplicate.decisions = [decisions[0], decisions[1], structuredClone(decisions[0])];
     expect(parseM5MarketMetricSourceGapDecisionConfig(duplicate).status).toBe("INVALID");
 
     const unknown = production();
@@ -62,16 +66,34 @@ describe("M5 market metric source gap decision", () => {
     expect(parseM5MarketMetricSourceGapDecisionConfig(accessor).status).toBe("INVALID");
     const inherited = Object.assign(Object.create({ inherited: true }), production());
     expect(parseM5MarketMetricSourceGapDecisionConfig(inherited).status).toBe("INVALID");
+    const nonPlainArray = production();
+    Object.setPrototypeOf(nonPlainArray.decisions, { inherited: true });
+    expect(parseM5MarketMetricSourceGapDecisionConfig(nonPlainArray).status).toBe("INVALID");
     const symbol = production();
     Object.defineProperty(symbol, Symbol("unsafe"), { value: true });
     expect(parseM5MarketMetricSourceGapDecisionConfig(symbol).status).toBe("INVALID");
+
+    const symbolArray = production();
+    Object.defineProperty(symbolArray.decisions as object, Symbol("unsafe-array"), { value: true });
+    expect(parseM5MarketMetricSourceGapDecisionConfig(symbolArray).status).toBe("INVALID");
+
+    const accessorArray = production();
+    const usageApprovals = (accessorArray.decisions as Array<Record<string, unknown>>)[0]!.usageApprovals as object[];
+    Object.defineProperty(usageApprovals, "0", { enumerable: true, configurable: true, get: () => ({ usage: "NETWORK_ACQUISITION", approval: "APPROVED" }) });
+    expect(parseM5MarketMetricSourceGapDecisionConfig(accessorArray).status).toBe("INVALID");
   });
 
   it("rejects mismatched evidence/source and noncanonical review times", () => {
     const mismatched = production();
     const row = (mismatched.decisions as Array<Record<string, unknown>>)[0]!;
-    row.sourceCandidateId = "not valid";
+    row.sourceCandidateId = "coinmarketcap-spot-volume-candidate";
     expect(parseM5MarketMetricSourceGapDecisionConfig(mismatched).status).toBe("INVALID");
+
+    const evidenceMismatch = production();
+    const mismatchedRefs = (evidenceMismatch.decisions as Array<Record<string, unknown>>)[0]!.evidenceReferences as Array<Record<string, unknown>>;
+    mismatchedRefs[0]!.url = "https://ethereum.org/developers/docs/apis/json-rpc/";
+    mismatchedRefs[1]!.url = "https://eips.ethereum.org/EIPS/eip-20";
+    expect(parseM5MarketMetricSourceGapDecisionConfig(evidenceMismatch).status).toBe("INVALID");
 
     const wrongMethod = production();
     (wrongMethod.decisions as Array<Record<string, unknown>>)[0]!.methodologyId = "WETH_TOTAL_SUPPLY_X_APPROVED_PRICE_V1";
@@ -85,25 +107,76 @@ describe("M5 market metric source gap decision", () => {
     const refs = (badEvidence.decisions as Array<Record<string, unknown>>)[0]!.evidenceReferences as Array<Record<string, unknown>>;
     refs[0]!.claims = [];
     expect(parseM5MarketMetricSourceGapDecisionConfig(badEvidence).status).toBe("INVALID");
+
+    const duplicateEvidence = production();
+    const evidenceRows = (duplicateEvidence.decisions as Array<Record<string, unknown>>)[0]!.evidenceReferences as unknown[];
+    evidenceRows[1] = structuredClone(evidenceRows[0]);
+    expect(parseM5MarketMetricSourceGapDecisionConfig(duplicateEvidence).status).toBe("INVALID");
+
+    const invalidPrice = production();
+    const price = (invalidPrice.decisions as Array<Record<string, unknown>>)[0]!.pricing as Record<string, unknown>;
+    price.monthlyFrom = null;
+    expect(parseM5MarketMetricSourceGapDecisionConfig(invalidPrice).status).toBe("INVALID");
+
+    const unknownPrice = production();
+    const unknown = (unknownPrice.decisions as Array<Record<string, unknown>>)[1]!.pricing as Record<string, unknown>;
+    unknown.status = "UNKNOWN";
+    unknown.currency = "USD";
+    expect(parseM5MarketMetricSourceGapDecisionConfig(unknownPrice).status).toBe("INVALID");
+
+    const credentialText = production();
+    const secretSentinel = "sourceScope contains api_key=synthetic-secret-sentinel";
+    (credentialText.decisions as Array<Record<string, unknown>>)[0]!.sourceScope = secretSentinel;
+    const rejected = parseM5MarketMetricSourceGapDecisionConfig(credentialText);
+    expect(rejected.status).toBe("INVALID");
+    expect(JSON.stringify(rejected)).not.toContain("synthetic-secret-sentinel");
+
+    const unsafeBlocker = production();
+    (unsafeBlocker.decisions as Array<Record<string, unknown>>)[0]!.blockers = ["provider returned raw response body: synthetic-secret-sentinel"];
+    const safeFailure = parseM5MarketMetricSourceGapDecisionConfig(unsafeBlocker);
+    expect(safeFailure.status).toBe("INVALID");
+    expect(JSON.stringify(safeFailure)).not.toContain("synthetic-secret-sentinel");
   });
 
-  it("keeps usage, storage and pricing approvals independent and unknown proof blocked", () => {
-    const unsafe = production();
-    const row = (unsafe.decisions as Array<Record<string, unknown>>)[0]!;
-    row.storageApproval = "APPROVED";
-    row.usageApproval = "UNKNOWN";
-    expect(parseM5MarketMetricSourceGapDecisionConfig(unsafe).status).toBe("VALID");
+  it("keeps each usage and retention approval independent, with unknowns fail-closed", () => {
+    const approvalFixture = production();
+    const row = (approvalFixture.decisions as Array<Record<string, unknown>>)[0]!;
+    row.retentionApproval = "APPROVED";
+    const approvals = row.usageApprovals as Array<Record<string, unknown>>;
+    approvals.find(item => item.usage === "RAW_PAYLOAD_STORAGE")!.approval = "UNKNOWN";
+    expect(parseM5MarketMetricSourceGapDecisionConfig(approvalFixture).status).toBe("VALID");
     const evaluation = evaluateM5MarketMetricSourceGapDecision(parsed(), "DAILY_CLOSE_SERIES", "2026-09-30T12:00:00.000Z");
     expect(evaluation.status).toBe("BLOCKED");
     expect(evaluation.blockers).toContain("M5_MARKET_SOURCE_DECISION_NOT_AUTHORIZED");
+
+    const duplicateUsage = production();
+    const usageDecision = (duplicateUsage.decisions as Array<Record<string, unknown>>)[0]!;
+    const duplicated = usageDecision.usageApprovals as unknown[];
+    usageDecision.usageApprovals = [...duplicated.slice(0, -1), duplicated[0]];
+    expect(parseM5MarketMetricSourceGapDecisionConfig(duplicateUsage).status).toBe("INVALID");
+
+    const missingUsage = production();
+    const missing = (missingUsage.decisions as Array<Record<string, unknown>>)[0]!;
+    missing.usageApprovals = (missing.usageApprovals as unknown[]).slice(1);
+    expect(parseM5MarketMetricSourceGapDecisionConfig(missingUsage).status).toBe("INVALID");
 
     const falselySelected = production();
     const selected = (falselySelected.decisions as Array<Record<string, unknown>>)[0]!;
     selected.decision = "EXTERNAL_PROVIDER";
     selected.completeness = "PROVEN";
-    selected.usageApproval = "APPROVED";
-    selected.storageApproval = "APPROVED";
+    selected.usageApprovals = (selected.usageApprovals as Array<Record<string, unknown>>).map(item => ({ ...item, approval: "APPROVED" }));
+    selected.retentionApproval = "APPROVED";
     selected.blockers = [];
+    const weakProof = production();
+    const weak = (weakProof.decisions as Array<Record<string, unknown>>)[0]!;
+    weak.decision = "EXTERNAL_PROVIDER";
+    weak.completeness = "PROVEN";
+    weak.usageApprovals = (weak.usageApprovals as Array<Record<string, unknown>>).map(item => ({ ...item, approval: "APPROVED" }));
+    weak.retentionApproval = "APPROVED";
+    weak.blockers = [];
+    const weakEvidence = weak.evidenceReferences as Array<Record<string, unknown>>;
+    weakEvidence[0]!.evidenceLevel = "UNKNOWN";
+    expect(parseM5MarketMetricSourceGapDecisionConfig(weakProof).status).toBe("INVALID");
     const purported = parseM5MarketMetricSourceGapDecisionConfig(falselySelected);
     expect(purported.status).toBe("VALID");
     if (purported.status === "VALID") expect(evaluateM5MarketMetricSourceGapDecision(purported.config, "DAILY_CLOSE_SERIES", "2026-09-30T12:00:00.000Z").status).toBe("BLOCKED");

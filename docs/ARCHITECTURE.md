@@ -386,7 +386,8 @@ qualification remains `PARTIAL`; UTC daily candle volume is not interchangeable
 with rolling 24-hour volume, and a total-WETH-supply derivation would require a
 different market-cap contract basis. See
 [`M5_MARKET_METRIC_SOURCE_GAP_DECISION.md`](M5_MARKET_METRIC_SOURCE_GAP_DECISION.md)
-for contract details, candidate evidence, and unresolved product decisions.
+for contract details, candidate evidence, seven independent usage approvals,
+separate retention approval, and unresolved product decisions.
 No provider calls or persistence are introduced by this record.
 
 ### M5 venue-universe authority
