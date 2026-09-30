@@ -87,6 +87,14 @@ mapping, then review additive persistence separately. See
 
 ## Official references checked 2026-09-30 01:47 UTC
 
+The separate [declared venue-set rolling 24-hour volume source qualification](M5_DECLARED_VENUE_SET_ROLLING_24H_VOLUME_SOURCE_QUALIFICATION.md)
+reviewed Coinbase Exchange, Kraken Spot, and CoinMarketCap aggregate using
+official documentation on 2026-09-30 05:32 UTC. Coinbase and Kraken remain
+`PARTIAL`; CMC aggregate remains `BLOCKED` for the declared venue-set contract.
+That review distinguishes response field documentation from record-specific
+window, asOf, coverage, and approval evidence; it does not change legacy source
+gap decisions or provider readiness.
+
 All URLs below are official provider, standards, or Ethereum Foundation sources. “Documented” means the cited page states the narrow claim; it does not imply that the evidence meets the complete M5 contract.
 
 | Title | URL | Evidence used / limit |

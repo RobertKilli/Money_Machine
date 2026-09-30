@@ -31,6 +31,14 @@ cap, and rolling 24-hour volume BLOCKED, keeps CoinGecko qualification PARTIAL,
 and introduces no source selection, legal/usage approval, storage entitlement,
 or readiness change.
 
+The follow-on [M5 declared venue-set rolling 24-hour volume source
+qualification](M5_DECLARED_VENUE_SET_ROLLING_24H_VOLUME_SOURCE_QUALIFICATION.md)
+checked official Coinbase Exchange, Kraken Spot, and CoinMarketCap sources on
+2026-09-30 05:32 UTC. Coinbase and Kraken remain `PARTIAL`; CMC aggregate is
+`BLOCKED` for the explicit declared-set metric. No exact provider response,
+complete venue membership, mapping authority, or usage/storage approval is
+inferred from API schemas or field names.
+
 The authoritative single-scope usage enum contains exactly seven values: `NETWORK_ACQUISITION`, `RAW_PAYLOAD_PROCESSING`, `RAW_PAYLOAD_STORAGE`, `NORMALIZED_STORAGE`, `AUTHORITY_PERSISTENCE`, `REDISTRIBUTION`, and `COMMERCIAL_USE`. Aggregate policy carries those exact seven values independently for each provider; provider access remains `NETWORK_ACQUISITION`, and raw storage remains `RAW_PAYLOAD_STORAGE`. It also records a separate `RETENTION` decision. Retention is a data-lifecycle constraint (how long material may be kept and when it must be deleted), not an additional value in the existing provider usage enum. It is checked independently and cannot authorize raw storage, normalized storage or any other usage. Thus the aggregate has seven inherited usage decisions plus one separate retention decision per source; it does not redefine the seven-value source contract.
 
 ## What M5 needs

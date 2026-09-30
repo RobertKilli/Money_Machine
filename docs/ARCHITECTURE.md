@@ -802,3 +802,12 @@ asset mapping authority. The current qualification schema does not bind the
 scoped metric hash, and this pure guard does not resolve mapping authority, so
 both are blockers; CoinGecko is also PARTIAL. These records remain blocked. See
 `docs/M5_SCOPED_MARKET_METRIC_CONTRACTS.md`.
+
+The additive `m5-declared-venue-set-rolling-24h-volume-source-qualification/v1`
+reviews Coinbase Exchange ETH-USD and Kraken Spot ETH/USD as `PARTIAL`, and
+CoinMarketCap `volume_24h` as `BLOCKED` for this scoped metric because its
+aggregate universe is not an explicitly sealed venue set. No source, venue set,
+mapping authority, or usage is selected. The pure projection boundary returns
+null without runtime-authentic qualification and mapping witnesses; no witness
+is issued in this slice. See
+`docs/M5_DECLARED_VENUE_SET_ROLLING_24H_VOLUME_SOURCE_QUALIFICATION.md`.
