@@ -811,3 +811,24 @@ mapping authority, or usage is selected. The pure projection boundary returns
 null without runtime-authentic qualification and mapping witnesses; no witness
 is issued in this slice. See
 `docs/M5_DECLARED_VENUE_SET_ROLLING_24H_VOLUME_SOURCE_QUALIFICATION.md`.
+
+### Upstream event intelligence source authority
+
+Event intelligence is a separate upstream intelligence context, not an M5
+eligibility or market-metric contract. The versioned
+`event-intelligence-source-decision/v1` records source class, authority tier,
+coverage, event/timestamp/correction capabilities, evidence, usage approvals,
+blockers and deterministic identity. SEC EDGAR is only a candidate authority
+for exact US filings; issuer IR and exchange/regulator materials are
+corroboration candidates; newswires are only issuer-distribution copies when
+origin can be verified; GDELT and NewsAPI remain discovery-only. Production
+acquisition, event-authority persistence, mapping, signal generation and all
+usage approvals remain blocked. See
+`docs/EVENT_INTELLIGENCE_SOURCE_DECISION.md`.
+
+Acquisition, immutable source artifacts, normalized claims, event authority,
+issuer/asset mapping, evidence lineage and later ranking/signals are distinct
+boundaries. Event authority would require reviewed source-bound material and
+cannot be issued by an LLM alone. Corrections append supersession edges; no
+newest-wins behavior is allowed. An authoritative event is not a trading
+signal, and this context creates no order or portfolio mutation.

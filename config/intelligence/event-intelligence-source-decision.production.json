@@ -1,0 +1,37 @@
+{
+  "contractVersion": "event-intelligence-production-decision/v1",
+  "reviewedAt": "2026-09-30T06:38:15.000Z",
+  "selectedProductionSourceStack": [],
+  "candidates": [
+    { "sourceId": "sec-edgar", "decisionStatus": "CANDIDATE_AUTHORITATIVE", "productionEnabled": false },
+    { "sourceId": "issuer-ir", "decisionStatus": "CANDIDATE_CORROBORATION", "productionEnabled": false },
+    { "sourceId": "exchange-regulator", "decisionStatus": "CANDIDATE_CORROBORATION", "productionEnabled": false },
+    { "sourceId": "globenewswire-distribution", "decisionStatus": "CANDIDATE_CORROBORATION", "productionEnabled": false },
+    { "sourceId": "businesswire-distribution", "decisionStatus": "CANDIDATE_CORROBORATION", "productionEnabled": false },
+    { "sourceId": "gdelt-discovery", "decisionStatus": "DISCOVERY_ONLY", "productionEnabled": false },
+    { "sourceId": "newsapi-discovery", "decisionStatus": "DISCOVERY_ONLY", "productionEnabled": false }
+  ],
+  "productionAcquisition": "BLOCKED",
+  "eventAuthorityPersistence": "BLOCKED",
+  "tradingSignalGeneration": "BLOCKED",
+  "mappingAuthority": null,
+  "usageApprovals": [
+    { "usage": "RAW_ACQUISITION", "approval": "NOT_APPROVED" },
+    { "usage": "RAW_ARTIFACT_STORAGE", "approval": "NOT_APPROVED" },
+    { "usage": "NORMALIZED_CLAIM_STORAGE", "approval": "NOT_APPROVED" },
+    { "usage": "AUTHORITY_ISSUANCE", "approval": "NOT_APPROVED" },
+    { "usage": "REDISTRIBUTION", "approval": "NOT_APPROVED" },
+    { "usage": "COMMERCIAL_USE", "approval": "NOT_APPROVED" },
+    { "usage": "SIGNAL_RESEARCH", "approval": "NOT_APPROVED" }
+  ],
+  "retentionApproval": "NOT_APPROVED",
+  "redistributionApproval": "NOT_APPROVED",
+  "commercialApproval": "NOT_APPROVED",
+  "blockers": [
+    "EVENT_EXTRACTION_AND_CORRECTION_LINEAGE_NOT_IMPLEMENTED",
+    "EVENT_ISSUER_AND_ASSET_MAPPING_AUTHORITY_NOT_DESIGNED_FOR_RUNTIME",
+    "EVENT_RAW_AND_NORMALIZED_STORAGE_NOT_APPROVED",
+    "EVENT_SOURCE_COVERAGE_AND_LATENCY_NOT_QUALIFIED",
+    "EVENT_SOURCE_TERMS_AND_USAGE_REVIEW_REQUIRED"
+  ]
+}
