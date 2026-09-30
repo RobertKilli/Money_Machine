@@ -9,6 +9,15 @@
   "rawStorage": "NOT_APPROVED",
   "normalizedStorage": "NOT_APPROVED",
   "authorityPersistence": "NOT_APPROVED",
+  "approvals": {
+    "ACQUISITION": "NOT_APPROVED",
+    "RAW_STORAGE": "NOT_APPROVED",
+    "NORMALIZED_STORAGE": "NOT_APPROVED",
+    "AUTHORITY_ISSUANCE": "NOT_APPROVED",
+    "RETENTION": "NOT_APPROVED",
+    "REDISTRIBUTION": "NOT_APPROVED",
+    "COMMERCIAL_USE": "NOT_APPROVED"
+  },
   "retention": "UNKNOWN",
   "redistribution": "NOT_APPROVED",
   "commercialUse": "NOT_APPROVED",
