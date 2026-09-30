@@ -1,0 +1,67 @@
+{
+  "configVersion": "m5-declared-venue-set-rolling-24h-volume-source-qualification-production/v1",
+  "reviewedAt": "2026-09-30T05:32:15.000Z",
+  "productionStatus": "BLOCKED",
+  "selectedSource": null,
+  "declaredVenueSet": null,
+  "productionProjection": "BLOCKED",
+  "mappingAuthority": null,
+  "approvals": {
+    "usageApprovals": [
+      { "usage": "AUTHORITY_PERSISTENCE", "approval": "NOT_APPROVED" },
+      { "usage": "COMMERCIAL_USE", "approval": "NOT_APPROVED" },
+      { "usage": "NETWORK_ACQUISITION", "approval": "NOT_APPROVED" },
+      { "usage": "NORMALIZED_STORAGE", "approval": "NOT_APPROVED" },
+      { "usage": "RAW_PAYLOAD_PROCESSING", "approval": "NOT_APPROVED" },
+      { "usage": "RAW_PAYLOAD_STORAGE", "approval": "NOT_APPROVED" },
+      { "usage": "REDISTRIBUTION", "approval": "NOT_APPROVED" }
+    ],
+    "storage": "NOT_APPROVED",
+    "retention": "NOT_APPROVED",
+    "redistribution": "NOT_APPROVED",
+    "commercial": "NOT_APPROVED"
+  },
+  "candidates": [
+    {
+      "providerId": "coinbase-exchange",
+      "datasetId": "product-stats",
+      "datasetVersion": "coinbase-exchange-product-stats/v1",
+      "qualificationStatus": "PARTIAL",
+      "selected": false,
+      "blockers": [
+        "M5_VOLUME_COINBASE_PRODUCT_ID_NOT_OBSERVED",
+        "M5_VOLUME_EXACT_WINDOW_AND_ASOF_UNKNOWN",
+        "M5_VOLUME_TRADE_COVERAGE_FINALITY_UNKNOWN",
+        "M5_VOLUME_MAPPING_AUTHORITY_REQUIRED",
+        "M5_VOLUME_APPROVALS_REQUIRED"
+      ]
+    },
+    {
+      "providerId": "kraken-spot",
+      "datasetId": "spot-ticker",
+      "datasetVersion": "kraken-spot-ticker/v1",
+      "qualificationStatus": "PARTIAL",
+      "selected": false,
+      "blockers": [
+        "M5_VOLUME_KRAKEN_ETHUSD_PAIR_RECORD_NOT_OBSERVED",
+        "M5_VOLUME_KRAKEN_TICKER_V_FIELD_SEMANTICS_UNKNOWN",
+        "M5_VOLUME_EXACT_WINDOW_AND_ASOF_UNKNOWN",
+        "M5_VOLUME_UNIT_UNKNOWN",
+        "M5_VOLUME_TRADE_COVERAGE_FINALITY_UNKNOWN",
+        "M5_VOLUME_MAPPING_AUTHORITY_REQUIRED",
+        "M5_VOLUME_APPROVALS_REQUIRED"
+      ]
+    },
+    {
+      "providerId": "coinmarketcap",
+      "datasetId": "cryptocurrency-quotes",
+      "datasetVersion": "coinmarketcap-pro/v1",
+      "qualificationStatus": "BLOCKED",
+      "selected": false,
+      "blockers": [
+        "M5_VOLUME_PROVIDER_SELECTED_AGGREGATE_NOT_DECLARED_VENUE_SET",
+        "M5_VOLUME_EXACT_MEMBER_AND_INSTRUMENT_SCOPE_UNAVAILABLE"
+      ]
+    }
+  ]
+}
