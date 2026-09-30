@@ -5,6 +5,7 @@ import {
   EVENT_INTELLIGENCE_SOURCE_DECISION_VERSION,
   EVENT_INTELLIGENCE_USAGES,
   SEC_8K_ITEM_SEMANTICS,
+  type EventAuthorityMaterialDesign,
   isAuthenticEventIntelligenceSourceDecision,
   parseEventIntelligenceSourceDecision,
 } from "../../src/domain/intelligence/event-intelligence-source-decision";
@@ -138,5 +139,16 @@ describe("event intelligence source decision", () => {
     };
     expect(new Set(Object.values(example)).size).toBe(5);
     expect(example.effectiveOrCompletionAt).not.toBe(example.expectedClosingAt);
+  });
+
+  it("keeps event amount and issuer/asset mapping scopes explicit without issuing authority", () => {
+    const material: Pick<EventAuthorityMaterialDesign, "issuerCik" | "issuerMappingRevisionFingerprint" | "assetIdentityId" | "assetMappingRevisionFingerprint" | "amount" | "amountCurrency" | "amountStatus" | "sourceArtifactFingerprint" | "sourceDecisionFingerprint"> = {
+      issuerCik: "0000000001", issuerMappingRevisionFingerprint: "issuer-map-rev-1", assetIdentityId: "asset-identity-1", assetMappingRevisionFingerprint: "asset-map-rev-1",
+      amount: "1250000.00", amountCurrency: "USD", amountStatus: "EXACT", sourceArtifactFingerprint: "artifact-sha256", sourceDecisionFingerprint: "decision-sha256",
+    };
+    expect(material.amount).toBe("1250000.00");
+    expect(material.issuerCik).not.toBe(material.assetIdentityId);
+    expect(material.issuerMappingRevisionFingerprint).not.toBe(material.assetMappingRevisionFingerprint);
+    expect(isAuthenticEventIntelligenceSourceDecision(material)).toBe(false);
   });
 });

@@ -121,7 +121,7 @@ export type EventAuthorityMaterialDesign = Readonly<{
   contractVersion: "event-authority-material/v1"; sourceDecisionFingerprint: string; sourceArtifactFingerprint: string; documentId: string; issuerCik: string;
   issuerMappingRevisionFingerprint: string; assetIdentityId: string; assetMappingRevisionFingerprint: string; eventType: EventIntelligenceEventType;
   lifecycleStatus: "INTENT" | "AUTHORIZED" | "ANNOUNCED" | "SIGNED" | "CONDITIONAL" | "COMPLETED" | "TERMINATED" | "CORRECTED" | "RETRACTED" | "UNKNOWN";
-  announcementAt: string | null; signedAt: string | null; expectedClosingAt: string | null; filingOrPublicationAt: string; effectiveOrCompletionAt: string | null; amountCurrency: string | null;
+  announcementAt: string | null; signedAt: string | null; expectedClosingAt: string | null; filingOrPublicationAt: string; effectiveOrCompletionAt: string | null; amount: string | null; amountCurrency: string | null;
   amountStatus: "EXACT" | "RANGE" | "MAXIMUM" | "TARGET" | "UNKNOWN"; bindingStatus: "BINDING" | "NON_BINDING" | "CONDITIONAL" | "UNKNOWN";
   sourceLocators: readonly Readonly<{ locator: string; excerptHash: string }>[]; supersedes: readonly string[]; extractionContractVersion: string; parserOrModelVersion: string;
   receivedAt: string; fingerprint: string;
