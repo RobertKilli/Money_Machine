@@ -1,5 +1,7 @@
 import "server-only";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import { types as utilTypes } from "node:util";
 import { canonicalSha256 } from "./ingestion-provenance";
 
 export const SEC_EDGAR_8K_FIXTURE_PACKAGE_VERSION = "sec-edgar-8k-fixture-package/v1" as const;
@@ -21,7 +23,8 @@ type ParsedPackage = Readonly<{
   sourceProfile: "SEC_EDGAR_8K_FIXTURE_PROFILE_V1";
   receipt: Readonly<{ receiptId: string; receivedAt: string; effectiveAvailableAt: string; sourcePublishedAt: string }>;
   filing: Readonly<{ cik: string; accession: string; form: "8-K" | "8-K/A"; filingDate: string; reportDate: string | null; acceptanceDateTime: string; primaryDocument: string; amendmentOfAccession: string | null }>;
-  descriptors: readonly Readonly<{ sequence: number; type: "PRIMARY" | "EXHIBIT"; filename: string; contentType: "text/plain; charset=utf-8"; byteLength: number; contentSha256: string; canonicalizationVersion: typeof SEC_EDGAR_8K_FIXTURE_TEXT_VERSION }>[];
+  descriptors: readonly Readonly<{ sequence: number; type: "PRIMARY" | "EXHIBIT"; documentType: string; filename: string; contentType: "text/plain; charset=utf-8"; byteLength: number; contentSha256: string; canonicalizationVersion: typeof SEC_EDGAR_8K_FIXTURE_TEXT_VERSION }>[];
+  requiredEvidenceFilenames: readonly string[];
   expected: Readonly<{ eventType: string; lifecycleStatus: string; amountClassification: string; amount: string | null; currency: string | null; signingDate: string | null; expectedClosingDate: string | null; completionDate: string | null; claimCount: number }>;
 }>;
 
@@ -42,7 +45,7 @@ export type SecEdgar8kFixtureClaim = Readonly<{
   claimId: string; fingerprint: string; extractionVersion: typeof SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION;
   sourceArtifactId: string; sourceArtifactFingerprint: string;
   cik: string; accession: string; form: "8-K" | "8-K/A"; itemCode: "1.01" | "2.01" | "OTHER";
-  filingDate: string; reportDate: string | null; acceptanceAt: string; sourcePublishedAt: string; receivedAt: string; effectiveAvailableAt: string;
+  filingDate: string; reportDate: string | null; acceptanceAt: string;
   issuerIdentityCandidate: Readonly<{ syntheticCik: string; displayName: string }>;
   assetIdentityCandidate: Readonly<{ syntheticAssetId: string; displayName: string }>;
   eventTypeCandidate: "PURCHASE_INTENT_ANNOUNCED" | "BOARD_AUTHORIZATION" | "DEFINITIVE_PURCHASE_AGREEMENT" | "PURCHASE_COMPLETED";
@@ -54,7 +57,7 @@ export type SecEdgar8kFixtureClaim = Readonly<{
 }>;
 export type SecEdgar8kFixtureResult = Readonly<{
   status: "VALID"; classification: typeof SEC_EDGAR_8K_FIXTURE_RESULT_KIND; pipelineVersion: typeof SEC_EDGAR_8K_FIXTURE_PIPELINE_VERSION;
-  filings: readonly SecEdgar8kFixtureFiling[]; artifacts: readonly SecEdgar8kFixtureArtifact[]; receipts: readonly Readonly<{ receiptId: string; filingPackageId: string; receivedAt: string; effectiveAvailableAt: string; fingerprint: string }>[];
+  filings: readonly SecEdgar8kFixtureFiling[]; artifacts: readonly SecEdgar8kFixtureArtifact[]; receipts: readonly Readonly<{ receiptId: string; filingPackageId: string; sourcePublishedAt: string; receivedAt: string; effectiveAvailableAt: string; fingerprint: string }>[];
   claims: readonly SecEdgar8kFixtureClaim[]; correctionLineage: readonly Readonly<{ originalFilingPackageId: string; amendmentFilingPackageId: string; originalClaimId: string; amendedClaimId: string; correctedField: string; relation: "APPEND_ONLY_CORRECTION" }>[];
   claimSet: Readonly<{ claimSetId: string; fingerprint: string; memberCount: number; claimIds: readonly string[]; artifactIds: readonly string[]; locatorKeys: readonly string[]; extractionVersion: typeof SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION }>;
   replayFingerprint: string; production: Readonly<{ acquisition: "BLOCKED"; persistence: "BLOCKED"; eventAuthority: "BLOCKED"; signals: "BLOCKED" }>;
@@ -66,8 +69,8 @@ const PACKAGE_KEYS = ["contractVersion", "sourceProfile", "receipt", "submission
 const RECEIPT_KEYS = ["receiptId", "receivedAt", "effectiveAvailableAt", "sourcePublishedAt"] as const;
 const SUBMISSIONS_KEYS = ["cik", "recent"] as const;
 const RECENT_KEYS = ["accessionNumber", "form", "filingDate", "reportDate", "acceptanceDateTime", "primaryDocument"] as const;
-const FILING_INDEX_KEYS = ["cik", "accession", "form", "archivePath", "filingDate", "reportDate", "acceptanceDateTime", "primaryDocument", "amendmentOfAccession", "documents", "requiredEvidenceFilenames"] as const;
-const DESCRIPTOR_KEYS = ["sequence", "type", "filename", "contentType", "byteLength", "contentSha256", "canonicalizationVersion"] as const;
+const FILING_INDEX_KEYS = ["cik", "accession", "form", "archivePath", "filingDate", "reportDate", "acceptanceDateTime", "primaryDocument", "amendmentOfAccession", "documentCount", "documents", "requiredEvidenceFilenames"] as const;
+const DESCRIPTOR_KEYS = ["sequence", "type", "documentType", "filename", "contentType", "byteLength", "contentSha256", "canonicalizationVersion"] as const;
 const DOCUMENT_KEYS = ["filename", "content"] as const;
 const EXPECTED_KEYS = ["eventType", "lifecycleStatus", "amountClassification", "amount", "currency", "signingDate", "expectedClosingDate", "completionDate", "claimCount"] as const;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -82,14 +85,14 @@ const ARRAY_INTRINSICS = new Set<PropertyKey>(["length", "constructor", "at", "c
 
 function plain(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   try {
-    if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(Object.prototype).some((key) => !OBJECT_INTRINSICS.has(key))) return false;
+    if (!value || typeof value !== "object" || utilTypes.isProxy(value) || Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(Object.prototype).some((key) => !OBJECT_INTRINSICS.has(key))) return false;
     const ownKeys = Reflect.ownKeys(value);
     return ownKeys.length === keys.length && ownKeys.every((key) => typeof key === "string" && keys.includes(key) && (() => { const d = Object.getOwnPropertyDescriptor(value, key); return !!d && "value" in d && !d.get && !d.set; })());
   } catch { return false; }
 }
 function safeArray(value: unknown, max = 128): value is unknown[] {
   try {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Reflect.ownKeys(Array.prototype).some((key) => !ARRAY_INTRINSICS.has(key)) || value.length > max) return false;
+    if (!Array.isArray(value) || utilTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || Reflect.ownKeys(Array.prototype).some((key) => !ARRAY_INTRINSICS.has(key)) || value.length > max) return false;
     const keys = Reflect.ownKeys(value);
     if (keys.length !== value.length + 1 || keys.some((key) => typeof key !== "string")) return false;
     for (let i = 0; i < value.length; i++) { const d = Object.getOwnPropertyDescriptor(value, String(i)); if (!d || !("value" in d) || d.get || d.set) return false; }
@@ -101,10 +104,12 @@ function date(value: unknown): value is string { return typeof value === "string
 function freeze<T>(value: T): T { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value as Record<string, unknown>)) freeze(child); Object.freeze(value); } return value; }
 function fail(): typeof FAILURE { return FAILURE; }
 function hash(value: unknown): string { return canonicalSha256(value); }
+function sha256Bytes(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 
 function canonicalText(input: string): string | null {
-  if (input.includes("\u0000") || input.charCodeAt(0) === 0xfeff || /\r(?!\n)/.test(input)) return null;
+  if (/\r(?!\n)/.test(input)) return null;
   const text = input.replace(/\r\n/g, "\n").normalize("NFC");
+  if (/\p{Cc}/u.test(text.replace(/\n/g, "")) || /\p{Cf}/u.test(text)) return null;
   const bytes = Buffer.from(text, "utf8");
   if (bytes.toString("utf8") !== text) return null;
   return text;
@@ -125,37 +130,36 @@ function parsePackage(input: unknown): Readonly<{ parsed: ParsedPackage; documen
     if (!plain(index, FILING_INDEX_KEYS) || index.cik !== input.submissions.cik || index.accession !== accession || index.form !== form || index.archivePath !== `/synthetic-edgar/archive/${input.submissions.cik}/${accession}/index.txt` || index.filingDate !== filingDate || index.reportDate !== reportDate || index.acceptanceDateTime !== acceptanceDateTime || index.primaryDocument !== primaryDocument) return null;
     if (index.amendmentOfAccession !== null && (typeof index.amendmentOfAccession !== "string" || !SYNTH_ACCESSION.test(index.amendmentOfAccession) || index.amendmentOfAccession === accession)) return null;
     if ((form === "8-K/A") !== (index.amendmentOfAccession !== null)) return null;
-    if (!safeArray(index.documents, LIMITS.documentsPerFiling) || index.documents.length < 1 || !safeArray(index.requiredEvidenceFilenames, LIMITS.documentsPerFiling)) return null;
+    if (!Number.isSafeInteger(index.documentCount) || !safeArray(index.documents, LIMITS.documentsPerFiling) || index.documentCount !== index.documents.length || index.documents.length < 1 || !safeArray(index.requiredEvidenceFilenames, LIMITS.documentsPerFiling)) return null;
     const requiredEvidenceFilenames = index.requiredEvidenceFilenames as string[];
     if (requiredEvidenceFilenames.some((filename) => typeof filename !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}\.txt$/.test(filename)) || new Set(requiredEvidenceFilenames).size !== requiredEvidenceFilenames.length || [...requiredEvidenceFilenames].sort(ordinal).some((filename, i) => filename !== requiredEvidenceFilenames[i])) return null;
     const descriptors: ParsedPackage["descriptors"][number][] = [];
     for (const d of index.documents) {
-      if (!plain(d, DESCRIPTOR_KEYS) || !Number.isSafeInteger(d.sequence) || (d.sequence as number) < 1 || !(d.type === "PRIMARY" || d.type === "EXHIBIT") || typeof d.filename !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}\.txt$/.test(d.filename) || d.filename.includes("..") || d.contentType !== "text/plain; charset=utf-8" || !Number.isSafeInteger(d.byteLength) || (d.byteLength as number) < 1 || (d.byteLength as number) > LIMITS.documentBytes || typeof d.contentSha256 !== "string" || !HASH.test(d.contentSha256) || d.canonicalizationVersion !== SEC_EDGAR_8K_FIXTURE_TEXT_VERSION) return null;
-      descriptors.push({ sequence: d.sequence as number, type: d.type, filename: d.filename, contentType: d.contentType, byteLength: d.byteLength as number, contentSha256: d.contentSha256, canonicalizationVersion: d.canonicalizationVersion });
+      if (!plain(d, DESCRIPTOR_KEYS) || !Number.isSafeInteger(d.sequence) || (d.sequence as number) < 1 || !(d.type === "PRIMARY" || d.type === "EXHIBIT") || typeof d.documentType !== "string" || !(/^PRIMARY_DOCUMENT$/.test(d.documentType) && d.type === "PRIMARY" || /^EXHIBIT-[A-Z0-9.-]{1,20}$/.test(d.documentType) && d.type === "EXHIBIT") || typeof d.filename !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}\.txt$/.test(d.filename) || d.filename.includes("..") || d.contentType !== "text/plain; charset=utf-8" || !Number.isSafeInteger(d.byteLength) || (d.byteLength as number) < 1 || (d.byteLength as number) > LIMITS.documentBytes || typeof d.contentSha256 !== "string" || !HASH.test(d.contentSha256) || d.canonicalizationVersion !== SEC_EDGAR_8K_FIXTURE_TEXT_VERSION) return null;
+      descriptors.push({ sequence: d.sequence as number, type: d.type, documentType: d.documentType, filename: d.filename, contentType: d.contentType, byteLength: d.byteLength as number, contentSha256: d.contentSha256, canonicalizationVersion: d.canonicalizationVersion });
     }
-    if (new Set(descriptors.map((d) => d.sequence)).size !== descriptors.length || new Set(descriptors.map((d) => d.filename)).size !== descriptors.length || new Set(descriptors.map((d) => d.type)).size !== descriptors.length || descriptors.filter((d) => d.type === "PRIMARY" && d.filename === primaryDocument).length !== 1) return null;
+    if (new Set(descriptors.map((d) => d.sequence)).size !== descriptors.length || new Set(descriptors.map((d) => d.filename)).size !== descriptors.length || new Set(descriptors.map((d) => d.documentType)).size !== descriptors.length || descriptors.filter((d) => d.type === "PRIMARY").length !== 1 || descriptors.filter((d) => d.type === "PRIMARY" && d.filename === primaryDocument).length !== 1) return null;
     if (descriptors.some((d, i) => d.sequence !== i + 1) || descriptors[0].type !== "PRIMARY" || descriptors[0].filename !== primaryDocument) return null;
     if (requiredEvidenceFilenames.some((f) => !descriptors.some((d) => d.filename === f))) return null;
     if (!safeArray(input.documents, LIMITS.documentsPerFiling) || input.documents.length !== descriptors.length) return null;
     const documents: { filename: string; text: string; lines: readonly string[] }[] = []; let packageBytes = 0;
     for (let i = 0; i < input.documents.length; i++) {
       const doc = input.documents[i]; if (!plain(doc, DOCUMENT_KEYS) || typeof doc.filename !== "string" || typeof doc.content !== "string" || doc.filename !== descriptors[i].filename) return null;
+      if (doc.content.length > LIMITS.documentBytes * 2) return null;
       if (ACTIVE_HTML.test(doc.content) || /<\/?[a-z][^>]*>/i.test(doc.content) || /(?:https?:\/\/|\/\/)[a-z0-9.-]+/i.test(doc.content)) return null;
       const text = canonicalText(doc.content); if (text === null) return null;
       const bytes = Buffer.byteLength(text, "utf8"); packageBytes += bytes;
-      if (bytes !== descriptors[i].byteLength || hash(bytesToHex(Buffer.from(text, "utf8"))) !== descriptors[i].contentSha256 || bytes > LIMITS.documentBytes) return null;
+      if (bytes !== descriptors[i].byteLength || sha256Bytes(Buffer.from(text, "utf8")) !== descriptors[i].contentSha256 || bytes > LIMITS.documentBytes) return null;
       const lines = text.split("\n"); if (lines.some((line) => line.length === 0 || line.includes("\t"))) return null;
       documents.push({ filename: doc.filename, text, lines });
     }
     if (packageBytes > LIMITS.packageBytes) return null;
     if (!plain(input.expected, EXPECTED_KEYS) || !Number.isSafeInteger(input.expected.claimCount) || input.expected.claimCount !== 1 || !(input.expected.eventType === "PURCHASE_INTENT_ANNOUNCED" || input.expected.eventType === "BOARD_AUTHORIZATION" || input.expected.eventType === "DEFINITIVE_PURCHASE_AGREEMENT" || input.expected.eventType === "PURCHASE_COMPLETED") || !(input.expected.lifecycleStatus === "INTENT" || input.expected.lifecycleStatus === "AUTHORIZED" || input.expected.lifecycleStatus === "SIGNED" || input.expected.lifecycleStatus === "CONDITIONAL" || input.expected.lifecycleStatus === "COMPLETED") || !(input.expected.amountClassification === "EXACT" || input.expected.amountClassification === "RANGE" || input.expected.amountClassification === "MAXIMUM" || input.expected.amountClassification === "TARGET" || input.expected.amountClassification === "UNKNOWN") || (input.expected.signingDate !== null && !date(input.expected.signingDate)) || (input.expected.expectedClosingDate !== null && !date(input.expected.expectedClosingDate)) || (input.expected.completionDate !== null && !date(input.expected.completionDate))) return null;
     if (!amountValid(input.expected.amountClassification, input.expected.amount ?? "-", input.expected.currency ?? "-")) return null;
-    const parsed: ParsedPackage = freeze({ sourceProfile: input.sourceProfile, receipt: { receiptId: input.receipt.receiptId, receivedAt: input.receipt.receivedAt, effectiveAvailableAt: input.receipt.effectiveAvailableAt, sourcePublishedAt: input.receipt.sourcePublishedAt }, filing: { cik: input.submissions.cik, accession, form, filingDate, reportDate, acceptanceDateTime, primaryDocument, amendmentOfAccession: index.amendmentOfAccession }, descriptors: descriptors.sort((a, b) => a.sequence - b.sequence), expected: { eventType: input.expected.eventType as string, lifecycleStatus: input.expected.lifecycleStatus as string, amountClassification: input.expected.amountClassification as string, amount: input.expected.amount as string | null, currency: input.expected.currency as string | null, signingDate: input.expected.signingDate as string | null, expectedClosingDate: input.expected.expectedClosingDate as string | null, completionDate: input.expected.completionDate as string | null, claimCount: input.expected.claimCount as number } });
+    const parsed: ParsedPackage = freeze({ sourceProfile: input.sourceProfile, receipt: { receiptId: input.receipt.receiptId, receivedAt: input.receipt.receivedAt, effectiveAvailableAt: input.receipt.effectiveAvailableAt, sourcePublishedAt: input.receipt.sourcePublishedAt }, filing: { cik: input.submissions.cik, accession, form, filingDate, reportDate, acceptanceDateTime, primaryDocument, amendmentOfAccession: index.amendmentOfAccession }, descriptors: descriptors.sort((a, b) => a.sequence - b.sequence), requiredEvidenceFilenames: [...requiredEvidenceFilenames], expected: { eventType: input.expected.eventType as string, lifecycleStatus: input.expected.lifecycleStatus as string, amountClassification: input.expected.amountClassification as string, amount: input.expected.amount as string | null, currency: input.expected.currency as string | null, signingDate: input.expected.signingDate as string | null, expectedClosingDate: input.expected.expectedClosingDate as string | null, completionDate: input.expected.completionDate as string | null, claimCount: input.expected.claimCount as number } });
     return { parsed, documents: freeze(documents) };
   } catch { return null; }
 }
-
-function bytesToHex(bytes: Uint8Array): string { return Buffer.from(bytes).toString("hex"); }
 
 function grammar(text: string): Readonly<Record<string, string>> | null {
   const output: Record<string, string> = Object.create(null) as Record<string, string>;
@@ -170,7 +174,7 @@ function grammar(text: string): Readonly<Record<string, string>> | null {
   return output;
 }
 
-function decimal(value: string): boolean { return /^(?:0|[1-9][0-9]{0,17})(?:\.[0-9]{1,8})?$/.test(value) && /[1-9]/.test(value); }
+function decimal(value: string): boolean { return /^(?:0|[1-9][0-9]{0,17})(?:\.[0-9]{0,7}[1-9])?$/.test(value); }
 function compareDecimal(a: string, b: string): number {
   const parts = (value: string) => { const [integer, fraction = ""] = value.split("."); return [integer, fraction.padEnd(8, "0")] as const; };
   const [ai, af] = parts(a); const [bi, bf] = parts(b);
@@ -181,12 +185,12 @@ function compareDecimal(a: string, b: string): number {
 function amountValid(kind: unknown, amount: unknown, currency: unknown): boolean {
   if (kind === "UNKNOWN") return amount === "-" && currency === "-";
   if (typeof currency !== "string" || !/^SYNTH-CUR-[A-Z0-9]{2,8}$/.test(currency)) return false;
+  if (typeof amount !== "string" || amount.length > 64) return false;
   if (kind === "RANGE") {
-    if (typeof amount !== "string") return false;
     const parts = amount.split("..");
     return parts.length === 2 && decimal(parts[0]) && decimal(parts[1]) && compareDecimal(parts[0], parts[1]) < 0;
   }
-  return (kind === "EXACT" || kind === "MAXIMUM" || kind === "TARGET") && typeof amount === "string" && decimal(amount);
+  return (kind === "EXACT" || kind === "MAXIMUM" || kind === "TARGET") && decimal(amount);
 }
 function parseClaims(data: Readonly<{ documents: readonly Readonly<{ filename: string; text: string; lines: readonly string[] }>[]; parsed: ParsedPackage }>, sourceArtifact: SecEdgar8kFixtureArtifact): Readonly<{ fields: Readonly<Record<string, string>>; locator: string; excerptFingerprint: string }> | null {
   const primary = data.documents.find((doc) => doc.filename === data.parsed.filing.primaryDocument); if (!primary) return null;
@@ -213,13 +217,13 @@ function parseClaims(data: Readonly<{ documents: readonly Readonly<{ filename: s
   const expected = data.parsed.expected;
   if (expected.eventType !== fields.EVENT || expected.lifecycleStatus !== fields.LIFECYCLE || expected.amountClassification !== fields.AMOUNT_CLASS || expected.amount !== (fields.AMOUNT === "-" ? null : fields.AMOUNT) || expected.currency !== (fields.CURRENCY === "-" ? null : fields.CURRENCY) || expected.signingDate !== signingDate || expected.expectedClosingDate !== expectedClosingDate || expected.completionDate !== completionDate) return null;
   const locator = `primary:${primary.filename}:line:${primary.lines.indexOf(primary.lines.find((line) => line.startsWith("EVENT|")) ?? "") + 1}`;
-  const excerptFingerprint = hash({ extractionVersion: SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION, locator, event: fields.EVENT, lifecycle: fields.LIFECYCLE, item: fields.ITEM, amount: fields.AMOUNT, amountClass: fields.AMOUNT_CLASS, assetId: fields.ASSET_ID });
+  const excerptFingerprint = hash({ extractionVersion: SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION, locator, normalizedGrammarFields: canonicalJson(fields) });
   return { fields, locator, excerptFingerprint };
 }
 
 export function parseSecEdgar8kFixturePackage(input: unknown): Readonly<{ status: "VALID"; packageId: string }> | Readonly<{ status: "INVALID"; blocker: "SEC_8K_FIXTURE_PACKAGE_INVALID" }> {
   const parsed = parsePackage(input); if (!parsed) return Object.freeze({ status: "INVALID", blocker: "SEC_8K_FIXTURE_PACKAGE_INVALID" });
-  return Object.freeze({ status: "VALID", packageId: hash({ version: SEC_EDGAR_8K_FIXTURE_PACKAGE_VERSION, filing: parsed.parsed.filing, descriptors: parsed.parsed.descriptors, expected: parsed.parsed.expected }) });
+  return Object.freeze({ status: "VALID", packageId: hash({ version: SEC_EDGAR_8K_FIXTURE_PACKAGE_VERSION, profile: parsed.parsed.sourceProfile, filing: parsed.parsed.filing, descriptors: parsed.parsed.descriptors, requiredEvidenceFilenames: parsed.parsed.requiredEvidenceFilenames }) });
 }
 
 export function reconcileSecEdgar8kFixturePackages(inputs: readonly unknown[]): readonly SecEdgar8kFixtureFiling[] | null {
@@ -230,13 +234,25 @@ export function reconcileSecEdgar8kFixturePackages(inputs: readonly unknown[]): 
     const byAccession = new Map<string, number>();
     const receiptIds = new Set<string>();
     for (let i = 0; i < valid.length; i++) { const { filing, receipt } = valid[i].parsed; if (byAccession.has(filing.accession) || receiptIds.has(receipt.receiptId)) return null; byAccession.set(filing.accession, i); receiptIds.add(receipt.receiptId); }
-    for (const { parsed: p } of valid) if (p.filing.form === "8-K/A") { const originalIndex = byAccession.get(p.filing.amendmentOfAccession!); if (originalIndex === undefined) return null; const original = valid[originalIndex].parsed.filing; if (original.cik !== p.filing.cik || original.form !== "8-K" || original.accession === p.filing.accession) return null; }
-    const basePackages = valid.map(({ parsed: p }) => hash({ version: SEC_EDGAR_8K_FIXTURE_PACKAGE_VERSION, profile: p.sourceProfile, filing: p.filing, descriptors: p.descriptors }));
+    const amendmentChildren = new Set<string>();
+    for (const { parsed: p } of valid) if (p.filing.form === "8-K/A") {
+      if (amendmentChildren.has(p.filing.amendmentOfAccession!)) return null;
+      amendmentChildren.add(p.filing.amendmentOfAccession!);
+      const visited = new Set<string>([p.filing.accession]); let cursor = p.filing;
+      while (cursor.form === "8-K/A") {
+        const parentAccession = cursor.amendmentOfAccession!; if (visited.has(parentAccession)) return null; visited.add(parentAccession);
+        const parentIndex = byAccession.get(parentAccession); if (parentIndex === undefined) return null;
+        const parent = valid[parentIndex].parsed.filing; if (parent.cik !== p.filing.cik || parent.accession === cursor.accession || Date.parse(cursor.filingDate) < Date.parse(parent.filingDate) || Date.parse(cursor.acceptanceDateTime) < Date.parse(parent.acceptanceDateTime)) return null;
+        cursor = parent;
+      }
+      if (cursor.form !== "8-K") return null;
+    }
+    const basePackages = valid.map(({ parsed: p }) => hash({ version: SEC_EDGAR_8K_FIXTURE_PACKAGE_VERSION, profile: p.sourceProfile, filing: p.filing, descriptors: p.descriptors, requiredEvidenceFilenames: p.requiredEvidenceFilenames }));
     const filings: SecEdgar8kFixtureFiling[] = valid.map(({ parsed: p }, i) => {
-      const meta = makeArtifact("FILING_METADATA", p, basePackages[i], null, canonicalJson({ filing: p.filing }), "application/json; charset=utf-8", "sec-edgar-filing-metadata/v1");
-      const idx = makeArtifact("FILING_INDEX", p, basePackages[i], null, canonicalJson({ filing: p.filing, descriptors: p.descriptors }), "application/json; charset=utf-8", "sec-edgar-filing-index/v1");
+      const metaId = artifactId("FILING_METADATA", p, null, canonicalJson({ filing: p.filing }), "application/json; charset=utf-8", "sec-edgar-filing-metadata/v1");
+      const idxId = artifactId("FILING_INDEX", p, null, canonicalJson({ filing: p.filing, descriptors: p.descriptors, documentCount: p.descriptors.length, requiredEvidenceFilenames: p.requiredEvidenceFilenames }), "application/json; charset=utf-8", "sec-edgar-filing-index/v1");
       const originalIndex = p.filing.amendmentOfAccession ? byAccession.get(p.filing.amendmentOfAccession) : undefined;
-      const filing: SecEdgar8kFixtureFiling = freeze({ filingPackageId: `sec-edgar-fixture-filing:${basePackages[i]}`, filingPackageFingerprint: basePackages[i], filing: p.filing, metadataArtifactId: meta.artifactId, indexArtifactId: idx.artifactId, amendmentOfFilingPackageId: originalIndex === undefined ? null : `sec-edgar-fixture-filing:${basePackages[originalIndex]}`, receiptFingerprint: hash({ receiptId: p.receipt.receiptId, receivedAt: p.receipt.receivedAt, effectiveAvailableAt: p.receipt.effectiveAvailableAt }) });
+      const filing: SecEdgar8kFixtureFiling = freeze({ filingPackageId: `sec-edgar-fixture-filing:${basePackages[i]}`, filingPackageFingerprint: basePackages[i], filing: p.filing, metadataArtifactId: metaId, indexArtifactId: idxId, amendmentOfFilingPackageId: originalIndex === undefined ? null : `sec-edgar-fixture-filing:${basePackages[originalIndex]}`, receiptFingerprint: hash({ receiptId: p.receipt.receiptId, sourcePublishedAt: p.receipt.sourcePublishedAt, receivedAt: p.receipt.receivedAt, effectiveAvailableAt: p.receipt.effectiveAvailableAt }) });
       packageTrust.add(filing); privatePackageData.set(filing, valid[i]);
       return filing;
     });
@@ -250,9 +266,16 @@ function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   return `{${Object.keys(value).sort(ordinal).map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
 }
+function artifactMaterial(kind: SecEdgar8kFixtureArtifact["kind"], p: ParsedPackage, descriptor: ParsedPackage["descriptors"][number] | null, canonicalContent: string, contentType: string, canonicalizationVersion: string) {
+  const bytes = Buffer.from(canonicalContent, "utf8");
+  return { sourceProfile: p.sourceProfile, cik: p.filing.cik, accession: p.filing.accession, form: p.filing.form, kind, sequence: descriptor?.sequence ?? null, documentType: descriptor?.documentType ?? null, filename: descriptor?.filename ?? null, contentType, byteLength: bytes.byteLength, contentSha256: sha256Bytes(bytes), canonicalizationVersion };
+}
+function artifactId(kind: SecEdgar8kFixtureArtifact["kind"], p: ParsedPackage, descriptor: ParsedPackage["descriptors"][number] | null, canonicalContent: string, contentType: string, canonicalizationVersion: string): string {
+  return `sec-edgar-fixture-artifact:${hash(artifactMaterial(kind, p, descriptor, canonicalContent, contentType, canonicalizationVersion))}`;
+}
 function makeArtifact(kind: SecEdgar8kFixtureArtifact["kind"], p: ParsedPackage, packageFingerprint: string, descriptor: ParsedPackage["descriptors"][number] | null, canonicalContent: string, contentType: string, canonicalizationVersion: string): SecEdgar8kFixtureArtifact {
-  const material = { sourceProfile: p.sourceProfile, cik: p.filing.cik, accession: p.filing.accession, form: p.filing.form, kind, sequence: descriptor?.sequence ?? null, documentType: descriptor?.type ?? null, filename: descriptor?.filename ?? null, contentType, byteLength: Buffer.byteLength(canonicalContent, "utf8"), contentFingerprint: hash(bytesToHex(Buffer.from(canonicalContent, "utf8"))), canonicalizationVersion, filingPackageFingerprint: packageFingerprint };
-  const fingerprint = hash(material); const artifact = freeze({ artifactId: `sec-edgar-fixture-artifact:${fingerprint}`, fingerprint, kind, filingPackageId: `sec-edgar-fixture-filing:${packageFingerprint}`, cik: p.filing.cik, accession: p.filing.accession, form: p.filing.form, sequence: descriptor?.sequence ?? null, documentType: descriptor?.type ?? null, filename: descriptor?.filename ?? null, contentType, byteLength: material.byteLength, canonicalizationVersion });
+  const material = artifactMaterial(kind, p, descriptor, canonicalContent, contentType, canonicalizationVersion);
+  const fingerprint = hash(material); const artifact = freeze({ artifactId: `sec-edgar-fixture-artifact:${fingerprint}`, fingerprint, kind, filingPackageId: `sec-edgar-fixture-filing:${packageFingerprint}`, cik: p.filing.cik, accession: p.filing.accession, form: p.filing.form, sequence: descriptor?.sequence ?? null, documentType: descriptor?.documentType ?? null, filename: descriptor?.filename ?? null, contentType, byteLength: material.byteLength, canonicalizationVersion });
   artifactTrust.add(artifact); return artifact;
 }
 
@@ -263,7 +286,7 @@ export function createSecEdgar8kFixtureArtifacts(filing: SecEdgar8kFixtureFiling
     const { parsed, documents } = stored; const packageFingerprint = filing.filingPackageFingerprint;
     const artifacts: SecEdgar8kFixtureArtifact[] = [
       makeArtifact("FILING_METADATA", parsed, packageFingerprint, null, canonicalJson({ filing: parsed.filing }), "application/json; charset=utf-8", "sec-edgar-filing-metadata/v1"),
-      makeArtifact("FILING_INDEX", parsed, packageFingerprint, null, canonicalJson({ filing: parsed.filing, descriptors: parsed.descriptors }), "application/json; charset=utf-8", "sec-edgar-filing-index/v1"),
+      makeArtifact("FILING_INDEX", parsed, packageFingerprint, null, canonicalJson({ filing: parsed.filing, descriptors: parsed.descriptors, documentCount: parsed.descriptors.length, requiredEvidenceFilenames: parsed.requiredEvidenceFilenames }), "application/json; charset=utf-8", "sec-edgar-filing-index/v1"),
     ];
     for (const d of parsed.descriptors) {
       const doc = documents.find((entry) => entry.filename === d.filename); if (!doc) return null;
@@ -278,9 +301,11 @@ function makeClaim(pending: PendingClaim, correctionOfClaimId: string | null): S
   const f = pending.fields; const p = pending.parsed; const signingDate = f.SIGNING_DATE === "-" ? null : f.SIGNING_DATE; const expectedClosingDate = f.EXPECTED_CLOSING_DATE === "-" ? null : f.EXPECTED_CLOSING_DATE; const completionDate = f.COMPLETION_DATE === "-" ? null : f.COMPLETION_DATE;
   const lifecycle = f.LIFECYCLE as SecEdgar8kFixtureClaim["lifecycleStatusCandidate"];
   const amount = f.AMOUNT === "-" ? null : f.AMOUNT; const currency = f.CURRENCY === "-" ? null : f.CURRENCY;
-  const material = { extractionVersion: SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION, sourceArtifactId: pending.sourceArtifact.artifactId, sourceArtifactFingerprint: pending.sourceArtifact.fingerprint, cik: p.filing.cik, accession: p.filing.accession, form: p.filing.form, itemCode: f.ITEM, eventTypeCandidate: f.EVENT, lifecycleStatusCandidate: lifecycle, announcementAt: f.ANNOUNCEMENT_AT, signingDate, expectedClosingDate, completionDate, amount, amountClassification: f.AMOUNT_CLASS, currency, bindingStatus: f.BINDING, correctionOfClaimId, locator: pending.locator, excerptFingerprint: pending.excerptFingerprint };
+  const issuerIdentityCandidate = { syntheticCik: f.ISSUER_CIK, displayName: f.ISSUER_NAME };
+  const assetIdentityCandidate = { syntheticAssetId: f.ASSET_ID, displayName: f.ASSET_NAME };
+  const material = { extractionVersion: SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION, sourceArtifactId: pending.sourceArtifact.artifactId, sourceArtifactFingerprint: pending.sourceArtifact.fingerprint, cik: p.filing.cik, accession: p.filing.accession, form: p.filing.form, filingDate: p.filing.filingDate, reportDate: p.filing.reportDate, acceptanceAt: p.filing.acceptanceDateTime, issuerIdentityCandidate, assetIdentityCandidate, itemCode: f.ITEM, eventTypeCandidate: f.EVENT, lifecycleStatusCandidate: lifecycle, announcementAt: f.ANNOUNCEMENT_AT, signingDate, expectedClosingDate, completionDate, amount, amountClassification: f.AMOUNT_CLASS, currency, bindingStatus: f.BINDING, correctionOfClaimId, locator: pending.locator, excerptFingerprint: pending.excerptFingerprint };
   const fingerprint = hash(material);
-  return freeze({ claimId: `sec-edgar-fixture-claim:${fingerprint}`, fingerprint, extractionVersion: SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION, sourceArtifactId: pending.sourceArtifact.artifactId, sourceArtifactFingerprint: pending.sourceArtifact.fingerprint, cik: p.filing.cik, accession: p.filing.accession, form: p.filing.form, itemCode: f.ITEM as SecEdgar8kFixtureClaim["itemCode"], filingDate: p.filing.filingDate, reportDate: p.filing.reportDate, acceptanceAt: p.filing.acceptanceDateTime, sourcePublishedAt: p.receipt.sourcePublishedAt, receivedAt: p.receipt.receivedAt, effectiveAvailableAt: p.receipt.effectiveAvailableAt, issuerIdentityCandidate: { syntheticCik: f.ISSUER_CIK, displayName: f.ISSUER_NAME }, assetIdentityCandidate: { syntheticAssetId: f.ASSET_ID, displayName: f.ASSET_NAME }, eventTypeCandidate: f.EVENT as SecEdgar8kFixtureClaim["eventTypeCandidate"], lifecycleStatusCandidate: lifecycle, announcementAt: f.ANNOUNCEMENT_AT, signingDate, expectedClosingDate, completionDate, amount, amountClassification: f.AMOUNT_CLASS as SecEdgar8kFixtureClaim["amountClassification"], currency, bindingStatus: f.BINDING as SecEdgar8kFixtureClaim["bindingStatus"], correctionOfClaimId, locator: pending.locator, excerptFingerprint: pending.excerptFingerprint });
+  return freeze({ claimId: `sec-edgar-fixture-claim:${fingerprint}`, fingerprint, extractionVersion: SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION, sourceArtifactId: pending.sourceArtifact.artifactId, sourceArtifactFingerprint: pending.sourceArtifact.fingerprint, cik: p.filing.cik, accession: p.filing.accession, form: p.filing.form, itemCode: f.ITEM as SecEdgar8kFixtureClaim["itemCode"], filingDate: p.filing.filingDate, reportDate: p.filing.reportDate, acceptanceAt: p.filing.acceptanceDateTime, issuerIdentityCandidate, assetIdentityCandidate, eventTypeCandidate: f.EVENT as SecEdgar8kFixtureClaim["eventTypeCandidate"], lifecycleStatusCandidate: lifecycle, announcementAt: f.ANNOUNCEMENT_AT, signingDate, expectedClosingDate, completionDate, amount, amountClassification: f.AMOUNT_CLASS as SecEdgar8kFixtureClaim["amountClassification"], currency, bindingStatus: f.BINDING as SecEdgar8kFixtureClaim["bindingStatus"], correctionOfClaimId, locator: pending.locator, excerptFingerprint: pending.excerptFingerprint });
 }
 
 function amendmentMatches(original: Readonly<Record<string, string>>, amendment: Readonly<Record<string, string>>): boolean {
@@ -299,7 +324,8 @@ export function extractSecEdgar8kFixtureClaims(filing: SecEdgar8kFixtureFiling, 
     const stored = privatePackageData.get(filing); if (!stored) return null;
     const expectedDocumentCount = stored.parsed.descriptors.length;
     if (artifacts.length !== expectedDocumentCount + 2 || artifacts.filter((a) => a.kind === "FILING_METADATA").length !== 1 || artifacts.filter((a) => a.kind === "FILING_INDEX").length !== 1 || artifacts.filter((a) => a.kind === "PRIMARY_DOCUMENT").length !== 1 || artifacts.filter((a) => a.kind === "EXHIBIT").length !== expectedDocumentCount - 1) return null;
-    for (const descriptor of stored.parsed.descriptors) if (!artifacts.some((a) => a.sequence === descriptor.sequence && a.filename === descriptor.filename && a.documentType === descriptor.type && a.kind === (descriptor.type === "PRIMARY" ? "PRIMARY_DOCUMENT" : "EXHIBIT"))) return null;
+    if (artifacts.find((a) => a.kind === "FILING_METADATA")?.artifactId !== filing.metadataArtifactId || artifacts.find((a) => a.kind === "FILING_INDEX")?.artifactId !== filing.indexArtifactId) return null;
+    for (const descriptor of stored.parsed.descriptors) if (!artifacts.some((a) => a.sequence === descriptor.sequence && a.filename === descriptor.filename && a.documentType === descriptor.documentType && a.kind === (descriptor.type === "PRIMARY" ? "PRIMARY_DOCUMENT" : "EXHIBIT"))) return null;
     const primaryArtifact = artifacts.find((a) => a.kind === "PRIMARY_DOCUMENT"); if (!primaryArtifact || primaryArtifact.filename !== stored.parsed.filing.primaryDocument) return null;
     const parsedClaim = parseClaims(stored, primaryArtifact); if (!parsedClaim) return null;
     const claim = makeClaim({ fields: parsedClaim.fields, parsed: stored.parsed, packageId: filing.filingPackageId, sourceArtifact: primaryArtifact, locator: parsedClaim.locator, excerptFingerprint: parsedClaim.excerptFingerprint }, null);
@@ -320,7 +346,16 @@ export function runSecEdgar8kFixtureClaimPipeline(inputs: readonly unknown[]): S
     }
     const pendingByAccession = new Map(pending.map((p, i) => [p.parsed.filing.accession, i]));
     const claims: SecEdgar8kFixtureClaim[] = [];
-    const claimBuildOrder = [...pending].sort((a, b) => (a.parsed.filing.form === b.parsed.filing.form ? 0 : a.parsed.filing.form === "8-K" ? -1 : 1) || ordinal(a.parsed.filing.accession, b.parsed.filing.accession));
+    const amendmentDepth = (entry: PendingClaim): number => {
+      let depth = 0; let current = entry; const seen = new Set<string>();
+      while (current.parsed.filing.form === "8-K/A") {
+        const parent = current.parsed.filing.amendmentOfAccession!; if (seen.has(parent)) return LIMITS.packageCount + 1; seen.add(parent);
+        const parentIndex = pendingByAccession.get(parent); if (parentIndex === undefined) return LIMITS.packageCount + 1;
+        current = pending[parentIndex]; depth++;
+      }
+      return depth;
+    };
+    const claimBuildOrder = [...pending].sort((a, b) => amendmentDepth(a) - amendmentDepth(b) || ordinal(a.parsed.filing.accession, b.parsed.filing.accession));
     for (const p of claimBuildOrder) {
       const originalAccession = p.parsed.filing.amendmentOfAccession;
       const originalIndex = originalAccession === null ? undefined : pendingByAccession.get(originalAccession);
@@ -339,11 +374,17 @@ export function runSecEdgar8kFixtureClaimPipeline(inputs: readonly unknown[]): S
       const originalPackage = pending.find((entry) => entry.parsed.filing.accession === original.accession); if (!originalPackage) return fail();
       correctionLineage.push({ originalFilingPackageId: originalPackage.packageId, amendmentFilingPackageId: p.packageId, originalClaimId: original.claimId, amendedClaimId: claim.claimId, correctedField: p.fields.CORRECTS_FIELD, relation: "APPEND_ONLY_CORRECTION" });
     }
+    const correctionAncestors = new Map<string, Set<string>>();
+    for (const claim of claims) {
+      const ancestors = new Set<string>(); let parentId = claim.correctionOfClaimId;
+      while (parentId) { if (ancestors.has(parentId)) return fail(); ancestors.add(parentId); const parentClaim = claims.find((candidate) => candidate.claimId === parentId); parentId = parentClaim?.correctionOfClaimId ?? null; }
+      correctionAncestors.set(claim.claimId, ancestors);
+    }
     for (let i = 0; i < claims.length; i++) for (let j = i + 1; j < claims.length; j++) {
       const left = claims[i]; const right = claims[j];
       if (left.cik !== right.cik || left.issuerIdentityCandidate.syntheticCik !== right.issuerIdentityCandidate.syntheticCik || left.assetIdentityCandidate.syntheticAssetId !== right.assetIdentityCandidate.syntheticAssetId || left.eventTypeCandidate !== right.eventTypeCandidate) continue;
       const conflict = left.lifecycleStatusCandidate !== right.lifecycleStatusCandidate || left.amount !== right.amount || left.amountClassification !== right.amountClassification || left.currency !== right.currency || left.signingDate !== right.signingDate || left.expectedClosingDate !== right.expectedClosingDate || left.completionDate !== right.completionDate;
-      if (conflict && left.correctionOfClaimId !== right.claimId && right.correctionOfClaimId !== left.claimId) return fail();
+      if (conflict && !correctionAncestors.get(left.claimId)?.has(right.claimId) && !correctionAncestors.get(right.claimId)?.has(left.claimId)) return fail();
     }
     for (const claim of claims) claimTrust.add(claim);
     const sortedClaims = claims.sort((a, b) => ordinal(a.cik, b.cik) || ordinal(a.accession, b.accession) || ordinal(a.claimId, b.claimId));
@@ -353,7 +394,7 @@ export function runSecEdgar8kFixtureClaimPipeline(inputs: readonly unknown[]): S
     const claimIds = sortedClaims.map((c) => c.claimId).sort(ordinal);
     const claimMaterial = { pipelineVersion: SEC_EDGAR_8K_FIXTURE_PIPELINE_VERSION, extractionVersion: SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION, filingPackageIds: filings.map((f) => f.filingPackageId).sort(ordinal), artifactIds, claimIds, locators, correctionLineage };
     const claimSetFingerprint = hash(claimMaterial); const claimSet = freeze({ claimSetId: `sec-edgar-fixture-claim-set:${claimSetFingerprint}`, fingerprint: claimSetFingerprint, memberCount: sortedClaims.length, claimIds, artifactIds, locatorKeys: locators, extractionVersion: SEC_EDGAR_8K_FIXTURE_EXTRACTION_VERSION }); claimSetTrust.add(claimSet);
-    const receipts = filings.map((filing) => { const p = privatePackageData.get(filing)!.parsed.receipt; return freeze({ receiptId: p.receiptId, filingPackageId: filing.filingPackageId, receivedAt: p.receivedAt, effectiveAvailableAt: p.effectiveAvailableAt, fingerprint: hash({ receiptId: p.receiptId, filingPackageId: filing.filingPackageId, receivedAt: p.receivedAt, effectiveAvailableAt: p.effectiveAvailableAt }) }); });
+    const receipts = filings.map((filing) => { const p = privatePackageData.get(filing)!.parsed.receipt; return freeze({ receiptId: p.receiptId, filingPackageId: filing.filingPackageId, sourcePublishedAt: p.sourcePublishedAt, receivedAt: p.receivedAt, effectiveAvailableAt: p.effectiveAvailableAt, fingerprint: hash({ receiptId: p.receiptId, filingPackageId: filing.filingPackageId, sourcePublishedAt: p.sourcePublishedAt, receivedAt: p.receivedAt, effectiveAvailableAt: p.effectiveAvailableAt }) }); });
     const replayFingerprint = hash({ claimSetFingerprint, receipts: receipts.map((r) => r.fingerprint).sort(ordinal) });
     const result: SecEdgar8kFixtureResult = freeze({ status: "VALID", classification: SEC_EDGAR_8K_FIXTURE_RESULT_KIND, pipelineVersion: SEC_EDGAR_8K_FIXTURE_PIPELINE_VERSION, filings, artifacts: artifacts.sort((a, b) => ordinal(a.artifactId, b.artifactId)), receipts, claims: sortedClaims, correctionLineage: correctionLineage.sort((a, b) => ordinal(a.amendedClaimId, b.amendedClaimId)), claimSet, replayFingerprint, production: Object.freeze({ acquisition: "BLOCKED", persistence: "BLOCKED", eventAuthority: "BLOCKED", signals: "BLOCKED" }), sideEffects: Object.freeze({ authority: 0, persistence: 0, signal: 0 }) });
     resultTrust.add(result); return result;

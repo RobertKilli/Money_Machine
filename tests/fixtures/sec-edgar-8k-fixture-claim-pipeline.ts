@@ -1,8 +1,8 @@
 import { Buffer } from "node:buffer";
-import { canonicalSha256 } from "../../src/domain/intelligence/ingestion-provenance";
+import { createHash } from "node:crypto";
 import { SEC_EDGAR_8K_FIXTURE_PACKAGE_VERSION, SEC_EDGAR_8K_FIXTURE_TEXT_VERSION } from "../../src/domain/intelligence/sec-edgar-8k-fixture-claim-pipeline";
 
-type SyntheticDocument = { filename: string; content: string; sequence: number; type: "PRIMARY" | "EXHIBIT" };
+type SyntheticDocument = { filename: string; content: string; sequence: number; type: "PRIMARY" | "EXHIBIT"; documentType: string };
 type FixtureSpec = {
   cik: string; accession: string; form: "8-K" | "8-K/A"; filingDate: string; reportDate: string | null; acceptanceDateTime: string;
   primaryDocument: string; amendmentOfAccession: string | null; documents: SyntheticDocument[]; requiredEvidenceFilenames?: string[];
@@ -35,7 +35,7 @@ const intentText = [
 
 function digestText(text: string): string {
   const canonical = text.replace(/\r\n/g, "\n").normalize("NFC");
-  return canonicalSha256(Buffer.from(canonical, "utf8").toString("hex"));
+  return createHash("sha256").update(Buffer.from(canonical, "utf8")).digest("hex");
 }
 
 function makePackage(spec: FixtureSpec): Record<string, unknown> {
@@ -53,9 +53,10 @@ function makePackage(spec: FixtureSpec): Record<string, unknown> {
       archivePath: `/synthetic-edgar/archive/${spec.cik}/${spec.accession}/index.txt`,
       filingDate: spec.filingDate, reportDate: spec.reportDate, acceptanceDateTime: spec.acceptanceDateTime,
       primaryDocument: spec.primaryDocument, amendmentOfAccession: spec.amendmentOfAccession,
+      documentCount: spec.documents.length,
       documents: spec.documents.map((doc) => {
         const canonical = doc.content.replace(/\r\n/g, "\n").normalize("NFC"); const byteLength = Buffer.byteLength(canonical, "utf8");
-        return { sequence: doc.sequence, type: doc.type, filename: doc.filename, contentType: "text/plain; charset=utf-8", byteLength, contentSha256: digestText(canonical), canonicalizationVersion: SEC_EDGAR_8K_FIXTURE_TEXT_VERSION };
+        return { sequence: doc.sequence, type: doc.type, documentType: doc.documentType, filename: doc.filename, contentType: "text/plain; charset=utf-8", byteLength, contentSha256: digestText(canonical), canonicalizationVersion: SEC_EDGAR_8K_FIXTURE_TEXT_VERSION };
       }),
       requiredEvidenceFilenames: spec.requiredEvidenceFilenames ?? [],
     },
@@ -68,25 +69,25 @@ export const SEC_EDGAR_8K_SYNTHETIC_FIXTURES = Object.freeze([
   makePackage({
     cik: "SYNTH-CIK-0001", accession: "SYNTH-ACC-AGREE-0001", form: "8-K", filingDate: "2026-04-10", reportDate: "2026-04-09", acceptanceDateTime: "2026-04-10T14:05:10.000Z",
     primaryDocument: "agreement.txt", amendmentOfAccession: null,
-    documents: [{ filename: "agreement.txt", content: agreementText, sequence: 1, type: "PRIMARY" }, { filename: "schedule.txt", content: "SYNTHETIC EXHIBIT SCHEDULE-0001\nNO EXTERNAL DOCUMENT REFERENCES", sequence: 2, type: "EXHIBIT" }], requiredEvidenceFilenames: ["schedule.txt"],
+    documents: [{ filename: "agreement.txt", content: agreementText, sequence: 1, type: "PRIMARY", documentType: "PRIMARY_DOCUMENT" }, { filename: "schedule.txt", content: "SYNTHETIC EXHIBIT SCHEDULE-0001\nNO EXTERNAL DOCUMENT REFERENCES", sequence: 2, type: "EXHIBIT", documentType: "EXHIBIT-99.1" }], requiredEvidenceFilenames: ["schedule.txt"],
     expected: { eventType: "DEFINITIVE_PURCHASE_AGREEMENT", lifecycleStatus: "SIGNED", amountClassification: "EXACT", amount: "1250000", currency: "SYNTH-CUR-01", signingDate: "2026-04-09", expectedClosingDate: "2026-09-30", completionDate: null, claimCount: 1 },
     receiptId: "SYNTH-RECEIPT-AGREE-0001", sourcePublishedAt: "2026-04-10T14:02:00.000Z", receivedAt: "2026-04-10T14:06:00.000Z", effectiveAvailableAt: "2026-04-10T14:06:01.000Z",
   }),
   makePackage({
     cik: "SYNTH-CIK-0002", accession: "SYNTH-ACC-COMPLETE-0002", form: "8-K", filingDate: "2026-05-12", reportDate: "2026-05-12", acceptanceDateTime: "2026-05-12T16:24:00.000Z",
-    primaryDocument: "completion.txt", amendmentOfAccession: null, documents: [{ filename: "completion.txt", content: completionText, sequence: 1, type: "PRIMARY" }],
+    primaryDocument: "completion.txt", amendmentOfAccession: null, documents: [{ filename: "completion.txt", content: completionText, sequence: 1, type: "PRIMARY", documentType: "PRIMARY_DOCUMENT" }],
     expected: { eventType: "PURCHASE_COMPLETED", lifecycleStatus: "COMPLETED", amountClassification: "EXACT", amount: "880000", currency: "SYNTH-CUR-02", signingDate: "2026-05-01", expectedClosingDate: "2026-05-30", completionDate: "2026-05-12", claimCount: 1 },
     receiptId: "SYNTH-RECEIPT-COMPLETE-0002", sourcePublishedAt: "2026-05-12T16:20:00.000Z", receivedAt: "2026-05-12T16:25:00.000Z", effectiveAvailableAt: "2026-05-12T16:25:02.000Z",
   }),
   makePackage({
     cik: "SYNTH-CIK-0001", accession: "SYNTH-ACC-AMEND-0001", form: "8-K/A", filingDate: "2026-04-15", reportDate: "2026-04-09", acceptanceDateTime: "2026-04-15T09:15:00.000Z",
-    primaryDocument: "amendment.txt", amendmentOfAccession: "SYNTH-ACC-AGREE-0001", documents: [{ filename: "amendment.txt", content: amendmentText, sequence: 1, type: "PRIMARY" }],
+    primaryDocument: "amendment.txt", amendmentOfAccession: "SYNTH-ACC-AGREE-0001", documents: [{ filename: "amendment.txt", content: amendmentText, sequence: 1, type: "PRIMARY", documentType: "PRIMARY_DOCUMENT" }],
     expected: { eventType: "DEFINITIVE_PURCHASE_AGREEMENT", lifecycleStatus: "SIGNED", amountClassification: "EXACT", amount: "1300000", currency: "SYNTH-CUR-01", signingDate: "2026-04-09", expectedClosingDate: "2026-09-30", completionDate: null, claimCount: 1 },
     receiptId: "SYNTH-RECEIPT-AMEND-0001", sourcePublishedAt: "2026-04-15T09:10:00.000Z", receivedAt: "2026-04-15T09:16:00.000Z", effectiveAvailableAt: "2026-04-15T09:16:01.000Z",
   }),
   makePackage({
     cik: "SYNTH-CIK-0003", accession: "SYNTH-ACC-INTENT-0003", form: "8-K", filingDate: "2026-06-20", reportDate: "2026-06-20", acceptanceDateTime: "2026-06-20T10:03:00.000Z",
-    primaryDocument: "intent.txt", amendmentOfAccession: null, documents: [{ filename: "intent.txt", content: intentText, sequence: 1, type: "PRIMARY" }],
+    primaryDocument: "intent.txt", amendmentOfAccession: null, documents: [{ filename: "intent.txt", content: intentText, sequence: 1, type: "PRIMARY", documentType: "PRIMARY_DOCUMENT" }],
     expected: { eventType: "PURCHASE_INTENT_ANNOUNCED", lifecycleStatus: "INTENT", amountClassification: "TARGET", amount: "750000", currency: "SYNTH-CUR-03", signingDate: null, expectedClosingDate: "2027-03-30", completionDate: null, claimCount: 1 },
     receiptId: "SYNTH-RECEIPT-INTENT-0003", sourcePublishedAt: "2026-06-20T10:00:00.000Z", receivedAt: "2026-06-20T10:04:00.000Z", effectiveAvailableAt: "2026-06-20T10:04:02.000Z",
   }),
