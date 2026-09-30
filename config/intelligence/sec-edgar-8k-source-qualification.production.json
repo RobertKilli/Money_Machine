@@ -1,0 +1,33 @@
+{
+  "contractVersion": "sec-edgar-8k-production-decision/v1",
+  "reviewedAt": "2026-09-30T07:17:32.000Z",
+  "sourceId": "sec-edgar-8k",
+  "qualificationVersion": "sec-edgar-8k-event-source-qualification/v1",
+  "qualificationStatus": "PARTIAL",
+  "selectedAcquisitionProfile": null,
+  "productionAcquisition": "BLOCKED",
+  "rawStorage": "NOT_APPROVED",
+  "normalizedStorage": "NOT_APPROVED",
+  "authorityPersistence": "NOT_APPROVED",
+  "approvals": {
+    "ACQUISITION": "NOT_APPROVED",
+    "RAW_STORAGE": "NOT_APPROVED",
+    "NORMALIZED_STORAGE": "NOT_APPROVED",
+    "AUTHORITY_ISSUANCE": "NOT_APPROVED",
+    "RETENTION": "NOT_APPROVED",
+    "REDISTRIBUTION": "NOT_APPROVED",
+    "COMMERCIAL_USE": "NOT_APPROVED"
+  },
+  "retention": "UNKNOWN",
+  "redistribution": "NOT_APPROVED",
+  "commercialUse": "NOT_APPROVED",
+  "scheduler": "BLOCKED",
+  "eventExtraction": "BLOCKED",
+  "sourceMapping": null,
+  "blockers": [
+    "SEC_8K_COVERAGE_AND_COMPLETENESS_NOT_PROVEN",
+    "SEC_STORAGE_AND_USAGE_APPROVALS_NOT_GRANTED",
+    "SEC_REQUEST_IDENTITY_AND_LIVE_ACQUISITION_NOT_APPROVED",
+    "SEC_EVENT_EXTRACTION_AND_AUTHORITY_NOT_IMPLEMENTED"
+  ]
+}

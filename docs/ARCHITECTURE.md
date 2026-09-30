@@ -832,3 +832,10 @@ boundaries. Event authority would require reviewed source-bound material and
 cannot be issued by an LLM alone. Corrections append supersession edges; no
 newest-wins behavior is allowed. An authoritative event is not a trading
 signal, and this context creates no order or portfolio mutation.
+
+The SEC EDGAR Form 8-K/8-K/A qualification is a separate source profile within
+this upstream context. It defines bounded SEC-only GET profiles and strict
+filing identity, but remains PARTIAL; it does not enable acquisition or event
+authority. Form 6-K, 10-K, 10-Q, registration statements and XBRL facts are
+outside this qualification. See
+`docs/SEC_EDGAR_8K_EVENT_SOURCE_QUALIFICATION.md`.
