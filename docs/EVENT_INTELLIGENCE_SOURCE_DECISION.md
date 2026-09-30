@@ -92,3 +92,9 @@ Before the first live acquisition, a separate reviewed slice must:
 6. implement fixture-only acquisition/parser/authority tests and obtain separate approval for any real network client, persistence or scheduler.
 
 The source parser and production candidate config are not readiness gates and cannot enable acquisition. No provider terms were accepted and no live source was queried.
+
+The SEC Form 8-K/8-K/A source profile is separately qualified in
+`docs/SEC_EDGAR_8K_EVENT_SOURCE_QUALIFICATION.md`. Its status is PARTIAL and
+its production acquisition remains BLOCKED. That profile does not issue event
+authority or qualify Form 6-K, 10-K, 10-Q, registration statements, or XBRL
+facts.
