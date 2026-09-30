@@ -24,6 +24,18 @@ describe("M5 market metrics authority", () => {
     expect(createM5MarketMetricsAuthority({ providerId: "p", datasetId: "d", datasetVersion: "v", sourceLineageId: "l", asOf, quoteCurrency: "USD", materials: materials.map(m => m.metricKind === "MARKET_CAP" ? { ...m, basis: "FDV" } : m), recordedAt: asOf }).status).toBe("INVALID");
     expect(createM5MarketMetricsAuthority({ providerId: "p", datasetId: "d", datasetVersion: "v", sourceLineageId: "l", asOf, quoteCurrency: "USD", materials: materials.map(m => m.metricKind === "LIQUIDITY" ? { ...m, componentIds: ["pool-a"], components: [{ id: "pool-a", valueAtoms: 1_250_000n, scale: 2, quoteCurrency: "USD" }], expectedComponentCount: 1 } : m), recordedAt: asOf }).status).toBe("INCOMPLETE");
     expect(createM5MarketMetricsAuthority({ providerId: "p", datasetId: "d", datasetVersion: "v", sourceLineageId: "l", asOf, quoteCurrency: "USD", materials: materials.map(m => m.metricKind === "VOLUME" ? { ...m, windowEnd: "2026-02-02T00:00:00.000Z" } : m), recordedAt: asOf }).status).toBe("INVALID");
+    expect(createM5MarketMetricsAuthority({ providerId: "p", datasetId: "d", datasetVersion: "v", sourceLineageId: "l", asOf, quoteCurrency: "USD", materials: materials.map(m => m.metricKind === "VOLUME" ? { ...m, windowStart: "2026-01-31T01:00:00.000Z" } : m), recordedAt: asOf }).status).toBe("INVALID");
+  });
+
+  it("pins market-cap minor-unit and temporal inputs, but permits reported zero and does not bind volume-window end to observedAt", () => {
+    const call = (changed: readonly typeof materials[number][]) => createM5MarketMetricsAuthority({ providerId: "p", datasetId: "d", datasetVersion: "v", sourceLineageId: "l", asOf, quoteCurrency: "USD", materials: changed, recordedAt: asOf });
+    expect(call(materials.map(m => m.metricKind === "MARKET_CAP" ? { ...m, valueAtoms: 0n } : m)).status).toBe("READY");
+    expect(call(materials.map(m => m.metricKind === "MARKET_CAP" ? { ...m, valueAtoms: null as unknown as bigint } : m)).status).toBe("INVALID");
+    expect(call(materials.map(m => m.metricKind === "MARKET_CAP" ? { ...m, scale: 37 } : m)).status).toBe("INVALID");
+    expect(call(materials.map(m => m.metricKind === "MARKET_CAP" ? { ...m, quoteCurrency: "EUR" } : m)).status).toBe("INVALID");
+    expect(call(materials.map(m => m.metricKind === "MARKET_CAP" ? { ...m, availableAt: "2026-02-01T00:01:00.000Z" } : m)).status).toBe("INVALID");
+    const mismatchedWindowObservation = call(materials.map(m => m.metricKind === "VOLUME" ? { ...m, observedAt: "2026-01-31T23:00:00.000Z" } : m));
+    expect(mismatchedWindowObservation.status).toBe("READY");
   });
 
   it("is permutation invariant and handles bigint values beyond Number", () => {

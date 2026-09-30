@@ -47,4 +47,25 @@ describe("M5 daily series authority", () => {
     const incomplete = createM5DailySeriesAuthority({ providerId: "p", datasetId: "d", datasetVersion: "v", providerSourceNamespace: "n", sourceLineageId: "l", chainId: "eip155:1", contractAddress: "0x0000000000000000000000000000000000000001", providerAssetIdentity: "a", observations: observations.slice(0, 2), asOf, recordedAt: asOf });
     expect(incomplete.status).toBe("INCOMPLETE");
   });
+
+  it("does not distinguish an intraday sample from a daily close or enforce a midnight boundary", () => {
+    const intradaySamples = observations.map(row => ({ ...row, observedAt: row.observedAt.replace("T00:00:00.000Z", "T12:00:00.000Z"), availableAt: row.availableAt.replace("T00:00:00.000Z", "T12:00:00.000Z") }));
+    const result = createM5DailySeriesAuthority({ providerId: "coingecko", datasetId: "coingecko-market-chart", datasetVersion: "fixture/v1", providerSourceNamespace: "fixture:daily", sourceLineageId: "lineage-samples", chainId: "eip155:1", contractAddress: "0x0000000000000000000000000000000000000001", providerAssetIdentity: "fixture-asset", observations: intradaySamples, asOf, recordedAt: asOf });
+    expect(result.status).toBe("READY");
+    if (result.status === "READY") expect(result.authority.observations[0]?.observedAt).toBe("2026-01-01T12:00:00.000Z");
+  });
+
+  it("rejects noncanonical timezone offsets and gaps longer than 48 hours", () => {
+    const wrongTimezone = deriveM5CryptoDailyMetrics(observations.map((row, index) => index === 0 ? { ...row, observedAt: row.observedAt.replace("Z", "+00:00") } : row), asOf);
+    expect(wrongTimezone.status).toBe("INVALID");
+    const withGap = observations.map((row, index) => {
+      if (index === 0) return row;
+      const observedAt = new Date(Date.UTC(2026, 0, index + 4)).toISOString();
+      const availableAt = new Date(Date.UTC(2026, 0, index + 5)).toISOString();
+      return { ...row, observedAt, availableAt };
+    });
+    const gap = deriveM5CryptoDailyMetrics(withGap, asOf);
+    expect(gap.status).toBe("INCOMPLETE");
+    if (gap.status === "INCOMPLETE") expect(gap.diagnostics).toContain("M5_DAILY_SERIES_GAP_EXCEEDED");
+  });
 });

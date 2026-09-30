@@ -6,6 +6,23 @@
 
 The production posture remains **BLOCKED**. The current CoinGecko and Etherscan fixture integrations prove parser and replay mechanics only. No candidate source has demonstrated every M5 capability with the exact scope, temporal, pagination, snapshot and audit guarantees required by the existing domain contracts. Storage, authority persistence, redistribution and commercial use also lack explicit provider-specific approval.
 
+### CoinGecko market semantics qualification (checked 2026-09-29)
+
+The dedicated [M5 CoinGecko market-source qualification](M5_COINGECKO_MARKET_SOURCE_QUALIFICATION.md)
+reviewed official Pro and Demo contract-address `market_chart/range` references
+and the API terms on 2026-09-29 16:43 UTC. It keeps `DAILY_CLOSE_SERIES`,
+`MARKET_CAP`, and `VOLUME_24H` at **PARTIAL**: a required `prices` pair and
+daily `00:00 UTC` auto-granularity do not define a daily close; `market_caps`
+does not specify its formula/null/as-of policy; `total_volumes` does not prove
+an exact rolling 24-hour window or its timestamp binding. The previous
+successful Demo smoke established transport/parser/data-field presence only,
+not those semantic contracts. The new pure qualification model and server-only
+projection guard accept only a module-local configured `QUALIFIED` record plus
+authentic acquisition material; current configured records are partial, so
+none projects. This does not change endpoint capability labels, usage
+approval, the empty production approval registry, or the blocked production
+readiness result.
+
 The machine-readable file [`config/m5/provider-readiness.production.json`](../config/m5/provider-readiness.production.json) is scoped only to CoinGecko's `coingecko-market-chart` dataset/version. It records the three market-series capabilities exposed by that dataset and all seven usages as `REQUIRES_APPROVAL`. It does not represent the other providers or the combined production stack. The existing `m5-provider-readiness-config/v1` contract binds one provider/dataset/version; the separate `m5-provider-readiness-aggregate/v1` composes authentic, scope-matched results without changing that contract.
 
 The authoritative single-scope usage enum contains exactly seven values: `NETWORK_ACQUISITION`, `RAW_PAYLOAD_PROCESSING`, `RAW_PAYLOAD_STORAGE`, `NORMALIZED_STORAGE`, `AUTHORITY_PERSISTENCE`, `REDISTRIBUTION`, and `COMMERCIAL_USE`. Aggregate policy carries those exact seven values independently for each provider; provider access remains `NETWORK_ACQUISITION`, and raw storage remains `RAW_PAYLOAD_STORAGE`. It also records a separate `RETENTION` decision. Retention is a data-lifecycle constraint (how long material may be kept and when it must be deleted), not an additional value in the existing provider usage enum. It is checked independently and cannot authorize raw storage, normalized storage or any other usage. Thus the aggregate has seven inherited usage decisions plus one separate retention decision per source; it does not redefine the seven-value source contract.

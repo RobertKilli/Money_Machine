@@ -1,0 +1,84 @@
+{
+  "contractVersion": "m5-coingecko-market-source-qualification/v1",
+  "reviewedAt": "2026-09-29T16:43:05.000Z",
+  "effectiveFrom": "2026-09-29T16:43:05.000Z",
+  "expiresAt": "2027-09-29T16:43:05.000Z",
+  "recordedAt": "2026-09-29T16:43:05.000Z",
+  "scope": {
+    "providerId": "coingecko",
+    "datasetId": "coingecko-market-chart",
+    "datasetVersion": "coingecko-market-chart/range-v1",
+    "endpointProfile": "COINGECKO_ETHEREUM_CONTRACT_MARKET_CHART_RANGE_PRO",
+    "queryProfile": "COINGECKO_MARKET_CHART_USD_DAILY",
+    "endpointHost": "pro-api.coingecko.com",
+    "endpointPath": "/api/v3/coins/ethereum/contract/{address}/market_chart/range",
+    "chainId": "eip155:1",
+    "assetSymbol": "WETH",
+    "contractAddress": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+  },
+  "qualifications": [
+    {
+      "metric": "DAILY_CLOSE_SERIES",
+      "providerField": "prices",
+      "documentedProviderSemantics": [
+        "AUTO_GRANULARITY_DAILY_ABOVE_90_DAYS_AT_00_00_UTC",
+        "DATA_POINTS_ARE_TIMESTAMP_VALUE_PAIRS",
+        "DOCUMENTATION_DOES_NOT_DEFINE_DAILY_CLOSE_FORMULA",
+        "DOCUMENTATION_DOES_NOT_PROVE_COMPLETE_ASSET_OR_MARKET_COVERAGE",
+        "DOCUMENTATION_DOES_NOT_DEFINE_RESPONSE_TIMESTAMP_AS_OF_RULE",
+        "LAST_COMPLETED_UTC_DAY_AVAILABLE_AT_00_35_UTC",
+        "PRO_REQUIRES_PRO_HOST_AND_HEADER_KEY",
+        "RANGE_ENDPOINT_RETURNS_PRICES_MARKET_CAPS_TOTAL_VOLUMES",
+        "TERMS_RESTRICT_DATA_COPY_STORAGE_AND_DERIVATION"
+      ],
+      "evidenceReferences": [
+        { "url": "https://docs.coingecko.com/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Pro API Reference)", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-29T16:43:05.000Z", "claims": ["AUTO_GRANULARITY_DAILY_ABOVE_90_DAYS_AT_00_00_UTC", "DATA_POINTS_ARE_TIMESTAMP_VALUE_PAIRS", "LAST_COMPLETED_UTC_DAY_AVAILABLE_AT_00_35_UTC", "PRO_REQUIRES_PRO_HOST_AND_HEADER_KEY", "RANGE_ENDPOINT_RETURNS_PRICES_MARKET_CAPS_TOTAL_VOLUMES"] },
+        { "url": "https://docs.coingecko.com/demo/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Demo API Reference)", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-29T16:43:05.000Z", "claims": ["DEMO_USES_PUBLIC_HOST_AND_DEMO_HEADER_KEY", "DOCUMENTATION_DOES_NOT_DEFINE_DAILY_CLOSE_FORMULA", "DOCUMENTATION_DOES_NOT_PROVE_COMPLETE_ASSET_OR_MARKET_COVERAGE", "DOCUMENTATION_DOES_NOT_DEFINE_RESPONSE_TIMESTAMP_AS_OF_RULE"] },
+        { "url": "https://www.coingecko.com/en/api_terms", "title": "CoinGecko API Terms of Service", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-29T16:43:05.000Z", "claims": ["TERMS_RESTRICT_DATA_COPY_STORAGE_AND_DERIVATION"] }
+      ],
+      "blockers": ["M5_CLOSE_PRICE_SEMANTICS_NOT_DOCUMENTED", "M5_DAILY_CADENCE_AND_COMPLETE_HISTORY_NOT_PROVEN", "M5_PROVIDER_DATA_USAGE_AND_RETENTION_APPROVAL_REQUIRED"]
+    },
+    {
+      "metric": "MARKET_CAP",
+      "providerField": "market_caps",
+      "documentedProviderSemantics": [
+        "DATA_POINTS_ARE_TIMESTAMP_VALUE_PAIRS",
+        "DOCUMENTATION_DOES_NOT_DEFINE_MARKET_CAP_FORMULA_OR_NULL_POLICY",
+        "DOCUMENTATION_DOES_NOT_DEFINE_RESPONSE_TIMESTAMP_AS_OF_RULE",
+        "DOCUMENTATION_DOES_NOT_PROVE_COMPLETE_ASSET_OR_MARKET_COVERAGE",
+        "LAST_COMPLETED_UTC_DAY_AVAILABLE_AT_00_35_UTC",
+        "PRO_REQUIRES_PRO_HOST_AND_HEADER_KEY",
+        "RANGE_ENDPOINT_RETURNS_PRICES_MARKET_CAPS_TOTAL_VOLUMES",
+        "TERMS_RESTRICT_DATA_COPY_STORAGE_AND_DERIVATION",
+        "VS_CURRENCY_SELECTS_TARGET_MARKET_CURRENCY"
+      ],
+      "evidenceReferences": [
+        { "url": "https://docs.coingecko.com/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Pro API Reference)", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-29T16:43:05.000Z", "claims": ["DATA_POINTS_ARE_TIMESTAMP_VALUE_PAIRS", "LAST_COMPLETED_UTC_DAY_AVAILABLE_AT_00_35_UTC", "PRO_REQUIRES_PRO_HOST_AND_HEADER_KEY", "RANGE_ENDPOINT_RETURNS_PRICES_MARKET_CAPS_TOTAL_VOLUMES", "VS_CURRENCY_SELECTS_TARGET_MARKET_CURRENCY"] },
+        { "url": "https://docs.coingecko.com/demo/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Demo API Reference)", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-29T16:43:05.000Z", "claims": ["DEMO_USES_PUBLIC_HOST_AND_DEMO_HEADER_KEY", "DOCUMENTATION_DOES_NOT_DEFINE_MARKET_CAP_FORMULA_OR_NULL_POLICY", "DOCUMENTATION_DOES_NOT_DEFINE_RESPONSE_TIMESTAMP_AS_OF_RULE", "DOCUMENTATION_DOES_NOT_PROVE_COMPLETE_ASSET_OR_MARKET_COVERAGE"] },
+        { "url": "https://www.coingecko.com/en/api_terms", "title": "CoinGecko API Terms of Service", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-29T16:43:05.000Z", "claims": ["TERMS_RESTRICT_DATA_COPY_STORAGE_AND_DERIVATION"] }
+      ],
+      "blockers": ["M5_MARKET_CAP_BASIS_AND_NULL_POLICY_NOT_DOCUMENTED", "M5_MARKET_CAP_AS_OF_AND_CURRENCY_BASIS_NOT_FULLY_PROVEN", "M5_PROVIDER_DATA_USAGE_AND_RETENTION_APPROVAL_REQUIRED"]
+    },
+    {
+      "metric": "VOLUME_24H",
+      "providerField": "total_volumes",
+      "documentedProviderSemantics": [
+        "DATA_POINTS_ARE_TIMESTAMP_VALUE_PAIRS",
+        "DOCUMENTATION_DOES_NOT_DEFINE_RESPONSE_TIMESTAMP_AS_OF_RULE",
+        "DOCUMENTATION_DOES_NOT_DEFINE_ROLLING_24H_WINDOW",
+        "DOCUMENTATION_DOES_NOT_PROVE_COMPLETE_ASSET_OR_MARKET_COVERAGE",
+        "LAST_COMPLETED_UTC_DAY_AVAILABLE_AT_00_35_UTC",
+        "PRO_REQUIRES_PRO_HOST_AND_HEADER_KEY",
+        "RANGE_ENDPOINT_RETURNS_PRICES_MARKET_CAPS_TOTAL_VOLUMES",
+        "TERMS_RESTRICT_DATA_COPY_STORAGE_AND_DERIVATION",
+        "VS_CURRENCY_SELECTS_TARGET_MARKET_CURRENCY"
+      ],
+      "evidenceReferences": [
+        { "url": "https://docs.coingecko.com/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Pro API Reference)", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-29T16:43:05.000Z", "claims": ["DATA_POINTS_ARE_TIMESTAMP_VALUE_PAIRS", "LAST_COMPLETED_UTC_DAY_AVAILABLE_AT_00_35_UTC", "PRO_REQUIRES_PRO_HOST_AND_HEADER_KEY", "RANGE_ENDPOINT_RETURNS_PRICES_MARKET_CAPS_TOTAL_VOLUMES", "VS_CURRENCY_SELECTS_TARGET_MARKET_CURRENCY"] },
+        { "url": "https://docs.coingecko.com/demo/reference/contract-address-market-chart-range", "title": "Coin Historical Chart Data within Time Range by Token Address (Demo API Reference)", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-29T16:43:05.000Z", "claims": ["DEMO_USES_PUBLIC_HOST_AND_DEMO_HEADER_KEY", "DOCUMENTATION_DOES_NOT_DEFINE_RESPONSE_TIMESTAMP_AS_OF_RULE", "DOCUMENTATION_DOES_NOT_DEFINE_ROLLING_24H_WINDOW", "DOCUMENTATION_DOES_NOT_PROVE_COMPLETE_ASSET_OR_MARKET_COVERAGE"] },
+        { "url": "https://www.coingecko.com/en/api_terms", "title": "CoinGecko API Terms of Service", "evidenceLevel": "DOCUMENTED", "checkedAt": "2026-09-29T16:43:05.000Z", "claims": ["TERMS_RESTRICT_DATA_COPY_STORAGE_AND_DERIVATION"] }
+      ],
+      "blockers": ["M5_VOLUME_EXACT_ROLLING_24H_WINDOW_NOT_DOCUMENTED", "M5_VOLUME_MARKET_UNIVERSE_COMPLETENESS_NOT_PROVEN", "M5_PROVIDER_DATA_USAGE_AND_RETENTION_APPROVAL_REQUIRED"]
+    }
+  ]
+}
