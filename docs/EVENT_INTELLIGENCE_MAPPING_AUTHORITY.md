@@ -147,3 +147,12 @@ retraction yields no current eligible claim. See
 The persistence decision reuses `intelligence_asset_mapping_revisions` as the sole canonical asset authority and proposes only a narrow event mention binding. Issuer/legal-entity authority remains separate. See [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). No schema or mapping registry is enabled by this design.
 
 The proposed event rows bind the immutable mapping revision by its existing scoped key and canonical fields; they do not store a second `mapping_revision_fingerprint`. The future UoW must lock/reread that revision and use its parent-owned fingerprint when validating mention-binding and event-authority material. This preserves one canonical asset authority.
+# SEC provenance boundary update
+
+Issuer evidence references are descriptions, not lineage IDs. A persistence
+eligible issuer evidence member requires a structured provenance authority
+whose exact source/artifact/lineage/member identity is fingerprint-bound.
+Cryptoasset mapping remains exclusively on the existing
+`AssetMappingRevision` and its own provider/dataset/version/SourceLineage
+scope. That lineage cannot stand in for SEC event-source provenance. See
+[`SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md`](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md).
