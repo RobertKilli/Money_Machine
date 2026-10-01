@@ -117,3 +117,9 @@ authority, persist data or generate signals. See
 `docs/SEC_EDGAR_8K_FIXTURE_CLAIM_PIPELINE.md`. Synthetic tests do not establish
 SEC response behavior, real-world extraction accuracy, corroboration, or
 permission to acquire or retain source material.
+
+The follow-on corroboration policy distinguishes issuer disclosure from an
+externally verified event fact. Discovery copies and syndicated issuer
+releases do not add independent authority. Eligibility remains a candidate
+only; the result cannot be persisted or treated as an authoritative event.
+See [EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY](EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md).

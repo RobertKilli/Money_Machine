@@ -2,7 +2,7 @@
 
 Contract set: `event-intelligence-issuer-mapping-authority/v1`,
 `event-intelligence-asset-mention-binding/v1`, and
-`event-intelligence-mapped-non-authoritative-claim/v1`.
+`event-intelligence-mapped-non-authoritative-claim/v2`.
 
 Status: implemented as synthetic-fixture domain boundaries only. Production
 registries are empty; assembly, persistence, event authority, and signals are
@@ -103,8 +103,14 @@ including for historical lookups. The assembler requires an authentic fixture pi
 that is a member of its trusted sealed claim set, plus an exact issuer authority,
 an exact asset mention binding, compatible source/extraction scope, and both
 mappings valid at the claim announcement time. It rejects claims connected to
-an unresolved amendment/correction edge in that result. Unresolved 8-K/A
-correction claims and unsupported lifecycle states cannot be assembled.
+an unresolved amendment/correction edge in that result. A correction claim
+can be assembled only with its runtime-trusted immediate mapped parent, exact
+fixture correction edge, same issuer/legal entity and asset representation,
+same event/lifecycle and mapping revisions, and an explicit `mappingAsOf`.
+The corrected field set must exactly describe the changed amount/class,
+currency, signing date or expected closing date. Each claim retains its own
+identity; the stable event-candidate ID is inherited from the original. The
+mapped-claim contract is versioned as v2 to bind this lineage material.
 
 Assembly returns a deep-frozen
 `MAPPED_NON_AUTHORITATIVE_EVENT_CLAIM`, binding original claim identity,
@@ -127,3 +133,12 @@ source qualification, issuer and asset review provenance, correction and
 lifecycle resolution, conflict handling, and required approvals must be
 resolved before an authority issuer exists. Persistence, acquisition, and
 signal generation remain separately scoped future decisions.
+
+The corroboration policy evaluates issuer-disclosure eligibility from trusted
+mapped claims and source-origin groups. It does not convert mention mapping
+into event truth or write authority. Corrections remain append-only. A sealed
+linear correction chain supports historical reconstruction and selects its
+terminal claim using `evaluationAsOf`; a valid field amendment does not add an
+independent origin. Incomplete chains block, forks conflict, and a terminal
+retraction yields no current eligible claim. See
+[EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY](EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md).

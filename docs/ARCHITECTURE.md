@@ -859,3 +859,19 @@ event authority, and signal generation remain blocked. See
 `docs/EVENT_INTELLIGENCE_MAPPING_AUTHORITY.md`.
 Resolver witnesses carry the exact announcement-time `asOf`; mapped identity
 also binds filing-package, source-artifact, and mention-binding fingerprints.
+
+The corroboration-policy layer accepts only runtime-authentic mapped claims and
+source-origin material. It evaluates `ISSUER_DISCLOSURE` eligibility; it does
+not assert externally verified event facts. Delivery paths for one filing and
+issuer-attributed syndication do not create independent origins. The result is
+`EVENT_AUTHORITY_ELIGIBILITY_RESULT`, still not an event authority; production
+policies/origins are empty and authority persistence, scheduling and signals
+remain blocked. See
+`docs/EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md`.
+Correction claims retain their own identity while binding to the stable event
+candidate and exact immediate mapped parent. A sealed append-only correction
+chain selects its terminal claim at the explicit `evaluationAsOf`; historical
+cutoffs select the claim visible then, and retraction removes current
+eligibility without deleting prior material. Amendments remain in the
+original regulatory origin family and cannot increase independent-source
+counts. Eligibility still cannot cross into event-authority persistence.
