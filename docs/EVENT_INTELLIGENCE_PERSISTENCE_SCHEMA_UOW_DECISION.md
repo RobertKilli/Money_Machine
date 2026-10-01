@@ -151,3 +151,4 @@ SEC event-source provenance; structured issuer-evidence provenance; and the
 existing asset-mapping revision's own provenance. The existing canonical
 asset mapping remains the sole asset authority. The uncommitted runtime
 migration remains unapproved and must be reconciled before it can be run.
+The SEC provenance decision also leaves exact document-byte persistence/readback blocked: no PostgreSQL bytea, Supabase Storage or object-store backend is selected. Package completeness members and selected event-source lineage members are separate authorities; M5 provider/dataset rows do not substitute for a reviewed SEC profile.

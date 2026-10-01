@@ -6,73 +6,109 @@ Status: design only. No SQL, migration, acquisition, persistence, or production 
 
 ## Decision
 
-Choose **Option C: a separate SEC event-document provenance authority**, provider-neutral in its content identity and SEC-scoped in its first acquisition profile. It has distinct immutable filing-package, document-artifact, receipt, and sealed document-lineage identities. It may reuse generic request/attempt/lifecycle primitives only after a future contract proves their request and retry semantics fit SEC acquisition; it does not place SEC documents in M5 market-data `SourceLineage` by relabeling identifiers.
+Choose **Option C: a separate SEC event-document provenance authority**, provider-neutral in its content-byte identity and SEC-scoped through an explicit source-profile authority. It distinguishes source profile, filing identity/package revision, document artifact, package-document membership, request, attempt, receipt, and selected event-source lineage.
 
-Reject **A (direct SourceLineage reuse)**. Applied M5 lineage members are not free-standing document-members: they require a retrieval-observed availability claim, source envelope, ingestion observation, attempt, provider/dataset/version scope, and `effective_available_at` matching `retrieved_at`. They seal those observation members. M5 `source_envelopes` store normalized/auditable JSONB and fingerprints; `source_artifacts` store provider identity plus payload fingerprints, not canonical SEC bytes or filing-package membership. Neither represents a filing index, primary/exhibit roles, or amendment parent. A `provider_external_record_id` value cannot establish any of those semantics. `market_observations` is explicitly a measured asset value with observation time/unit and cannot represent documents.
+Reject **A (direct M5 SourceLineage reuse)**. Applied M5 lineage members require a retrieval-observed availability claim, source envelope, ingestion observation, attempt, provider/dataset/version scope, and `effective_available_at` equal to observation `retrieved_at`. The lineage seals those observation members; it has no filing package/index/document membership or SEC amendment-parent semantics. M5 artifacts hold provider identity and payload fingerprints, not canonical SEC document bytes. `provider_external_record_id` is an external label, not proof of SEC document identity. `market_observations` are asset measurements, not documents.
 
-Reject **B (a bridge authority over the current M5 material)**. A bridge is useful only after both parent authorities already establish the same canonical bytes and the exact filing/document scope. Current M5 artifact/envelope parents do not persist that SEC document authority, so a bridge would merely assert byte equivalence. External IDs and caller-supplied hashes do not make that assertion true.
+Reject **B (bridge over current M5 artifact material)**. A bridge is valid only if both immutable parent authorities independently bind the same bytes and exact document scope. Current M5 artifact/envelope rows do not persist canonical SEC bytes or package membership, so a bridge would assert byte equivalence without evidence.
 
 ## Applied-schema inventory
 
-The applied source of truth is the tracked migration chain, principally `20260911000000_m3_intelligence_foundation.sql`, `20260916212845_m5_mapping_lineage.sql`, `20260917000051_m5_ingestion_provenance.sql`, `20260917012625_m5_source_lineage.sql`, `20260918234933_m5_provider_asset_identity.sql`, `20260918215043_m5_raw_source_lineage.sql`, and `20260921205811_m5_suspicious_coverage_authority.sql`. Existing keys below are described in exact migration column order; none of those applied migrations is changed by this decision.
+The source of truth is the tracked migration chain, especially `20260911000000_m3_intelligence_foundation.sql`, `20260916212845_m5_mapping_lineage.sql`, `20260917000051_m5_ingestion_provenance.sql`, `20260917012625_m5_source_lineage.sql`, `20260918181115_m5_mapping_source_lineage.sql`, `20260918234933_m5_provider_asset_identity.sql`, and `20260918215043_m5_raw_source_lineage.sql`. No applied migration is changed here.
 
-| Existing object | Identity / parents and required semantics | Market observation? | Availability claim? | Canonical SEC bytes / package membership / amendment history | Scope and reuse |
+| Existing object | Material and required parents | Market observation | Availability claim | Canonical SEC bytes / complete package membership / amendment relation | SEC reuse |
 |---|---|---:|---:|---|---|
-| `intelligence_ingestion_requests` | request fingerprint, idempotency key, provider/dataset/version; FK `(dataset_id,provider_id,dataset_version)` | No | No | No / No / No | M5 acquisition request; `VALID_WITH_EXPLICIT_BINDING` only if a future SEC request profile is bound |
-| `intelligence_ingestion_attempts` | request ID, attempt ordinal/fingerprint; exact request and contract FKs | No | No | No / No / No | M5 attempt lifecycle; explicit SEC request binding needed |
-| `intelligence_ingestion_events` | append-only attempt sequence/type/fingerprint; observation FK for `SOURCE_OBSERVED` | No | No | No / No / limited lifecycle only | M5 lifecycle; not a filing correction chain |
-| `intelligence_source_artifacts` | artifact identity, provider/dataset/version, namespace/external ID/revision, payload and artifact fingerprints; dataset FK | No | No | Hash only, bytes not present / No / No | M5 scoped artifact metadata; conditional reuse only after structured SEC byte/package authority exists |
-| `intelligence_source_envelopes` | normalized envelope, parser/schema version, payload and envelope fingerprints; exact artifact+payload FK | No | No | JSONB representation only / No / No | M5 normalized data; not a byte-preserving document package |
-| `intelligence_ingestion_source_observations` | attempt, artifact, page/item ordinals, `retrieved_at`, metadata/fingerprint; attempt and artifact FKs | No | No | No / No / No | M5 retrieval observation; may describe receipt only under an explicit bridge |
-| `intelligence_source_availability_claims` | retrieval-observed basis, envelope, observation, artifact, `effective_available_at`, claim fingerprint; envelope+observation FKs | No | Yes (required) | No / No / No | Not issuer publication authority; does not establish filing availability time by itself |
-| `intelligence_source_lineages` | provider/dataset/version, sealed claim IDs/count, time bounds/fingerprint; dataset FK and unique `(source_lineage_id,provider_id,dataset_id,dataset_version)` | No | Yes (through members) | No / No / conditional append-only observed set | M5-specific observation lineage; `INVALID` as SEC document lineage without a distinct explicit authority |
-| `intelligence_source_lineage_members` | PK `(source_lineage_id,member_ordinal)`; coverage unique key `(source_lineage_id,member_ordinal,member_fingerprint,availability_claim_id,source_artifact_id,source_envelope_id,source_observation_id,ingestion_attempt_id,provider_id,dataset_id,dataset_version,observed_at,effective_available_at)`; FKs enforce claim/artifact/envelope/observation/attempt scope | No | Yes (required) | No / No / no filing amendment semantics | M5-specific retrieval member; cannot be relabeled as SEC package document member |
-| `market_observations` | market observation ID, provider/dataset version, external record, asset, `observed_at`, numeric value/scale/unit and payload fingerprint | Yes (it is the observation) | No | No / No / No | Market facts only; `INVALID` for SEC document provenance |
-| `intelligence_asset_mapping_revisions` | mapping revision, its own SourceLineage/provider/dataset/version, canonical asset/identifier/class and fingerprint; full unique key `(mapping_revision_id,source_lineage_id,provider_id,dataset_id,dataset_version,canonical_asset_id,canonical_identifier,asset_class)` | No | Yes through M5 source lineage | No / No / mapping revisions only | Sole canonical asset authority; separate `asset_mapping_provenance`, never SEC source lineage |
+| `intelligence_ingestion_requests` | idempotency key, provider/dataset/version, request scope/fingerprint; FK `(dataset_id,provider_id,dataset_version)` | No | No | No / No / No | Explicit-bound operational request record only; not SEC profile authority |
+| `intelligence_ingestion_attempts` | request ID, attempt number, attempt/parser contract material; request FKs | No | No | No / No / No | Explicit-bound operational attempt only |
+| `intelligence_ingestion_events` | attempt, sequence, event kind/fingerprint; observation FK for `SOURCE_OBSERVED` | No | No | No / No / lifecycle events only | Not filing amendment lineage |
+| `intelligence_source_artifacts` | provider/dataset/version, namespace, external record/revision, payload/artifact fingerprints; dataset FK | No | No | No (hash only) / No / No | Not SEC document authority; bridge is invalid without byte authority |
+| `intelligence_source_envelopes` | artifact, parser/schema, normalized JSONB and fingerprints; artifact+payload FK | No | No | No (normalized JSON) / No / No | Not a byte-preserving document package |
+| `intelligence_ingestion_source_observations` | attempt, artifact, page/item ordinals, retrieved time and fingerprint; attempt/artifact FKs | No | No | No / No / No | Receipt fact only if explicitly bound |
+| `intelligence_source_availability_claims` | envelope, observation, artifact, retrieval-observed basis/effective time and fingerprint | No | Yes by contract | No / No / No | Not issuer publication authority |
+| `intelligence_source_lineages` | provider/dataset/version, claim IDs/count, time bounds and fingerprint; dataset FK | No | Yes through members | No / No / conditional observed set | Invalid as SEC document lineage |
+| `intelligence_source_lineage_members` | PK `(source_lineage_id,member_ordinal)`; unique `(source_lineage_id,availability_claim_id)`; scoped FKs to lineage, claim, artifact, envelope, observation and attempt | No | Yes | No / No / no filing amendment semantics | Invalid as SEC package/document membership |
+| `intelligence_asset_mapping_revisions` | mapping revision and its own M5 lineage/scope, canonical asset/identifier/class | No | Yes through M5 lineage | No / No / mapping revisions only | Invalid for SEC provenance; remains sole canonical asset authority |
+| `market_observations` | provider/dataset, external ID, asset, observed time, numeric value/scale/unit and fingerprint | Yes | No | No / No / No | Invalid for SEC provenance |
 
-The SEC fixture domain has its own filing/package, document-artifact, receipt, and claim fingerprints. It keeps canonical UTF-8 bytes only inside the synthetic pipeline's private runtime data and exposes fingerprints/locators. That identity is not an M5 `source_artifact_id` and is not a persisted source authority.
+Applied parent keys used for review: datasets have PK `(dataset_id)` and non-partial unique `(dataset_id,provider_id,dataset_version)`; source artifacts have unique `(source_artifact_id,payload_fingerprint)` and `(source_artifact_id,provider_id,dataset_id,dataset_version)`; SourceLineage has unique `(source_lineage_id,provider_id,dataset_id,dataset_version)`; SourceLineage members have PK `(source_lineage_id,member_ordinal)` and unique `(source_lineage_id,availability_claim_id)`; asset mapping has the full unique `(mapping_revision_id,source_lineage_id,provider_id,dataset_id,dataset_version,canonical_asset_id,canonical_identifier,asset_class)`. No fingerprint-bearing parent key is inferred where the migrations do not define one.
 
-## Proposed immutable authority model
+## Profile scope and persistence classification
 
-This decision defines a future relational contract, not executable SQL. The minimum authority family is:
+The existing provider/dataset registry is not assumed to be a generic SEC endpoint/profile authority. Its applied rows do not pin the exact SEC host/path/method, supported forms, request identity, response limits, or content-encoding policy. Option C uses a separate versioned `sec_event_source_profiles` authority. Its fingerprint binds source/provider ID, dataset/profile ID and version, source contract/parser versions, endpoint/host/path/method profile, forms, request identity and resource/content rules. It is not a new asset registry. No profile row is created here.
 
-| Future object | Persistence | Identity and relations |
+| Object | Classification | Reason |
 |---|---|---|
-| SEC filing package | Required | provider/dataset/version and source contract; CIK, accession, form, filing date, acceptance/publication time (nullable only when explicitly unknown), report period separately, filing-index identity, request-profile version, amendment parent; package ID/fingerprint. Composite FK to dataset owner. |
-| SEC document artifact | Required | package ID/fingerprint; canonical locator; role (`PRIMARY_DOCUMENT`, `EXHIBIT`, `FILING_INDEX`, or metadata role); document type; sequence; content/media type; byte length; canonicalization version; SHA-256 over canonical bytes; artifact ID/fingerprint. Package+role+sequence unique. Primary document and each exhibit are separate artifacts. |
-| SEC acquisition receipt | Required for acquisition | request/attempt/profile, endpoint profile, response status/material fingerprint, retrieved time, effective availability, receipt ID/fingerprint, and package binding. Receipt is append-only and is not part of document fingerprint. A later receipt creates a new receipt, not a replacement. |
-| SEC event-source lineage | Required | lineage ID/fingerprint, package root identity, provider/dataset/version, exact member count and fingerprint, amendment parent reference; immutable. |
-| SEC event-source lineage members | Required | contiguous ordinal and exact artifact ID/fingerprint, package ID/fingerprint, role/type/sequence/locator. Sealed set is exactly all package documents declared by its filing index, with one primary. No availability claim or market observation is required. |
+| SEC source profile | Persisted authority, currently blocked | Exact reviewed profile parent and fingerprint; not an M5 dataset alias |
+| Filing identity | Persisted | Profile + CIK + accession + form and exact amendment parent |
+| Acquisition request | Persisted | Exact requested identity/profile and request fingerprint |
+| Acquisition attempt | Persisted | Append-only attempt identity; retries never replace prior attempts |
+| Filing package revision | Persisted | Filing metadata, index artifact and package fingerprint |
+| Document artifact | Persisted authority, currently blocked | Exact source bytes/hash and scoped document descriptor |
+| Package-document membership | Persisted | Complete filing-index-declared set, distinct from selected evidence |
+| Acquisition receipt | Persisted | Request/attempt, response material, retrieved time and effective availability |
+| Event-source lineage and members | Persisted | Selected evidence set may span original and amendment package revisions |
+| Publication/report-period projections | Derived | Values come from immutable filing metadata; not another authority |
+| Normalized/mapped claims | Derived here | Produced from artifacts and separate issuer/asset authorities |
+| Availability projection | Derived | Retrieval/effective availability stays on receipt; filing publication stays on filing metadata |
+| Corroboration eligibility | Ephemeral | Recomputed at explicit `evaluationAsOf` |
+| M5 market observations as SEC evidence | Rejected | Market values are not filing/document evidence |
 
-Relational columns are required for identity, scope, ordinals, members, and timestamps. JSONB may hold bounded non-authoritative request/response metadata only; it cannot replace package/document/member FKs. SHA fields use lowercase SHA-256. Timestamp columns use `timestamptz`; date-only filing/report periods remain `date` and are not silently promoted to event instants. Every child FK has an exact non-partial parent PK/UNIQUE reference, matching order/types/cardinality and a child index whose leading columns follow the FK order. Parent-owned fingerprints are referenced in composite keys; downstream rows do not copy a fingerprint unless a declared parent UNIQUE+FK structurally binds it.
+M5 request/attempt rows can be operational audit inputs only after a separately reviewed adapter binding. This decision does not reuse them as SEC source/profile authorities because their JSON request scope does not structurally establish the SEC profile contract.
 
-Filing package identity includes source profile and contract version, CIK, accession, form, filing/report date, acceptance/publication time where known, filing-index identity, document set descriptor identity, amendment parent, and request profile. Document identity includes package binding, canonical locator, role/type/sequence, canonical UTF-8 bytes hash, media type, byte length and canonicalization version. An unchanged primary document keeps the same document ID/fingerprint when a different exhibit changes; package and lineage identity change because their exact member set changed. Amendment packages/documents have new identities and immutable parent links; original records remain.
+## Identity and exact byte boundary
 
-Receipt identity binds request/attempt and retrieval facts. `retrievedAt` or a changed response receipt never changes document identity. `effectiveAvailableAt` is availability provenance, not filing acceptance or event time. A receipt variation adds receipt provenance without superseding prior receipts. Publication/acceptance, report period, event/signing/completion time and receipt time remain distinct.
+V1 hashes a defined byte layer, not a JavaScript string:
 
-The first future contract should not persist duplicate raw source bytes in a second table if an approved immutable object store is later selected. Until then, artifact persistence is **BLOCKED**: a hash and JSON envelope alone are not byte custody. The future decision must specify where bytes are held, re-read/hash verification, retention, access controls, and retention/redistribution/commercial approvals before enabling an acquisition pipeline.
+1. The future acquisition adapter requests `Accept-Encoding: identity`; it rejects a response with any `Content-Encoding` other than absent or `identity`.
+2. Hash the exact HTTP entity-body octets after transfer framing removal and before content decoding, charset decoding, newline handling, HTML parsing or Unicode normalization. Compressed/content-coded representations are rejected in v1, never silently decompressed.
+3. Store the byte length of those exact octets and lowercase SHA-256 of those octets. A fingerprint string is not a substitute for the bytes.
+4. Text extraction is derived only: UTF-8 is required by the pinned profile and decoded with fatal errors. CR/LF/CRLF and Unicode code points are not normalized. Extracted text never replaces document-byte authority.
 
-## Three downstream provenance roles
+The contract defines these acyclic formulas:
 
-1. **`event_source_provenance`** binds a normalized claim to SEC package ID/fingerprint, exact document artifact ID/fingerprint, document role/locator, SEC event-source lineage ID/fingerprint/member ordinal, provider/dataset/version, CIK/accession/form, extraction contract version, and claim locator/excerpt fingerprint. It never uses mapping lineage.
-2. **`issuer_evidence_provenance`** binds each issuer authority evidence member to a typed SEC or other approved source authority and exact artifact/lineage/member identity. `evidence.referenceId` is descriptive metadata only. A later issuer authority contract must fingerprint the structured provenance witness and resolve parent fingerprints authoritatively.
-3. **`asset_mapping_provenance`** binds only the existing `AssetMappingRevision` and its own exact composite scope `(mapping_revision_id,source_lineage_id,provider_id,dataset_id,dataset_version,canonical_asset_id,canonical_identifier,asset_class)`. Its parent fingerprint is read from that immutable mapping row. It cannot satisfy either event-source or issuer-evidence provenance.
+- `filingIdentityId`: hash of source-profile ID/fingerprint, CIK, canonical accession and form.
+- `documentArtifactId` and fingerprint: hash of filing identity, canonical locator, role/type/sequence, exact entity-body SHA-256, content type, byte length and canonicalization version. Receipt and final package fingerprint are excluded.
+- `packageFingerprint`: hash of filing metadata, filing-index artifact identity, exact ordered document-member tuples, count and amendment-parent filing identity.
+- `packageId`: hash of filing identity plus package fingerprint. Document artifacts reference the stable filing identity, not the package fingerprint, so no package→member→document hash cycle exists.
+- receipt identity/fingerprint: request, attempt, endpoint/profile, response material, retrieved/effective availability and package revision. It is excluded from document identity.
+- lineage identity/fingerprint: its own exact ordered references to package-document members. It is not the complete package member set.
 
-Later persistence tables must store each family in distinctly named columns (`event_source_*`, `issuer_evidence_*`, `mapping_*`). No shared generic `provider_id`, `dataset_id`, `dataset_version`, or `source_lineage_id` may imply that these authorities are the same. No canonical asset authority is added.
+An exhibit-only byte change gives the exhibit a new artifact identity and the containing package revision a new fingerprint/ID; an unchanged primary artifact remains stable. The package-document membership authority has exact count, contiguous zero-based ordinals, unique locators, one filing index and exactly one primary. It must reconcile missing, extra, duplicate and undeclared members against the bounded filing-index manifest. Amendment packages retain the original and point to the exact parent filing identity; same-profile/CIK, accession ordering, no fork/cycle and complete parents are deferred invariants.
 
-## Strict decision contract and tests
+Filing date (`date`), acceptance/publication timestamp, report period (`date`), event time, signing time, expected closing, completion and retrieval time remain separate. Receipt variation appends receipt provenance; it never supersedes the document/package by newest-wins.
 
-`src/domain/intelligence/sec-edgar-event-source-provenance-decision.ts` provides `sec-edgar-event-source-provenance-decision/v1`. It holds the applied-schema reuse inventory and future FK/key/index descriptors, validates canonical PostgreSQL identifiers and exact parent keys, FK order/type/cardinality, child index prefixes and deep immutable material, and computes a deterministic fingerprint excluding `recordedAt`. Parser output is value-validated but only the canonical factory result has same-runtime trust. Duplicate table/column/key names and unsafe object shapes fail closed.
+**Bytes persistence and authoritative byte reread are BLOCKED.** No backend is selected here: not PostgreSQL `bytea`, Supabase Storage, or external object storage. A digest cannot reconstruct or reread bytes. Before artifact persistence is approved, a separately reviewed immutable content-addressed store must guarantee exact-octet put/get, stable identity, no overwrite, exact length/hash verification at authoritative reread, access controls, backup/recovery and approved retention/usage terms. Until then synthetic byte hashing is only a test; no artifact may be described as persistently authoritative.
 
-Synthetic tests verify the two authorities are not conflated, M5 external record IDs cannot assert SEC document authority, receipt and byte identities differ, package/document identities respond to member/content changes according to the stated policy, and amendments retain parent lineage. They do not prove live SEC response semantics or live acquisition.
+## Separate downstream provenance roles
+
+1. `event_source_provenance` binds claim → SEC source profile → filing identity/package revision → exact document artifact and package-member row → selected SEC event-source lineage member. It includes CIK/accession/form, document locator/role and extraction locator/hash. It never uses asset-mapping lineage.
+2. `issuer_evidence_provenance` binds each issuer evidence member to typed source/artifact/lineage/member identity and contributes that structure to issuer-authority fingerprint. Generic `evidence.referenceId` is descriptive metadata only.
+3. `asset_mapping_provenance` binds only the existing `AssetMappingRevision` and its exact M5 source-lineage/provider/dataset/version/canonical-asset key. Its parent fingerprint is reread from that immutable parent. It cannot satisfy either other provenance role.
+
+Future child columns use separately named `event_source_*`, `issuer_evidence_*` and `mapping_*` fields. They do not share scope columns implicitly, and they do not duplicate a parent fingerprint unless an exact parent UNIQUE+FK structurally binds it. No parallel canonical asset authority is proposed.
+
+## Future schema/security boundary
+
+The TypeScript `authorityTables` descriptors list the future source-profile, filing identity, request, attempt, package revision, document artifact, package-document member, receipt, event-source lineage and lineage-member parent keys/FKs/index prefixes. Applied M5 parents are catalogued separately with their actual keys. Future FKs require exact key cardinality/order/type, non-partial parent PK/UNIQUE and child indexes beginning with FK columns. Names must be canonical PostgreSQL identifiers within 63 bytes.
+
+Amendment-parent nullable branches require an explicit `IS TRUE` branch check: base 8-K has NULL parent; 8-K/A has one exact same-profile/same-CIK parent. Package and lineage parent/member writes require `DEFERRABLE INITIALLY DEFERRED` validation on both parent and member changes: exact sealed counts, ordinals, locator uniqueness, role constraints, complete package set, package/member binding, lineage scope, amendment order, no cycles/forks. Domain-invariant failures use sanitized SQLSTATE `23514`; native FK/unique/not-null failures retain `23503`/`23505`/`23502`.
+
+All future public tables require RLS enabled, zero policies, privileges revoked from PUBLIC/anon/authenticated, immutable UPDATE/DELETE triggers and no view/client access path. Invariant functions are SECURITY INVOKER, use fixed `search_path = public, pg_temp`, and have EXECUTE revoked from PUBLIC/anon/authenticated. No SECURITY DEFINER is allowed.
+
+## Contract and tests
+
+`src/domain/intelligence/sec-edgar-event-source-provenance-decision.ts` provides the strict versioned decision, exact byte/artifact/package identity formulas, source profile decision, persisted/derived/ephemeral classification, future key/FK/index descriptors, deterministic material fingerprint excluding `recordedAt`, and deep-frozen canonical parsing. Its pure byte helper hashes exact input octets and performs no I/O. Unsafe object trees and noncanonical metadata fail closed.
+
+Synthetic tests cover exact-byte changes, receipt-independent document identity, exhibit/package-only identity change, order-independent sealing, package membership rejection, amendment retention, M5 external-ID rejection, distinct issuer/asset/event provenance, exact applied key catalog and production-blocked status. They prove contract behavior only; not live SEC responses or byte-storage custody.
 
 ## Prerequisites before runtime can resume
 
-- Implement and separately review the provider-neutral SEC package/document/receipt/lineage boundary and canonical-byte custody/readback.
-- Implement a trusted claim-to-SEC-document provenance witness; no M5 artifact ID substitution.
-- Give issuer mapping a structured, fingerprint-bound evidence provenance contract; generic reference IDs remain non-authoritative.
-- Revise the event persistence decision and uncommitted runtime migration/application/UoW to use three independent binding families and exact composite parents.
-- Build an authentic synthetic application→UoW→PostgreSQL positive path with separate SEC and asset-mapping lineages, plus scope-swap FK/rollback checks.
-- Complete retention/usage approvals and later local PostgreSQL integration review before any runtime write is approved.
+- Approve and implement the immutable content-addressed byte backend and prove exact-byte readback/hash/length.
+- Implement the trusted SEC profile/request/attempt/filing/package/document/membership/receipt/lineage boundary.
+- Implement a trusted claim-to-SEC-document provenance witness; no M5 artifact-ID substitution.
+- Give issuer evidence a structured, fingerprint-bound provenance contract; generic reference IDs remain non-authoritative.
+- Reconcile the event persistence decision and any uncommitted runtime migration/application/UoW with the three independent provenance families and exact composite parents.
+- Prove authentic synthetic application→UoW→PostgreSQL flow with separate SEC and asset-mapping lineages before any runtime write approval.
+- Approve retention, access, redistribution and commercial-use terms separately.
 
-The uncommitted persistence-runtime migration `20261001191840_event_intelligence_persistence.sql` is not part of this worktree, has not been inspected from the original dirty worktree during this decision task, and is **not approved** by this document. Production acquisition, source artifact/event-lineage/issuer-evidence/event-authority persistence, scheduler, signals and trading all remain `BLOCKED`.
+The uncommitted persistence-runtime migration `20261001191840_event_intelligence_persistence.sql` is not in this review worktree, was not read from the original dirty worktree, and is **not approved**. Live SEC acquisition, byte/artifact storage, event-source lineage, issuer evidence, event authority, scheduler, signals and trading remain `BLOCKED`.

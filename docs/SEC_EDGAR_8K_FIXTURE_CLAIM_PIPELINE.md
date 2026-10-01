@@ -82,7 +82,7 @@ correction, cutoff and conflict rules. It does not issue event authority.
 [EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY](EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md).
 # Persistence boundary
 
-The future relational design reuses existing source artifacts, envelopes, observations, availability claims and `SourceLineage`; the fixture claim pipeline itself remains synthetic and non-authoritative. See [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). The decision does not copy external artifact/lineage/mapping fingerprints into event child rows; it binds exact immutable parent identities/scopes and reads their fingerprints from the referenced rows inside the future transaction. No raw fixture text, migration, database write, or event authority is introduced here.
+The earlier persistence decision's broad reuse of existing M5 source artifacts, envelopes, observations, availability claims and `SourceLineage` for SEC provenance is superseded by [SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md). The fixture pipeline remains synthetic and non-authoritative; its normalized text/content hashes do not prove durable exact-byte custody or live SEC semantics. No raw fixture text, migration, database write, or event authority is introduced here.
 # SEC provenance boundary update
 
 The fixture pipeline's `sec-edgar-fixture-artifact:*` identity is a separate

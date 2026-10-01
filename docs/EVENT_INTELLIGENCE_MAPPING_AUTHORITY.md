@@ -156,3 +156,4 @@ Cryptoasset mapping remains exclusively on the existing
 `AssetMappingRevision` and its own provider/dataset/version/SourceLineage
 scope. That lineage cannot stand in for SEC event-source provenance. See
 [`SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md`](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md).
+The SEC decision keeps its filing/document/package/receipt/lineage scope separate from this asset-mapping authority. It does not select a byte-storage backend, and artifact persistence/readback remains blocked.
