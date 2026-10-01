@@ -34,6 +34,20 @@ Flow B is a different synthetic Form 8-K Item 2.01 completed purchase with an ex
 
 Flow C is an 8-K/A tied to Flow A's original accession and corrects the amount. Both artifacts and claims remain in the output; a typed append-only correction edge links the two. The original is never replaced or deleted. Later amendments can form a deterministic parent-linked chain; cycles, missing parents, cross-CIK links, timestamp-inverted parent links and correction forks are rejected. Each amendment must extend the previous amendment when multiple corrections occur; competing siblings are not resolved newest-wins.
 
+The mapping assembler can map a correction only when given the trusted
+immediate parent mapped claim and the exact fixture correction edge. The
+correction retains a distinct claim, package, artifact and mapped-claim
+identity while inheriting the original's stable event-candidate identity.
+The corroboration input sealer binds the ordered chain and every source,
+issuer, asset-mention and canonical mapping revision fingerprint. Evaluation
+uses `evaluationAsOf`: before amendment publication the original is current;
+at and after publication the unique active terminal amendment is selected.
+This is historical reconstruction of issuer disclosures, not event truth.
+A retraction has its own later source-origin edge, leaves prior artifacts
+intact, and makes the current eligibility result `RETRACTED`. Amendment
+artifacts remain in one regulatory origin family and do not satisfy extra
+independence or artifact-count thresholds.
+
 Flow D is purchase intent with a target amount and expected closing date. It remains `INTENT`; a target is not exact consideration and expected closing is not completion. Missing amount is `UNKNOWN`, never zero. Currency and asset identity must be explicit. A symbol, ticker, CIK, or name does not create issuer/asset mapping authority.
 
 Decimal amounts use canonical non-negative strings: no exponent, leading zeros, trailing fractional zeros or more than eight fractional digits. Zero is explicitly represented as `0`; negative values are rejected. Ranges have two canonical decimal endpoints with lower less than upper. `UNKNOWN` requires both amount and currency to be absent; amount and currency are never inferred. Duplicate document types/locators and claims, conflicting unlinked lifecycle/amount material, missing original amendments, and wrong-CIK amendment links invalidate the whole sealed claim set. There is no newest-wins behavior.

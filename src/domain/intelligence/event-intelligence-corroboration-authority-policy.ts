@@ -6,8 +6,9 @@ import { isAuthenticMappedNonAuthoritativeEventClaim, type MappedNonAuthoritativ
 import { isAuthenticSecEdgar8kFixtureClaim, type SecEdgar8kFixtureClaim } from "./sec-edgar-8k-fixture-claim-pipeline";
 
 export const EVENT_CORROBORATION_POLICY_VERSION = "event-intelligence-corroboration-authority-policy/v1" as const;
-export const EVENT_SOURCE_ORIGIN_VERSION = "event-intelligence-source-origin/v1" as const;
+export const EVENT_SOURCE_ORIGIN_VERSION = "event-intelligence-source-origin/v2" as const;
 export const EVENT_AUTHORITY_ELIGIBILITY_RESULT_VERSION = "event-intelligence-authority-eligibility-result/v1" as const;
+export const EVENT_INTELLIGENCE_CORRECTION_LINEAGE_VERSION = "event-intelligence-correction-lineage/v1" as const;
 export const EVENT_CORROBORATION_PRODUCTION_CONFIG_VERSION = "event-intelligence-corroboration-production-config/v1" as const;
 export type AuthoritySubject = "ISSUER_DISCLOSURE" | "EXTERNALLY_VERIFIED_EVENT_FACT";
 export type CorroborationPolicyStatus = "ACTIVE" | "INACTIVE" | "SUPERSEDED" | "REVOKED" | "INVALID";
@@ -33,10 +34,25 @@ export type EventSourceOrigin = Readonly<{
   canonicalPublicationId: string; upstreamPublicationId: string | null; lineageKnown: boolean;
   sourceTier: SourceTier; issuerId: string; publicationAt: string; receivedAt: string;
   correctionStatus: "ACTIVE" | "CORRECTED" | "RETRACTED"; correctsOriginId: string | null;
+  correctionKind: "REPLACE_FIELD_VALUES" | "CLARIFICATION" | "RETRACTION" | "VOID_OR_WITHDRAWAL" | null;
   deliveryPath: "RSS" | "SUBMISSIONS" | "ARCHIVE" | "IR" | "WIRE" | "ARTICLE" | "AGGREGATOR";
 }>;
 export type EventClaimEvidence = Readonly<{ mappedClaim: MappedNonAuthoritativeEventClaim; sourceClaim: SecEdgar8kFixtureClaim; rumor: boolean }>;
-export type SealedCorroborationInputSet = Readonly<{ contractVersion: "event-intelligence-corroboration-input-set/v1"; fingerprint: string; claims: readonly EventClaimEvidence[]; origins: readonly EventSourceOrigin[] }>;
+export type EventCorrectionLineageMember = Readonly<{
+  ordinal: number; claimId: string; claimFingerprint: string; mappedClaimId: string; mappedClaimFingerprint: string;
+  sourcePackageId: string; sourcePackageFingerprint: string; sourceArtifactId: string; sourceArtifactFingerprint: string;
+  cik: string; accession: string; form: "8-K" | "8-K/A"; correctionOfClaimId: string | null;
+  correctionKind: "REPLACE_FIELD_VALUES" | "CLARIFICATION" | "RETRACTION" | "VOID_OR_WITHDRAWAL" | null; correctedFields: readonly string[]; acceptanceAt: string;
+  issuerAuthorityId: string; issuerAuthorityFingerprint: string; assetBindingId: string; assetBindingFingerprint: string;
+  mappingRevisionId: string; mappingRevisionFingerprint: string; canonicalIssuerId: string; canonicalLegalEntityId: string;
+  canonicalAssetId: string; canonicalRepresentationId: string; extractionVersion: string;
+}>;
+export type EventCorrectionLineage = Readonly<{
+  contractVersion: typeof EVENT_INTELLIGENCE_CORRECTION_LINEAGE_VERSION; lineageId: string; fingerprint: string;
+  eventCandidateId: string; originalClaimId: string; originalClaimFingerprint: string;
+  members: readonly EventCorrectionLineageMember[]; terminalClaimId: string;
+}>;
+export type SealedCorroborationInputSet = Readonly<{ contractVersion: "event-intelligence-corroboration-input-set/v1"; fingerprint: string; claims: readonly EventClaimEvidence[]; origins: readonly EventSourceOrigin[]; correctionLineages: readonly EventCorrectionLineage[] }>;
 export type EligibilityStatus = "ELIGIBLE_FOR_ISSUER_DISCLOSURE_AUTHORITY" | "INCOMPLETE" | "CONFLICT" | "CORRECTED" | "RETRACTED" | "UNSUPPORTED_AUTHORITY_SUBJECT" | "INVALID";
 export type EventAuthorityEligibilityResult = Readonly<{
   contractVersion: typeof EVENT_AUTHORITY_ELIGIBILITY_RESULT_VERSION; classification: "EVENT_AUTHORITY_ELIGIBILITY_RESULT";
@@ -45,7 +61,7 @@ export type EventAuthorityEligibilityResult = Readonly<{
   claimIds: readonly string[]; claimFingerprints: readonly string[]; originIds: readonly string[]; originFingerprints: readonly string[];
   independentOriginGroups: readonly string[]; canonicalIssuerId: string | null; canonicalAssetId: string | null; canonicalRepresentationId: string | null;
   eventType: string | null; lifecycleStatus: string | null; selectedCurrentClaimId: string | null;
-  correctionLineage: readonly string[]; blockers: readonly string[]; conflicts: readonly string[]; evaluatedAt: string;
+  correctionLineage: readonly string[]; correctionLineageFingerprints: readonly string[]; blockers: readonly string[]; conflicts: readonly string[]; evaluatedAt: string;
 }>;
 
 export const EVENT_INTELLIGENCE_CORROBORATION_PRODUCTION_CONFIG = Object.freeze({
@@ -56,7 +72,7 @@ export const EVENT_INTELLIGENCE_CORROBORATION_PRODUCTION_CONFIG = Object.freeze(
 const policyTrust = new WeakSet<object>(), originTrust = new WeakSet<object>(), claimEvidenceTrust = new WeakSet<object>(), inputSetTrust = new WeakSet<object>(), resultTrust = new WeakSet<object>();
 const HEX = /^[0-9a-f]{64}$/; const ID = /^[A-Za-z][A-Za-z0-9:_-]{2,127}$/; const TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const P_KEYS = ["contractVersion","policyId","fingerprint","status","authoritySubject","jurisdiction","supportedEventTypes","supportedLifecycleStatuses","requiredSourceTiers","minimumIndependentOriginGroups","minimumSourceArtifacts","requirePrimarySource","requireMappedIssuer","requireMappedAsset","requireExactEventScope","amountPolicy","currencyPolicy","temporalCutoffPolicy","correctionPolicy","conflictPolicy","rumorPolicy","discoveryPolicy","maxEvidenceAgeSeconds","reviewedAt","effectiveFrom","expiresAt","evidenceReferences","approvals","blockers","recordedAt"];
-const O_KEYS = ["contractVersion","originId","fingerprint","kind","publisherId","originatingAuthorityId","sourceArtifactId","sourceArtifactFingerprint","canonicalPublicationId","upstreamPublicationId","lineageKnown","sourceTier","issuerId","publicationAt","receivedAt","correctionStatus","correctsOriginId","deliveryPath"];
+const O_KEYS = ["contractVersion","originId","fingerprint","kind","publisherId","originatingAuthorityId","sourceArtifactId","sourceArtifactFingerprint","canonicalPublicationId","upstreamPublicationId","lineageKnown","sourceTier","issuerId","publicationAt","receivedAt","correctionStatus","correctsOriginId","correctionKind","deliveryPath"];
 const OBJECT_KEYS=new Set<PropertyKey>(["constructor","__defineGetter__","__defineSetter__","hasOwnProperty","__lookupGetter__","__lookupSetter__","isPrototypeOf","propertyIsEnumerable","toLocaleString","toString","valueOf","__proto__"]);
 const ARRAY_KEYS=new Set<PropertyKey>(["length","constructor","at","concat","copyWithin","fill","find","findIndex","findLast","findLastIndex","lastIndexOf","pop","push","reverse","shift","unshift","slice","sort","splice","includes","indexOf","join","keys","entries","values","forEach","filter","flat","flatMap","map","every","some","reduce","reduceRight","toLocaleString","toString","toReversed","toSorted","toSpliced","with",Symbol.iterator,Symbol.unscopables]);
 function plain(x: unknown, keys: readonly string[]): x is Record<string, any> { try { if (!x || typeof x !== "object" || Array.isArray(x) || utilTypes.isProxy(x) || Object.getPrototypeOf(x)!==Object.prototype || Reflect.ownKeys(Object.prototype).some(k=>!OBJECT_KEYS.has(k))) return false; const own=Reflect.ownKeys(x); return own.length===keys.length && own.every(k=>typeof k==="string"&&keys.includes(k)&&!!Object.getOwnPropertyDescriptor(x,k)&&"value" in Object.getOwnPropertyDescriptor(x,k)!); } catch { return false; } }
@@ -105,9 +121,10 @@ export function createEventSourceOrigin(input: Omit<EventSourceOrigin,"contractV
   try { const x=input as any; if(!plain(x,O_KEYS.filter(k=>!(["contractVersion","originId","fingerprint"] as string[]).includes(k)))&&!plain(x,O_KEYS)) throw 0; if(x.contractVersion!==undefined&&x.contractVersion!==EVENT_SOURCE_ORIGIN_VERSION) throw 0;
     if(!ID.test(x.publisherId)||!ID.test(x.originatingAuthorityId)||!ID.test(x.sourceArtifactId)||!HEX.test(x.sourceArtifactFingerprint)||!ID.test(x.canonicalPublicationId)||x.upstreamPublicationId!==null&&!ID.test(x.upstreamPublicationId)||!ID.test(x.issuerId)||!iso(x.publicationAt)||!iso(x.receivedAt)||x.receivedAt<x.publicationAt) throw 0;
     if(!["REGULATORY_FILING","ISSUER_PUBLICATION","ISSUER_ATTRIBUTED_NEWSWIRE","EXCHANGE_REGULATOR_PUBLICATION","INDEPENDENT_JOURNALISM","AGGREGATOR_COPY"].includes(x.kind)||!tiers.includes(x.sourceTier)||!["ACTIVE","CORRECTED","RETRACTED"].includes(x.correctionStatus)||!["RSS","SUBMISSIONS","ARCHIVE","IR","WIRE","ARTICLE","AGGREGATOR"].includes(x.deliveryPath)||typeof x.lineageKnown!=="boolean") throw 0;
+    if(x.correctionStatus==="ACTIVE"&&(x.correctsOriginId!==null||x.correctionKind!==null)||x.correctionStatus==="CORRECTED"&&(!x.correctsOriginId||!(x.correctionKind==="REPLACE_FIELD_VALUES"||x.correctionKind==="CLARIFICATION"))||x.correctionStatus==="RETRACTED"&&(!x.correctsOriginId||!(x.correctionKind==="RETRACTION"||x.correctionKind==="VOID_OR_WITHDRAWAL"))) throw 0;
     const expectedTier:Record<EventSourceOrigin["kind"],SourceTier>={REGULATORY_FILING:"REGULATORY_FILING",ISSUER_PUBLICATION:"ISSUER_CONTROLLED",ISSUER_ATTRIBUTED_NEWSWIRE:"ISSUER_ATTRIBUTED_NEWSWIRE",EXCHANGE_REGULATOR_PUBLICATION:"EXCHANGE_REGULATOR",INDEPENDENT_JOURNALISM:"INDEPENDENT_JOURNALISM",AGGREGATOR_COPY:"AGGREGATOR_DISCOVERY"};
     if(x.sourceTier!==expectedTier[x.kind as EventSourceOrigin["kind"]]) throw 0;
-    if(x.kind==="AGGREGATOR_COPY"&&(x.sourceTier!=="AGGREGATOR_DISCOVERY"||!x.upstreamPublicationId||!x.lineageKnown)||x.kind==="ISSUER_ATTRIBUTED_NEWSWIRE"&&(!x.upstreamPublicationId||!x.lineageKnown)||x.correctionStatus!=="ACTIVE"&&!x.correctsOriginId) throw 0;
+    if(x.kind==="AGGREGATOR_COPY"&&(x.sourceTier!=="AGGREGATOR_DISCOVERY"||!x.upstreamPublicationId||!x.lineageKnown)||x.kind==="ISSUER_ATTRIBUTED_NEWSWIRE"&&(!x.upstreamPublicationId||!x.lineageKnown)) throw 0;
     const m={contractVersion:EVENT_SOURCE_ORIGIN_VERSION,...x}; delete (m as any).originId; delete (m as any).fingerprint; const identity={...m}; delete (identity as any).receivedAt; delete (identity as any).deliveryPath; const fingerprint=digest(identity), originId=`source-origin:${fingerprint}`;
     if(x.originId!==undefined&&x.originId!==originId||x.fingerprint!==undefined&&x.fingerprint!==fingerprint) throw 0;
     const out=freeze({...m,originId,fingerprint}) as EventSourceOrigin; originTrust.add(out as object); return out;
@@ -120,11 +137,51 @@ export function createEventClaimEvidence(mappedClaim: MappedNonAuthoritativeEven
   const out=freeze({mappedClaim,sourceClaim,rumor}); claimEvidenceTrust.add(out as object); return out;
 }
 export function isAuthenticEventClaimEvidence(x:unknown):x is EventClaimEvidence { return !!x&&typeof x==="object"&&claimEvidenceTrust.has(x as object); }
+function buildCorrectionLineages(claims:readonly EventClaimEvidence[]):readonly EventCorrectionLineage[]|null {
+  const groups=new Map<string,EventClaimEvidence[]>();
+  for(const evidence of claims){const id=evidence.mappedClaim.eventCandidateId;if(typeof id!=="string"||!ID.test(id))return null;const rows=groups.get(id)??[];rows.push(evidence);groups.set(id,rows);}
+  const output:EventCorrectionLineage[]=[];
+  for(const [eventCandidateId,rows] of groups){
+    const byClaimId=new Map(rows.map(row=>[row.sourceClaim.claimId,row]));
+    if(byClaimId.size!==rows.length)return null;
+    const roots=rows.filter(row=>row.sourceClaim.correctionOfClaimId===null);
+    if(roots.length!==1)return null;
+    const root=roots[0]!;
+    if(root.sourceClaim.form!=="8-K"||root.mappedClaim.correctionOfMappedClaimId!==null||root.mappedClaim.eventCandidateId!==eventCandidateId)return null;
+    const children=new Map<string,EventClaimEvidence[]>();
+    for(const row of rows){
+      const claim=row.sourceClaim,mapped=row.mappedClaim;
+      if(mapped.eventCandidateId!==eventCandidateId||mapped.canonicalIssuerId!==root.mappedClaim.canonicalIssuerId||mapped.canonicalLegalEntityId!==root.mappedClaim.canonicalLegalEntityId||mapped.canonicalAssetId!==root.mappedClaim.canonicalAssetId||mapped.canonicalRepresentationId!==root.mappedClaim.canonicalRepresentationId||mapped.eventTypeCandidate!==root.mappedClaim.eventTypeCandidate||mapped.lifecycleStatusCandidate!==root.mappedClaim.lifecycleStatusCandidate||claim.cik!==root.sourceClaim.cik||claim.issuerIdentityCandidate.syntheticCik!==root.sourceClaim.issuerIdentityCandidate.syntheticCik||claim.assetIdentityCandidate.syntheticAssetId!==root.sourceClaim.assetIdentityCandidate.syntheticAssetId||claim.extractionVersion!==root.sourceClaim.extractionVersion)return null;
+      if(claim.claimId===root.sourceClaim.claimId)continue;
+      const parent=claim.correctionOfClaimId?byClaimId.get(claim.correctionOfClaimId):undefined;
+      if(!parent||claim.form!=="8-K/A"||mapped.correctionOfMappedClaimId!==parent.mappedClaim.mappedClaimId||mapped.correctionKind!=="REPLACE_FIELD_VALUES"||claim.acceptanceAt<=parent.sourceClaim.acceptanceAt||mapped.issuerAuthorityId!==parent.mappedClaim.issuerAuthorityId||mapped.issuerAuthorityFingerprint!==parent.mappedClaim.issuerAuthorityFingerprint||mapped.mappingRevisionId!==parent.mappedClaim.mappingRevisionId||mapped.mappingRevisionFingerprint!==parent.mappedClaim.mappingRevisionFingerprint||mapped.canonicalRepresentationId!==parent.mappedClaim.canonicalRepresentationId)return null;
+      const fields=mapped.correctedFields;
+      const allowed:Record<string,readonly string[]>={AMOUNT:["amount","amountClassification","currency"],SIGNING_DATE:["signingDate"],EXPECTED_CLOSING_DATE:["expectedClosingDate"]};
+      const actual:Record<string,unknown>={amount:claim.amount,amountClassification:claim.amountClassification,currency:claim.currency,signingDate:claim.signingDate,expectedClosingDate:claim.expectedClosingDate};
+      const prior:Record<string,unknown>={amount:parent.sourceClaim.amount,amountClassification:parent.sourceClaim.amountClassification,currency:parent.sourceClaim.currency,signingDate:parent.sourceClaim.signingDate,expectedClosingDate:parent.sourceClaim.expectedClosingDate};
+      const changed=Object.keys(actual).filter(field=>actual[field]!==prior[field]);
+      const declaredFields=new Set<string>(fields);
+      if(changed.length===0||changed.some(field=>!declaredFields.has(field))||fields.some(field=>!changed.includes(field)))return null;
+      const childrenOfParent=children.get(parent.sourceClaim.claimId)??[];childrenOfParent.push(row);children.set(parent.sourceClaim.claimId,childrenOfParent);
+      if(!fields.every(field=>["amount","amountClassification","currency","signingDate","expectedClosingDate"].includes(field)))return null;
+      const correctionEdgeValid=Object.values(allowed).some(group=>fields.length>0&&fields.every(field=>group.includes(field))&&(group[0]==="signingDate"||group[0]==="expectedClosingDate"?fields.length===1:true));if(!correctionEdgeValid)return null;
+    }
+    if([...children.values()].some(values=>values.length!==1))return null;
+    const ordered:EventClaimEvidence[]=[root];let current=root;const visited=new Set<string>([root.sourceClaim.claimId]);
+    while(children.has(current.sourceClaim.claimId)){const next=children.get(current.sourceClaim.claimId)!;if(next.length!==1)return null;current=next[0]!;if(visited.has(current.sourceClaim.claimId))return null;visited.add(current.sourceClaim.claimId);ordered.push(current);}
+    if(ordered.length!==rows.length)return null;
+    const members=ordered.map((row,ordinal)=>freeze({ordinal,claimId:row.sourceClaim.claimId,claimFingerprint:row.sourceClaim.fingerprint,mappedClaimId:row.mappedClaim.mappedClaimId,mappedClaimFingerprint:row.mappedClaim.fingerprint,sourcePackageId:row.mappedClaim.sourceFilingPackageId,sourcePackageFingerprint:row.mappedClaim.sourceFilingPackageFingerprint,sourceArtifactId:row.mappedClaim.sourceArtifactId,sourceArtifactFingerprint:row.mappedClaim.sourceArtifactFingerprint,cik:row.sourceClaim.cik,accession:row.sourceClaim.accession,form:row.sourceClaim.form,correctionOfClaimId:row.sourceClaim.correctionOfClaimId,correctionKind:row.mappedClaim.correctionKind,correctedFields:row.mappedClaim.correctedFields,acceptanceAt:row.sourceClaim.acceptanceAt,issuerAuthorityId:row.mappedClaim.issuerAuthorityId,issuerAuthorityFingerprint:row.mappedClaim.issuerAuthorityFingerprint,assetBindingId:row.mappedClaim.assetBindingId,assetBindingFingerprint:row.mappedClaim.assetBindingFingerprint,mappingRevisionId:row.mappedClaim.mappingRevisionId,mappingRevisionFingerprint:row.mappedClaim.mappingRevisionFingerprint,canonicalIssuerId:row.mappedClaim.canonicalIssuerId,canonicalLegalEntityId:row.mappedClaim.canonicalLegalEntityId,canonicalAssetId:row.mappedClaim.canonicalAssetId,canonicalRepresentationId:row.mappedClaim.canonicalRepresentationId,extractionVersion:row.sourceClaim.extractionVersion}));
+    const material={contractVersion:EVENT_INTELLIGENCE_CORRECTION_LINEAGE_VERSION,eventCandidateId,originalClaimId:root.sourceClaim.claimId,originalClaimFingerprint:root.sourceClaim.fingerprint,members,terminalClaimId:current.sourceClaim.claimId};const fingerprint=digest(material);
+    output.push(freeze({...material,lineageId:`event-correction-lineage:${fingerprint}`,fingerprint}));
+  }
+  return Object.freeze(output.sort((a,b)=>a.eventCandidateId.localeCompare(b.eventCandidateId)));
+}
 export function sealEventCorroborationInputSet(claims: readonly EventClaimEvidence[], origins: readonly EventSourceOrigin[]): SealedCorroborationInputSet | null {
   if(!arr(claims)||claims.length===0||claims.length>128||!arr(origins)||origins.length===0||origins.length>256||claims.some(x=>!isAuthenticEventClaimEvidence(x))||origins.some(x=>!isAuthenticEventSourceOrigin(x))) return null;
   const cs=[...claims].sort((a,b)=>a.mappedClaim.fingerprint.localeCompare(b.mappedClaim.fingerprint)), os=[...new Map(origins.map(o=>[o.fingerprint,o])).values()].sort((a,b)=>a.fingerprint.localeCompare(b.fingerprint));
   if(new Set(cs.map(x=>x.mappedClaim.fingerprint)).size!==cs.length) return null;
-  const material={contractVersion:"event-intelligence-corroboration-input-set/v1" as const,claims:cs,origins:os}; const out=freeze({...material,fingerprint:digest({contractVersion:material.contractVersion,claims:cs.map(x=>x.mappedClaim.fingerprint),origins:os.map(x=>x.fingerprint)})}); inputSetTrust.add(out as object); return out;
+  const correctionLineages=buildCorrectionLineages(cs);if(!correctionLineages)return null;
+  const material={contractVersion:"event-intelligence-corroboration-input-set/v1" as const,claims:cs,origins:os,correctionLineages}; const out=freeze({...material,fingerprint:digest({contractVersion:material.contractVersion,claims:cs.map(x=>x.mappedClaim.fingerprint),origins:os.map(x=>x.fingerprint),correctionLineages:correctionLineages.map(x=>x.fingerprint)})}); inputSetTrust.add(out as object); return out;
 }
 
 function originGroup(o:EventSourceOrigin):string {
@@ -141,34 +198,39 @@ export function compareEventClaims(a:EventClaimEvidence,b:EventClaimEvidence):"S
   // immutable extracted claim or an explicit correction edge establishes that
   // two claims concern the same event in v1. This fixture grammar has no
   // independently extracted agreement reference, so do not infer one.
+  if(a.mappedClaim.eventCandidateId!==b.mappedClaim.eventCandidateId) return "DIFFERENT_EVENT";
   if(a.sourceClaim.fingerprint===b.sourceClaim.fingerprint&&a.sourceClaim.claimId===b.sourceClaim.claimId) return "SAME_EVENT_SAME_CLAIM";
-  const correctionRelated=a.sourceClaim.correctionOfClaimId===b.sourceClaim.claimId||b.sourceClaim.correctionOfClaimId===a.sourceClaim.claimId;
-  if(!correctionRelated) {
-    if(x.issuer!==y.issuer||x.asset!==y.asset||x.event!==y.event) return "DIFFERENT_EVENT";
-    return "INSUFFICIENT_IDENTITY";
-  }
-  if(x.issuer!==y.issuer||x.asset!==y.asset||x.event!==y.event) return "DIFFERENT_EVENT";
-  if(digest(x)===digest(y)) return "SAME_EVENT_COMPATIBLE_CLAIM";
-  const sameScope=x.form===y.form&&x.item===y.item&&x.lifecycle===y.lifecycle&&x.binding===y.binding&&x.correctionOf===y.correctionOf;
-  if(!sameScope) return "SAME_EVENT_CONFLICTING_CLAIM";
-  const compared:[keyof typeof x,keyof typeof x][]=[["amountClass","amountClass"],["amount","amount"],["currency","currency"],["signing","signing"],["completion","completion"],["expected","expected"]];
-  for(const [k] of compared) if(x[k]!==null&&y[k]!==null&&x[k]!==y[k]) return "SAME_EVENT_CONFLICTING_CLAIM";
-  return "SAME_EVENT_COMPATIBLE_CLAIM";
+  if(x.issuer!==y.issuer||x.asset!==y.asset||x.event!==y.event||x.lifecycle!==y.lifecycle||x.item!==y.item||x.binding!==y.binding) return "SAME_EVENT_CONFLICTING_CLAIM";
+  const correctionRelated=a.mappedClaim.correctionOfMappedClaimId===b.mappedClaim.mappedClaimId||b.mappedClaim.correctionOfMappedClaimId===a.mappedClaim.mappedClaimId;
+  if(!correctionRelated) return "INSUFFICIENT_IDENTITY";
+  const child=a.mappedClaim.correctionOfMappedClaimId===b.mappedClaim.mappedClaimId?a:b;
+  const parent=child===a?b:a;
+  if(child.sourceClaim.correctionOfClaimId!==parent.sourceClaim.claimId||child.mappedClaim.correctionKind!=="REPLACE_FIELD_VALUES") return "INVALID";
+  const fieldPairs:[string,unknown,unknown][]=[["amount",parent.sourceClaim.amount,child.sourceClaim.amount],["amountClassification",parent.sourceClaim.amountClassification,child.sourceClaim.amountClassification],["currency",parent.sourceClaim.currency,child.sourceClaim.currency],["signingDate",parent.sourceClaim.signingDate,child.sourceClaim.signingDate],["expectedClosingDate",parent.sourceClaim.expectedClosingDate,child.sourceClaim.expectedClosingDate]];
+  const changed=fieldPairs.filter(([,before,after])=>before!==after).map(([field])=>field);
+  return changed.length>0&&changed.every(field=>child.mappedClaim.correctedFields.includes(field as "amount"|"amountClassification"|"currency"|"signingDate"|"expectedClosingDate"))?"SAME_EVENT_COMPATIBLE_CLAIM":"SAME_EVENT_CONFLICTING_CLAIM";
 }
 
 function result(status:EligibilityStatus,policy:EventPolicy,asOf:string,set:SealedCorroborationInputSet, extra:Partial<EventAuthorityEligibilityResult>={}, evaluatedAt=asOf):EventAuthorityEligibilityResult {
   const claims=set.claims, origins=set.origins, c=claims[0];
-  const correctionLineage=[...origins.filter(x=>x.correctsOriginId).map(x=>`${x.correctsOriginId}->${x.originId}`),...claims.filter(x=>x.sourceClaim.correctionOfClaimId).map(x=>`${x.sourceClaim.correctionOfClaimId}->${x.mappedClaim.claimId}`)].sort();
+  const byOriginId=new Map(origins.map(origin=>[origin.originId,origin]));
+  const rootOf=(origin:EventSourceOrigin):EventSourceOrigin=>{let current=origin;const seen=new Set<string>();while(current.correctsOriginId&&byOriginId.has(current.correctsOriginId)&&!seen.has(current.originId)){seen.add(current.originId);current=byOriginId.get(current.correctsOriginId)!;}return current;};
+  const correctionLineage=[...origins.filter(x=>x.correctsOriginId).map(x=>`${x.correctsOriginId}->${x.originId}`),...set.correctionLineages.flatMap(lineage=>lineage.members.slice(1).map(member=>`${member.correctionOfClaimId}->${member.claimId}`))].sort();
   const body={contractVersion:EVENT_AUTHORITY_ELIGIBILITY_RESULT_VERSION,classification:"EVENT_AUTHORITY_ELIGIBILITY_RESULT" as const,status,authoritySubject:policy.authoritySubject,policyId:policy.policyId,policyFingerprint:policy.fingerprint,evaluationAsOf:asOf,inputSetFingerprint:set.fingerprint,
-    claimIds:claims.map(x=>x.mappedClaim.claimId),claimFingerprints:claims.map(x=>x.mappedClaim.claimFingerprint),originIds:origins.map(x=>x.originId),originFingerprints:origins.map(x=>x.fingerprint),independentOriginGroups:[...new Set(origins.filter(x=>x.kind!=="AGGREGATOR_COPY"&&x.kind!=="ISSUER_ATTRIBUTED_NEWSWIRE"&&x.lineageKnown).map(originGroup))].sort(),
-    canonicalIssuerId:c?.mappedClaim.canonicalIssuerId??null,canonicalAssetId:c?.mappedClaim.canonicalAssetId??null,canonicalRepresentationId:c?.mappedClaim.canonicalRepresentationId??null,eventType:c?.sourceClaim.eventTypeCandidate??null,lifecycleStatus:c?.sourceClaim.lifecycleStatusCandidate??null,selectedCurrentClaimId:status==="ELIGIBLE_FOR_ISSUER_DISCLOSURE_AUTHORITY"?c?.mappedClaim.claimId??null:null,correctionLineage,blockers:[] as string[],conflicts:[] as string[],evaluatedAt,...extra};
+    claimIds:claims.map(x=>x.mappedClaim.claimId),claimFingerprints:claims.map(x=>x.mappedClaim.claimFingerprint),originIds:origins.map(x=>x.originId),originFingerprints:origins.map(x=>x.fingerprint),independentOriginGroups:[...new Set(origins.filter(x=>x.kind!=="AGGREGATOR_COPY"&&x.kind!=="ISSUER_ATTRIBUTED_NEWSWIRE"&&x.lineageKnown).map(x=>originGroup(rootOf(x))))].sort(),
+    canonicalIssuerId:c?.mappedClaim.canonicalIssuerId??null,canonicalAssetId:c?.mappedClaim.canonicalAssetId??null,canonicalRepresentationId:c?.mappedClaim.canonicalRepresentationId??null,eventType:c?.sourceClaim.eventTypeCandidate??null,lifecycleStatus:c?.sourceClaim.lifecycleStatusCandidate??null,selectedCurrentClaimId:status==="ELIGIBLE_FOR_ISSUER_DISCLOSURE_AUTHORITY"?c?.mappedClaim.claimId??null:null,correctionLineage,correctionLineageFingerprints:set.correctionLineages.map(lineage=>lineage.fingerprint),blockers:[] as string[],conflicts:[] as string[],evaluatedAt,...extra};
   const identity={...body}; delete (identity as any).evaluatedAt; const fingerprint=digest(identity), out=freeze({...body,resultId:`event-eligibility:${fingerprint}`,fingerprint}); resultTrust.add(out as object); return out;
 }
 export function evaluateEventCorroboration(input:{policy:EventPolicy;asOf:string;inputSet:SealedCorroborationInputSet;evaluatedAt?:string}):EventAuthorityEligibilityResult {
   try {
     if(!(plain(input,["policy","asOf","inputSet"])||plain(input,["policy","asOf","inputSet","evaluatedAt"]))||!isAuthenticEventCorroborationPolicy(input.policy)||!policyTrust.has(input.policy as object)||!input.policy||!iso(input.asOf)||input.evaluatedAt!==undefined&&!iso(input.evaluatedAt)||!input.inputSet||!inputSetTrust.has(input.inputSet as object)) throw 0;
-    const p=input.policy,s=input.inputSet,asOf=input.asOf;
+    const p=input.policy,asOf=input.asOf,supplied=input.inputSet;
+    const visibleOrigins=supplied.origins.filter(origin=>origin.publicationAt<=asOf);
+    const visibleClaims=supplied.claims.filter(evidence=>evidence.sourceClaim.acceptanceAt<=asOf&&visibleOrigins.some(origin=>origin.sourceArtifactFingerprint===evidence.mappedClaim.sourceArtifactFingerprint&&origin.sourceArtifactId===evidence.mappedClaim.sourceArtifactId));
+    const projected=visibleClaims.length&&visibleOrigins.length?sealEventCorroborationInputSet(visibleClaims,visibleOrigins):null;
+    const s=projected??supplied;
     const evaluatedAt=input.evaluatedAt??asOf;
+    if(!projected)return result("INCOMPLETE",p,asOf,supplied,{blockers:["NO_COMPLETE_VISIBLE_SOURCE_SET"]},evaluatedAt);
     if(p.authoritySubject!=="ISSUER_DISCLOSURE") return result("UNSUPPORTED_AUTHORITY_SUBJECT",p,asOf,s,{blockers:["AUTHORITY_SUBJECT_UNSUPPORTED"]},evaluatedAt);
     if(p.status==="INVALID") return result("INVALID",p,asOf,s,{blockers:["POLICY_INVALID"]},evaluatedAt);
     if(p.status!=="ACTIVE"||p.reviewedAt>asOf||p.effectiveFrom>asOf||p.expiresAt<=asOf||s.claims.length===0||s.origins.length===0) return result("INCOMPLETE",p,asOf,s,{blockers:["POLICY_OR_INPUT_NOT_ACTIVE"]},evaluatedAt);
@@ -181,32 +243,32 @@ export function evaluateEventCorroboration(input:{policy:EventPolicy;asOf:string
     // release to manufacture an independent origin group. Other source kinds
     // need their own authenticated artifact and claim contracts first.
     if(s.claims.some(c=>s.origins.some(o=>o.sourceArtifactFingerprint===c.mappedClaim.sourceArtifactFingerprint&&o.kind!=="REGULATORY_FILING"))||s.claims.some(c=>!s.origins.some(o=>o.sourceArtifactFingerprint===c.mappedClaim.sourceArtifactFingerprint&&o.kind==="REGULATORY_FILING"&&o.sourceTier==="REGULATORY_FILING"&&o.canonicalPublicationId===c.sourceClaim.accession))) return result("INCOMPLETE",p,asOf,s,{blockers:["ORIGIN_KIND_OR_PUBLICATION_NOT_BOUND_TO_CLAIM"]},evaluatedAt);
-    if(s.origins.some(o=>o.publicationAt>asOf||Date.parse(asOf)-Date.parse(o.publicationAt)>p.maxEvidenceAgeSeconds*1000)) return result("INCOMPLETE",p,asOf,s,{blockers:["EVIDENCE_OUTSIDE_TEMPORAL_WINDOW"]},evaluatedAt);
+    if(s.origins.some(o=>Date.parse(asOf)-Date.parse(o.publicationAt)>p.maxEvidenceAgeSeconds*1000)) return result("INCOMPLETE",p,asOf,s,{blockers:["EVIDENCE_OUTSIDE_TEMPORAL_WINDOW"]},evaluatedAt);
     if(s.claims.some(c=>c.sourceClaim.acceptanceAt>asOf||!s.origins.some(o=>o.sourceArtifactFingerprint===c.mappedClaim.sourceArtifactFingerprint&&o.publicationAt>=c.sourceClaim.acceptanceAt))) return result("INCOMPLETE",p,asOf,s,{blockers:["FILING_NOT_AVAILABLE_AT_CUTOFF"]},evaluatedAt);
-    const correctionTargets=s.origins.filter(o=>o.correctionStatus!=="ACTIVE").map(o=>o.correctsOriginId!).filter(Boolean);
+    const correctionTargets=s.origins.map(o=>o.correctsOriginId).filter((target):target is string=>target!==null);
     if(new Set(correctionTargets).size!==correctionTargets.length) return result("CONFLICT",p,asOf,s,{blockers:["CORRECTION_FORK"],conflicts:["MULTIPLE_CORRECTIONS_FOR_ORIGIN"]},evaluatedAt);
     if(correctionTargets.some(target=>!s.origins.some(o=>o.originId===target))) return result("INCOMPLETE",p,asOf,s,{blockers:["CORRECTION_LINEAGE_INCOMPLETE"]},evaluatedAt);
-    if(s.claims.some(c=>c.sourceClaim.correctionOfClaimId!==null&&!s.claims.some(parent=>parent.mappedClaim.claimId===c.sourceClaim.correctionOfClaimId))) return result("INCOMPLETE",p,asOf,s,{blockers:["CLAIM_CORRECTION_LINEAGE_INCOMPLETE"]},evaluatedAt);
+    const originById=new Map(s.origins.map(origin=>[origin.originId,origin]));
+    for(const child of s.origins)if(child.correctsOriginId){const parent=originById.get(child.correctsOriginId)!;if(child.issuerId!==parent.issuerId||child.originatingAuthorityId!==parent.originatingAuthorityId||child.sourceTier!==parent.sourceTier||child.publicationAt<=parent.publicationAt)return result("CONFLICT",p,asOf,s,{blockers:["CORRECTION_ORIGIN_SCOPE_OR_ORDER_INVALID"],conflicts:["CORRECTION_ORIGIN_LINEAGE"]},evaluatedAt);let cursor:EventSourceOrigin|undefined=parent;const seen=new Set([child.originId]);while(cursor){if(seen.has(cursor.originId))return result("CONFLICT",p,asOf,s,{blockers:["CORRECTION_ORIGIN_CYCLE"],conflicts:["CORRECTION_ORIGIN_CYCLE"]},evaluatedAt);seen.add(cursor.originId);cursor=cursor.correctsOriginId?originById.get(cursor.correctsOriginId):undefined;}}
+    if(s.claims.some(c=>c.sourceClaim.correctionOfClaimId!==null&&!s.claims.some(parent=>parent.sourceClaim.claimId===c.sourceClaim.correctionOfClaimId&&parent.mappedClaim.mappedClaimId===c.mappedClaim.correctionOfMappedClaimId))) return result("INCOMPLETE",p,asOf,s,{blockers:["CLAIM_CORRECTION_LINEAGE_INCOMPLETE"]},evaluatedAt);
     if(s.origins.some(o=>o.correctionStatus==="RETRACTED")) return result("RETRACTED",p,asOf,s,{blockers:["PRIMARY_ORIGIN_RETRACTED"]},evaluatedAt);
-    if(s.origins.some(o=>o.correctionStatus==="CORRECTED")) return result("CORRECTED",p,asOf,s,{blockers:["CORRECTION_REQUIRES_COMPLETE_CURRENT_LINEAGE"]},evaluatedAt);
+    if(s.origins.some(o=>o.correctionStatus==="CORRECTED"&&!s.claims.some(claim=>claim.mappedClaim.sourceArtifactFingerprint===o.sourceArtifactFingerprint&&claim.sourceClaim.correctionOfClaimId!==null))) return result("CORRECTED",p,asOf,s,{blockers:["CORRECTED_ORIGIN_WITHOUT_MAPPED_CLAIM_LINEAGE"]},evaluatedAt);
     if(s.origins.some(o=>!o.lineageKnown)) return result("INCOMPLETE",p,asOf,s,{blockers:["ORIGIN_LINEAGE_UNKNOWN"]},evaluatedAt);
     if(s.claims.some(x=>x.rumor||x.sourceClaim.eventTypeCandidate==="PURCHASE_INTENT_ANNOUNCED"&&x.sourceClaim.lifecycleStatusCandidate==="COMPLETED")) return result("INCOMPLETE",p,asOf,s,{blockers:["RUMOR_OR_LIFECYCLE_UNSUPPORTED"]},evaluatedAt);
     if(s.origins.some(o=>o.kind==="AGGREGATOR_COPY")&&s.origins.every(o=>o.kind==="AGGREGATOR_COPY"||o.sourceTier==="AGGREGATOR_DISCOVERY")) return result("INCOMPLETE",p,asOf,s,{blockers:["DISCOVERY_ONLY_CANNOT_AUTHORIZE"]},evaluatedAt);
-    const first=s.claims[0]!; const identityMismatch=s.claims.some(x=>x.mappedClaim.canonicalIssuerId!==first.mappedClaim.canonicalIssuerId||x.mappedClaim.canonicalLegalEntityId!==first.mappedClaim.canonicalLegalEntityId||x.mappedClaim.canonicalRepresentationId!==first.mappedClaim.canonicalRepresentationId||x.sourceClaim.eventTypeCandidate!==first.sourceClaim.eventTypeCandidate);
+    const first=s.claims[0]!; const identityMismatch=s.claims.some(x=>x.mappedClaim.eventCandidateId!==first.mappedClaim.eventCandidateId||x.mappedClaim.canonicalIssuerId!==first.mappedClaim.canonicalIssuerId||x.mappedClaim.canonicalLegalEntityId!==first.mappedClaim.canonicalLegalEntityId||x.mappedClaim.canonicalRepresentationId!==first.mappedClaim.canonicalRepresentationId||x.sourceClaim.eventTypeCandidate!==first.sourceClaim.eventTypeCandidate);
     if(identityMismatch) return result("CONFLICT",p,asOf,s,{blockers:["EVENT_SCOPE_MISMATCH"],conflicts:["ISSUER_ASSET_OR_EVENT_TYPE"]},evaluatedAt);
-    for(let i=1;i<s.claims.length;i++) {
-      const comparison=compareEventClaims(first,s.claims[i]!);
-      if(comparison==="SAME_EVENT_CONFLICTING_CLAIM") return result("CONFLICT",p,asOf,s,{blockers:["CLAIM_CONFLICT"],conflicts:["MATERIAL_CLAIM_FIELDS"]},evaluatedAt);
-      if(comparison==="INSUFFICIENT_IDENTITY"||comparison==="INVALID") return result("INCOMPLETE",p,asOf,s,{blockers:["EVENT_IDENTITY_INSUFFICIENT"]},evaluatedAt);
-      if(comparison==="DIFFERENT_EVENT") return result("CONFLICT",p,asOf,s,{blockers:["MULTIPLE_EVENT_CANDIDATES"],conflicts:["DIFFERENT_EVENTS_IN_SEALED_SET"]},evaluatedAt);
-    }
     if(s.claims.some(x=>!p.supportedEventTypes.includes(x.sourceClaim.eventTypeCandidate)||!p.supportedLifecycleStatuses.includes(x.sourceClaim.lifecycleStatusCandidate))) return result("INCOMPLETE",p,asOf,s,{blockers:["EVENT_OR_LIFECYCLE_NOT_SUPPORTED"]},evaluatedAt);
-    if(s.claims.some(x=>x.sourceClaim.form!=="8-K"||x.sourceClaim.itemCode==="OTHER"||x.sourceClaim.eventTypeCandidate==="PURCHASE_COMPLETED"&&(x.sourceClaim.itemCode!=="2.01"||x.sourceClaim.completionDate===null||x.sourceClaim.completionDate>asOf.slice(0,10))||x.sourceClaim.eventTypeCandidate==="DEFINITIVE_PURCHASE_AGREEMENT"&&(x.sourceClaim.itemCode!=="1.01"||x.sourceClaim.bindingStatus!=="BINDING"||x.sourceClaim.completionDate!==null||x.sourceClaim.signingDate!==null&&x.sourceClaim.signingDate>asOf.slice(0,10)))) return result("INCOMPLETE",p,asOf,s,{blockers:["FORM_ITEM_LIFECYCLE_MATERIAL_MISMATCH"]},evaluatedAt);
-    const groups=new Set(s.origins.filter(o=>o.kind!=="AGGREGATOR_COPY"&&o.kind!=="ISSUER_ATTRIBUTED_NEWSWIRE"&&o.sourceTier!=="AGGREGATOR_DISCOVERY").map(originGroup));
+    if(s.claims.some(x=>(x.sourceClaim.form!=="8-K"&&!(x.sourceClaim.form==="8-K/A"&&x.sourceClaim.correctionOfClaimId!==null))||x.sourceClaim.itemCode==="OTHER"||x.sourceClaim.eventTypeCandidate==="PURCHASE_COMPLETED"&&(x.sourceClaim.itemCode!=="2.01"||x.sourceClaim.completionDate===null||x.sourceClaim.completionDate>asOf.slice(0,10))||x.sourceClaim.eventTypeCandidate==="DEFINITIVE_PURCHASE_AGREEMENT"&&(x.sourceClaim.itemCode!=="1.01"||x.sourceClaim.bindingStatus!=="BINDING"||x.sourceClaim.completionDate!==null||x.sourceClaim.signingDate!==null&&x.sourceClaim.signingDate>asOf.slice(0,10)))) return result("INCOMPLETE",p,asOf,s,{blockers:["FORM_ITEM_LIFECYCLE_MATERIAL_MISMATCH"]},evaluatedAt);
+    const originRoot=(origin:EventSourceOrigin):EventSourceOrigin=>{let current=origin;while(current.correctsOriginId)current=originById.get(current.correctsOriginId)!;return current;};
+    const countedOrigins=s.origins.filter(o=>o.kind!=="AGGREGATOR_COPY"&&o.kind!=="ISSUER_ATTRIBUTED_NEWSWIRE"&&o.sourceTier!=="AGGREGATOR_DISCOVERY").map(originRoot);
+    const groups=new Set(countedOrigins.map(originGroup));
     const primary=s.origins.some(o=>o.kind==="REGULATORY_FILING"||o.kind==="ISSUER_PUBLICATION"||o.kind==="EXCHANGE_REGULATOR_PUBLICATION");
-    if(p.requiredSourceTiers.some(t=>!s.origins.some(o=>o.sourceTier===t))||groups.size<p.minimumIndependentOriginGroups||new Set(s.origins.map(o=>o.sourceArtifactFingerprint)).size<p.minimumSourceArtifacts||p.requirePrimarySource&&!primary) return result("INCOMPLETE",p,asOf,s,{blockers:["CORROBORATION_THRESHOLD_NOT_MET"]},evaluatedAt);
-    return result("ELIGIBLE_FOR_ISSUER_DISCLOSURE_AUTHORITY",p,asOf,s,{},evaluatedAt);
-  } catch { return Object.freeze({contractVersion:EVENT_AUTHORITY_ELIGIBILITY_RESULT_VERSION,classification:"EVENT_AUTHORITY_ELIGIBILITY_RESULT",resultId:"",fingerprint:"",status:"INVALID",authoritySubject:"ISSUER_DISCLOSURE",policyId:"",policyFingerprint:"",evaluationAsOf:"",inputSetFingerprint:"",claimIds:Object.freeze([]),claimFingerprints:Object.freeze([]),originIds:Object.freeze([]),originFingerprints:Object.freeze([]),independentOriginGroups:Object.freeze([]),canonicalIssuerId:null,canonicalAssetId:null,canonicalRepresentationId:null,eventType:null,lifecycleStatus:null,selectedCurrentClaimId:null,correctionLineage:Object.freeze([]),blockers:Object.freeze(["CORROBORATION_INPUT_INVALID"]),conflicts:Object.freeze([]),evaluatedAt:""}); }
+    if(p.requiredSourceTiers.some(t=>!s.origins.some(o=>o.sourceTier===t))||groups.size<p.minimumIndependentOriginGroups||new Set(countedOrigins.map(o=>o.sourceArtifactFingerprint)).size<p.minimumSourceArtifacts||p.requirePrimarySource&&!primary) return result("INCOMPLETE",p,asOf,s,{blockers:["CORROBORATION_THRESHOLD_NOT_MET"]},evaluatedAt);
+    for(const lineage of s.correctionLineages)for(let index=1;index<lineage.members.length;index++){const member=lineage.members[index]!,parentMember=lineage.members[index-1]!,childOrigin=s.origins.find(origin=>origin.sourceArtifactFingerprint===member.sourceArtifactFingerprint),parentOrigin=s.origins.find(origin=>origin.sourceArtifactFingerprint===parentMember.sourceArtifactFingerprint);if(!childOrigin||!parentOrigin||childOrigin.correctsOriginId!==parentOrigin.originId||childOrigin.correctionKind!=="REPLACE_FIELD_VALUES")return result("INCOMPLETE",p,asOf,s,{blockers:["CLAIM_AND_ORIGIN_CORRECTION_LINEAGE_MISMATCH"]},evaluatedAt);}
+    const lineage=s.correctionLineages[0];const selectedCurrentClaimId=lineage?.terminalClaimId??s.claims[0]?.mappedClaim.claimId??null;
+    return result("ELIGIBLE_FOR_ISSUER_DISCLOSURE_AUTHORITY",p,asOf,s,{selectedCurrentClaimId,correctionLineage:lineage?lineage.members.slice(1).map(member=>`${member.correctionOfClaimId}->${member.claimId}`):[]},evaluatedAt);
+  } catch { return Object.freeze({contractVersion:EVENT_AUTHORITY_ELIGIBILITY_RESULT_VERSION,classification:"EVENT_AUTHORITY_ELIGIBILITY_RESULT",resultId:"",fingerprint:"",status:"INVALID",authoritySubject:"ISSUER_DISCLOSURE",policyId:"",policyFingerprint:"",evaluationAsOf:"",inputSetFingerprint:"",claimIds:Object.freeze([]),claimFingerprints:Object.freeze([]),originIds:Object.freeze([]),originFingerprints:Object.freeze([]),independentOriginGroups:Object.freeze([]),canonicalIssuerId:null,canonicalAssetId:null,canonicalRepresentationId:null,eventType:null,lifecycleStatus:null,selectedCurrentClaimId:null,correctionLineage:Object.freeze([]),correctionLineageFingerprints:Object.freeze([]),blockers:Object.freeze(["CORROBORATION_INPUT_INVALID"]),conflicts:Object.freeze([]),evaluatedAt:""}); }
 }
 export function isAuthenticEventAuthorityEligibilityResult(x:unknown):x is EventAuthorityEligibilityResult { return !!x&&typeof x==="object"&&resultTrust.has(x as object); }
 /** Eligibility is not authority and is never accepted as an event or persistence input. */

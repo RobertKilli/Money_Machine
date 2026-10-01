@@ -7,7 +7,7 @@ import { canonicalSha256 } from "@/domain/intelligence/ingestion-provenance";
 
 export const EVENT_ISSUER_MAPPING_VERSION = "event-intelligence-issuer-mapping-authority/v1" as const;
 export const EVENT_ASSET_MENTION_BINDING_VERSION = "event-intelligence-asset-mention-binding/v1" as const;
-export const EVENT_MAPPED_CLAIM_VERSION = "event-intelligence-mapped-non-authoritative-claim/v1" as const;
+export const EVENT_MAPPED_CLAIM_VERSION = "event-intelligence-mapped-non-authoritative-claim/v2" as const;
 export const EVENT_MAPPING_PRODUCTION_CONFIG_VERSION = "event-intelligence-mapping-production-config/v1" as const;
 export const EVENT_MAPPED_CLAIM_KIND = "MAPPED_NON_AUTHORITATIVE_EVENT_CLAIM" as const;
 
@@ -92,6 +92,11 @@ export type MappedNonAuthoritativeEventClaim = Readonly<{
   fingerprint: string;
   claimId: string;
   claimFingerprint: string;
+  eventCandidateId: string;
+  correctionOfClaimId: string | null;
+  correctionOfMappedClaimId: string | null;
+  correctionKind: "REPLACE_FIELD_VALUES" | null;
+  correctedFields: readonly ("amount" | "amountClassification" | "currency" | "signingDate" | "expectedClosingDate")[];
   sourceFilingPackageId: string;
   sourceFilingPackageFingerprint: string;
   sourceArtifactId: string;
@@ -355,13 +360,13 @@ export function resolveEventAssetMentionBinding(input: { readonly registry: read
   } catch { return assetResolution("INVALID"); }
 }
 
-export function assembleMappedNonAuthoritativeEventClaim(input: { readonly sourceResult: SecEdgar8kFixtureResult; readonly claim: SecEdgar8kFixtureClaim; readonly issuer: IssuerMappingResolution; readonly asset: AssetMappingResolution; readonly mappingAsOf: string }): MappedNonAuthoritativeEventClaim | null {
+export function assembleMappedNonAuthoritativeEventClaim(input: { readonly sourceResult: SecEdgar8kFixtureResult; readonly claim: SecEdgar8kFixtureClaim; readonly issuer: IssuerMappingResolution; readonly asset: AssetMappingResolution; readonly mappingAsOf: string; readonly correctionParent?: MappedNonAuthoritativeEventClaim }): MappedNonAuthoritativeEventClaim | null {
   try {
-    if (!strictObject(input, ["sourceResult", "claim", "issuer", "asset", "mappingAsOf"]) || !isAuthenticSecEdgar8kFixtureResult(input.sourceResult)) return null;
+    if (!(strictObject(input, ["sourceResult", "claim", "issuer", "asset", "mappingAsOf"]) || strictObject(input, ["sourceResult", "claim", "issuer", "asset", "mappingAsOf", "correctionParent"])) || !isAuthenticSecEdgar8kFixtureResult(input.sourceResult)) return null;
     const { claim, issuer, asset } = input;
     const sourceResult = input.sourceResult;
-    if (!sourceResult.claims.includes(claim) || !sourceResult.claimSet.claimIds.includes(claim.claimId) || sourceResult.correctionLineage.some(edge => edge.originalClaimId === claim.claimId || edge.amendedClaimId === claim.claimId)) return null;
-    if (!isAuthenticSecEdgar8kFixtureClaim(claim) || claim.form === "8-K/A" || claim.correctionOfClaimId !== null || claim.lifecycleStatusCandidate === "CONDITIONAL" || issuer.status !== "RESOLVED" || asset.status !== "RESOLVED" || !issuerResolutionTrust.has(issuer as object) || !assetResolutionTrust.has(asset as object) || !issuer.authority || !asset.binding || !isAuthenticEventIssuerMappingAuthority(issuer.authority) || !isAuthenticEventAssetMentionBinding(asset.binding)) return null;
+    if (!sourceResult.claims.includes(claim) || !sourceResult.claimSet.claimIds.includes(claim.claimId)) return null;
+    if (!isAuthenticSecEdgar8kFixtureClaim(claim) || claim.lifecycleStatusCandidate === "CONDITIONAL" || issuer.status !== "RESOLVED" || asset.status !== "RESOLVED" || !issuerResolutionTrust.has(issuer as object) || !assetResolutionTrust.has(asset as object) || !issuer.authority || !asset.binding || !isAuthenticEventIssuerMappingAuthority(issuer.authority) || !isAuthenticEventAssetMentionBinding(asset.binding)) return null;
     const asOf = time(input.mappingAsOf, "EVENT_MAPPED_CLAIM_AS_OF_INVALID"); const i = issuer.authority; const a = asset.binding;
     const filing = sourceResult.filings.find(item => item.filing.cik === claim.cik && item.filing.accession === claim.accession && item.filing.form === claim.form);
     const artifact = sourceResult.artifacts.find(item => item.artifactId === claim.sourceArtifactId && item.fingerprint === claim.sourceArtifactFingerprint);
@@ -369,7 +374,23 @@ export function assembleMappedNonAuthoritativeEventClaim(input: { readonly sourc
     if (asOf !== claim.announcementAt || issuer.asOf !== asOf || asset.asOf !== asOf || (i.mappingKind !== "EXACT_REGISTRANT" && i.mappingKind !== "EXACT_SUBSIDIARY") || i.sourceRegistrantId !== claim.issuerIdentityCandidate.syntheticCik || i.registrantLegalName !== claim.issuerIdentityCandidate.displayName || i.reviewedAt > asOf || !usableAt(i.status, i.effectiveFrom, i.expiresAt, i.revokedAt, asOf)) return null;
     if (a.claimId !== claim.claimId || a.claimFingerprint !== claim.fingerprint || a.sourceNamespace !== i.sourceNamespace || a.extractionVersion !== claim.extractionVersion || a.reviewedAt > asOf || !usableAt(a.status, a.effectiveFrom, a.expiresAt, a.revokedAt, asOf)) return null;
     if (claim.lifecycleStatusCandidate === "COMPLETED" && (claim.itemCode !== "2.01" || claim.completionDate === null)) return null;
-    const body = { contractVersion: EVENT_MAPPED_CLAIM_VERSION, classification: EVENT_MAPPED_CLAIM_KIND, claimId: claim.claimId, claimFingerprint: claim.fingerprint, sourceFilingPackageId: filing.filingPackageId, sourceFilingPackageFingerprint: filing.filingPackageFingerprint, sourceArtifactId: artifact.artifactId, sourceArtifactFingerprint: artifact.fingerprint, issuerAuthorityId: i.authorityId, issuerAuthorityFingerprint: i.fingerprint, canonicalIssuerId: i.canonicalIssuerId, canonicalLegalEntityId: i.canonicalLegalEntityId, assetBindingId: a.bindingId, assetBindingFingerprint: a.fingerprint, mentionBindingId: a.bindingId, mentionBindingFingerprint: a.fingerprint, mappingRevisionId: a.mappingRevisionId, mappingRevisionFingerprint: a.mappingRevisionFingerprint, canonicalAssetId: a.canonicalAssetId, canonicalRepresentationId: a.canonicalRepresentationId, mappingAsOf: asOf, eventTypeCandidate: claim.eventTypeCandidate, lifecycleStatusCandidate: claim.lifecycleStatusCandidate };
+    const correctionEdge = claim.correctionOfClaimId === null ? null : sourceResult.correctionLineage.find(edge => edge.amendedClaimId === claim.claimId && edge.originalClaimId === claim.correctionOfClaimId) ?? null;
+    let correctionParent: MappedNonAuthoritativeEventClaim | undefined;
+    let correctedFields: MappedNonAuthoritativeEventClaim["correctedFields"] = Object.freeze([]);
+    if (claim.correctionOfClaimId === null) { if (claim.form !== "8-K" || input.correctionParent !== undefined) return null; }
+    else {
+      const parentClaim = sourceResult.claims.find(candidate => candidate.claimId === claim.correctionOfClaimId);
+      correctionParent = input.correctionParent;
+      if (!correctionEdge || !parentClaim || !correctionParent || !isAuthenticMappedNonAuthoritativeEventClaim(correctionParent) || correctionParent.claimId !== parentClaim.claimId || correctionParent.claimFingerprint !== parentClaim.fingerprint || correctionParent.correctionOfClaimId !== parentClaim.correctionOfClaimId || claim.form !== "8-K/A" || parentClaim.cik !== claim.cik || parentClaim.form === "8-K/A" && parentClaim.correctionOfClaimId === null || parentClaim.acceptanceAt >= claim.acceptanceAt || parentClaim.eventTypeCandidate !== claim.eventTypeCandidate || parentClaim.lifecycleStatusCandidate !== claim.lifecycleStatusCandidate || parentClaim.itemCode !== claim.itemCode || parentClaim.issuerIdentityCandidate.syntheticCik !== claim.issuerIdentityCandidate.syntheticCik || parentClaim.assetIdentityCandidate.syntheticAssetId !== claim.assetIdentityCandidate.syntheticAssetId || correctionParent.canonicalIssuerId !== i.canonicalIssuerId || correctionParent.canonicalLegalEntityId !== i.canonicalLegalEntityId || correctionParent.canonicalRepresentationId !== a.canonicalRepresentationId || correctionParent.issuerAuthorityId !== i.authorityId || correctionParent.issuerAuthorityFingerprint !== i.fingerprint || correctionParent.mappingRevisionId !== a.mappingRevisionId || correctionParent.mappingRevisionFingerprint !== a.mappingRevisionFingerprint || correctionParent.eventTypeCandidate !== claim.eventTypeCandidate || correctionParent.lifecycleStatusCandidate !== claim.lifecycleStatusCandidate) return null;
+      const changed: Record<string, readonly string[]> = { AMOUNT: ["amount", "amountClassification", "currency"], SIGNING_DATE: ["signingDate"], EXPECTED_CLOSING_DATE: ["expectedClosingDate"] };
+      const edgeFields = changed[correctionEdge.correctedField]; if (!edgeFields) return null;
+      const pairs: Record<string, readonly [unknown, unknown]> = { amount: [parentClaim.amount, claim.amount], amountClassification: [parentClaim.amountClassification, claim.amountClassification], currency: [parentClaim.currency, claim.currency], signingDate: [parentClaim.signingDate, claim.signingDate], expectedClosingDate: [parentClaim.expectedClosingDate, claim.expectedClosingDate] };
+      const changedFields = Object.entries(pairs).filter(([, pair]) => pair[0] !== pair[1]).map(([field]) => field);
+      if (changedFields.length === 0 || changedFields.some(field => !edgeFields.includes(field))) return null;
+      correctedFields = Object.freeze(changedFields.sort() as (typeof correctedFields)[number][]);
+    }
+    const eventCandidateId = correctionParent?.eventCandidateId ?? `event-candidate:${claim.claimId}`;
+    const body = { contractVersion: EVENT_MAPPED_CLAIM_VERSION, classification: EVENT_MAPPED_CLAIM_KIND, claimId: claim.claimId, claimFingerprint: claim.fingerprint, eventCandidateId, correctionOfClaimId: claim.correctionOfClaimId, correctionOfMappedClaimId: correctionParent?.mappedClaimId ?? null, correctionKind: correctionParent ? "REPLACE_FIELD_VALUES" as const : null, correctedFields, sourceFilingPackageId: filing.filingPackageId, sourceFilingPackageFingerprint: filing.filingPackageFingerprint, sourceArtifactId: artifact.artifactId, sourceArtifactFingerprint: artifact.fingerprint, issuerAuthorityId: i.authorityId, issuerAuthorityFingerprint: i.fingerprint, canonicalIssuerId: i.canonicalIssuerId, canonicalLegalEntityId: i.canonicalLegalEntityId, assetBindingId: a.bindingId, assetBindingFingerprint: a.fingerprint, mentionBindingId: a.bindingId, mentionBindingFingerprint: a.fingerprint, mappingRevisionId: a.mappingRevisionId, mappingRevisionFingerprint: a.mappingRevisionFingerprint, canonicalAssetId: a.canonicalAssetId, canonicalRepresentationId: a.canonicalRepresentationId, mappingAsOf: asOf, eventTypeCandidate: claim.eventTypeCandidate, lifecycleStatusCandidate: claim.lifecycleStatusCandidate };
     const fingerprint = digest(body); const mappedClaimId = `mapped-event-claim:${fingerprint}`;
     const result = freeze({ ...body, fingerprint, mappedClaimId }); mappedClaimTrust.add(result); return result;
   } catch { return null; }

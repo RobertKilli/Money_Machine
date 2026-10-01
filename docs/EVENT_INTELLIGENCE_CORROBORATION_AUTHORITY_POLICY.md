@@ -29,7 +29,10 @@ corroboration material, not stronger authority than the filing itself.
 The implementation defines:
 
 * `event-intelligence-corroboration-authority-policy/v1`;
-* `event-intelligence-source-origin/v1`;
+* `event-intelligence-source-origin/v2`, with explicit correction kinds
+  `REPLACE_FIELD_VALUES`, `CLARIFICATION`, `RETRACTION`, and
+  `VOID_OR_WITHDRAWAL`;
+* `event-intelligence-correction-lineage/v1`;
 * `event-intelligence-authority-eligibility-result/v1`.
 
 Policy creation enforces exact object fields, canonical sorted unique sets,
@@ -81,12 +84,29 @@ artifact as journalism, issuer publication, wire, or exchange material to
 manufacture an independent origin. Additional source kinds require their own
 authenticated artifact and claim contracts. `evaluatedAt` and receipt
 time are recorded separately and do not affect result fingerprint when the
-cutoff and source material are unchanged. An origin retraction produces
-`RETRACTED`; v1 conservatively returns `CORRECTED` whenever corrected source
-material is present. It does not yet select a current claim from amendment
-lineage. Missing lineage is `INCOMPLETE`, and correction forks are
-`CONFLICT`. Original material is never overwritten. Current-claim selection
-for a complete amendment chain remains a blocker for a later policy revision.
+cutoff and source material are unchanged.
+
+Correction claims have their own immutable claim and mapped-claim identities,
+while `eventCandidateId` remains stable across explicitly declared field
+corrections. The sealed lineage requires one original 8-K and a complete
+linear parent chain of trusted 8-K/A claims with the same issuer, asset
+representation, event/lifecycle and mapping revisions, strictly increasing
+acceptance timestamps, and exact corrected-field declarations. Forks,
+cycles, missing intermediates, cross-scope corrections and undeclared field
+changes fail closed. Evaluation projects trusted inputs to artifacts
+published at or before `evaluationAsOf`, validates the visible chain, and
+selects its unique terminal claim. Before amendment publication the original
+remains current; at and after a valid amendment the amendment is current. A
+terminal retraction returns `RETRACTED` with no selected claim. Historical
+results remain reproducible because original and intermediate claims are
+retained. An amendment belongs to the same regulatory origin family and
+never raises independent-origin or source-artifact minimum counts.
+Mapped v2 correction claims support only `REPLACE_FIELD_VALUES` for the
+explicit amount/classification/currency, signing-date, or expected-closing
+fields. `CLARIFICATION` without a supported normalized correction claim stays
+`CORRECTED`; `RETRACTION` and `VOID_OR_WITHDRAWAL` make the current result
+`RETRACTED`. No correction can change event type or lifecycle status; that
+requires separate event/lifecycle material.
 
 The included lifecycle guards distinguish 8-K Item 1.01 definitive agreement
 disclosure from Item 2.01 completion disclosure. A completed purchase requires
@@ -102,6 +122,11 @@ Eligibility statuses are `ELIGIBLE_FOR_ISSUER_DISCLOSURE_AUTHORITY`,
 only a candidate for a future separately reviewed authority write. The
 boundary `rejectEligibilityAsEventAuthorityOrPersistence` always returns
 `null`.
+
+`CORRECTED` is reserved for correction material whose current claim lineage
+cannot be established (for example, a corrected origin without a mapped
+correction claim). A complete, validated linear amendment chain is eligible
+when all other policy requirements pass; it is not forced into `CORRECTED`.
 
 Production has no active policies or source origins. Selected subject is
 empty; issuer-disclosure authority, persistence, scheduler, signals and

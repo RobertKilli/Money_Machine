@@ -868,3 +868,10 @@ issuer-attributed syndication do not create independent origins. The result is
 policies/origins are empty and authority persistence, scheduling and signals
 remain blocked. See
 `docs/EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md`.
+Correction claims retain their own identity while binding to the stable event
+candidate and exact immediate mapped parent. A sealed append-only correction
+chain selects its terminal claim at the explicit `evaluationAsOf`; historical
+cutoffs select the claim visible then, and retraction removes current
+eligibility without deleting prior material. Amendments remain in the
+original regulatory origin family and cannot increase independent-source
+counts. Eligibility still cannot cross into event-authority persistence.

@@ -184,12 +184,20 @@ describe("event intelligence issuer and asset mapping authority", () => {
     expect(mapped?.canonicalLegalEntityId).toBe(subsidiary.canonicalLegalEntityId);
   });
 
-  it("blocks original and amended claims while correction lineage remains unresolved", () => {
+  it("maps original and correction claims only with an exact trusted parent mapping", () => {
     const authority = issuer(); const binding = assetBinding()!;
     const issuerResolution = resolveEventIssuerMapping({ ...issuerLookup(), registry: [authority] });
     const assetResolution = resolveEventAssetMentionBinding({ registry: [binding], claim, asOf: AS_OF });
+    const original = assembleMappedNonAuthoritativeEventClaim({ sourceResult: claimsResult, claim, issuer: issuerResolution, asset: assetResolution, mappingAsOf: AS_OF });
+    const amendedClaim=claimsResult.claims.find(value=>value.accession==="SYNTH-ACC-AMEND-0001")!;
+    const amendedAsOf=amendedClaim.announcementAt;
+    const amendedIssuer=resolveEventIssuerMapping({ ...issuerLookupForClaim(amendedClaim,[authority]),registry:[authority],sourceRegistrantId:amendedClaim.issuerIdentityCandidate.syntheticCik,cik:"0000000001" });
+    const amendedAsset=resolveEventAssetMentionBinding({registry:[assetBinding({candidateClaim:amendedClaim})!],claim:amendedClaim,asOf:amendedAsOf});
     expect(claimsResult.correctionLineage.some(edge => edge.originalClaimId === claim.claimId)).toBe(true);
-    expect(assembleMappedNonAuthoritativeEventClaim({ sourceResult: claimsResult, claim, issuer: issuerResolution, asset: assetResolution, mappingAsOf: AS_OF })).toBeNull();
+    expect(original).not.toBeNull();
+    expect(assembleMappedNonAuthoritativeEventClaim({sourceResult:claimsResult,claim:amendedClaim,issuer:amendedIssuer,asset:amendedAsset,mappingAsOf:amendedAsOf})).toBeNull();
+    const amended=assembleMappedNonAuthoritativeEventClaim({sourceResult:claimsResult,claim:amendedClaim,issuer:amendedIssuer,asset:amendedAsset,mappingAsOf:amendedAsOf,correctionParent:original!});
+    expect(amended?.correctionOfMappedClaimId).toBe(original?.mappedClaimId);
   });
 
   it("keeps production registries empty and every downstream boundary blocked", () => {
