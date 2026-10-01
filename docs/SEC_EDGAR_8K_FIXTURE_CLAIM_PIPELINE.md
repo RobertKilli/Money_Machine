@@ -80,3 +80,6 @@ eligibility after checking source origins, duplicate delivery, lifecycle,
 correction, cutoff and conflict rules. It does not issue event authority.
 `EXTERNALLY_VERIFIED_EVENT_FACT` remains unsupported. See
 [EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY](EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md).
+# Persistence boundary
+
+The future relational design reuses existing source artifacts, envelopes, observations, availability claims and `SourceLineage`; the fixture claim pipeline itself remains synthetic and non-authoritative. See [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). No raw fixture text, migration, database write, or event authority is introduced here.

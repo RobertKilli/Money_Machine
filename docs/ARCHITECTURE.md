@@ -875,3 +875,6 @@ cutoffs select the claim visible then, and retraction removes current
 eligibility without deleting prior material. Amendments remain in the
 original regulatory origin family and cannot increase independent-source
 counts. Eligibility still cannot cross into event-authority persistence.
+# Event intelligence persistence decision
+
+The versioned persistence/schema decision is documented in [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). It reuses the existing M5 provenance graph and canonical asset mapping authority. It is design-only: no migration, database runtime, persistence port, event-authority enablement, scheduler, signal, or trading path is approved. Future persistence must use a transaction-scoped UoW and immutable sealed parent/member records.
