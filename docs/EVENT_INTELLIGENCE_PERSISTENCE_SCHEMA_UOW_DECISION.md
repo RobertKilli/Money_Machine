@@ -139,3 +139,16 @@ Future migration sequence: (1) separately approve schema and local runtime; (2) 
 `schemaApproved=false`, `migrationApproved=false`, `localRuntimeVerified=false`, `persistenceEnabled=false`, `issuerDisclosureAuthorityEnabled=false`; externally verified facts unsupported; scheduler/signal/trading blocked; registries empty; storage, retention, redistribution and commercial approvals not approved/unknown.
 
 Before SQL implementation: install/pin an approved CLI/runtime decision; approve exact retention and use rights; validate missing parent composite unique keys; approve the relational model, deferred trigger semantics and lock/isolation contract; specify fixture-only transaction repository tests. Before enabling any write, separately review migration output, catalog and rollback/concurrency test evidence. No schema or runtime readiness is implied by this design.
+# Provenance decision supersession (2026-10-02)
+
+The prior schema/UoW decision's broad reuse of M5 SourceLineage for SEC event
+documents is superseded by
+[`SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md`](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md).
+Applied M5 lineages seal retrieval-availability/observation members and do not
+establish canonical SEC document bytes, filing packages, or exhibits. A
+future persistence runtime must bind three separately named families:
+SEC event-source provenance; structured issuer-evidence provenance; and the
+existing asset-mapping revision's own provenance. The existing canonical
+asset mapping remains the sole asset authority. The uncommitted runtime
+migration remains unapproved and must be reconciled before it can be run.
+The SEC provenance decision also leaves exact document-byte persistence/readback blocked: no PostgreSQL bytea, Supabase Storage or object-store backend is selected. Package completeness members and selected event-source lineage members are separate authorities; M5 provider/dataset rows do not substitute for a reviewed SEC profile.

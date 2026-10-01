@@ -880,3 +880,19 @@ counts. Eligibility still cannot cross into event-authority persistence.
 The versioned persistence/schema decision is documented in [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). It reuses the existing M5 provenance graph and canonical asset mapping authority. It is design-only: no migration, database runtime, persistence port, event-authority enablement, scheduler, signal, or trading path is approved. Future persistence must use a transaction-scoped UoW and immutable sealed parent/member records.
 
 The reviewed persistence descriptor names PK/UNIQUE/FK/index objects and validates exact composite parent keys, order, type compatibility, and child index prefixes. External immutable source-lineage, artifact, and asset-mapping fingerprints are not duplicated in event child rows; rows bind the existing immutable parent IDs/scopes and resolve those parent fingerprints only through authoritative transaction rereads. Normalized claims persist separately; issuer/asset-mapped claims and policy eligibility remain derived/ephemeral.
+
+For SEC event-document provenance, the broad M5 provenance reuse above is superseded: M5 SourceLineage is not SEC filing/document authority. The SEC source-profile, filing/package, exact-byte document, package-membership, receipt and selected event-lineage boundaries are defined separately in [SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md). Its exact-byte storage/readback remains blocked pending an approved immutable backend.
+# SEC event-document provenance boundary
+
+SEC filing/document identity is separate from M5 market-data artifact and
+`SourceLineage` identity. See
+[`SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md`](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md).
+The decision selects a provider-neutral SEC event-document authority for
+filing packages, canonical document artifacts, acquisition receipts, and
+sealed document lineages. It does not implement SQL or authorize persistence.
+An SEC artifact ID must never be replaced by an M5 artifact ID, and
+`provider_external_record_id` is not a provenance proof. Asset mapping keeps
+its independent existing `AssetMappingRevision` lineage; issuer evidence must
+gain its own structured, fingerprint-bound provenance. Acquisition, artifact
+and lineage persistence, event authority, scheduler, signals and trading stay
+blocked.
