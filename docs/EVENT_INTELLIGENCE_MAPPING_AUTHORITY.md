@@ -145,3 +145,5 @@ retraction yields no current eligible claim. See
 # Persistence boundary
 
 The persistence decision reuses `intelligence_asset_mapping_revisions` as the sole canonical asset authority and proposes only a narrow event mention binding. Issuer/legal-entity authority remains separate. See [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). No schema or mapping registry is enabled by this design.
+
+The proposed event rows bind the immutable mapping revision by its existing scoped key and canonical fields; they do not store a second `mapping_revision_fingerprint`. The future UoW must lock/reread that revision and use its parent-owned fingerprint when validating mention-binding and event-authority material. This preserves one canonical asset authority.

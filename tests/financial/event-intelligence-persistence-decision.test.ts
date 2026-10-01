@@ -14,7 +14,7 @@ const reviewed = "2026-10-01T00:00:00.000Z";
 const parsed = () => getEventIntelligencePersistenceDecision(reviewed, "2026-10-01T00:01:00.000Z");
 const clone = (value: unknown): any => JSON.parse(JSON.stringify(value));
 const reseal = (decision: any) => {
-  const body = { contractVersion: decision.contractVersion, status: decision.status, tables: [...decision.tables].sort((a: any,b: any) => a.name.localeCompare(b.name)), reviewedAt: decision.reviewedAt, blockers: [...decision.blockers].sort() };
+  const body = { contractVersion: decision.contractVersion, status: decision.status, tables: [...decision.tables].sort((a: any,b: any) => a.name.localeCompare(b.name)), deferredTriggerPolicy: decision.deferredTriggerPolicy, reviewedAt: decision.reviewedAt, blockers: [...decision.blockers].sort() };
   decision.fingerprint = canonicalSha256(body);
   decision.decisionId = `event-persistence-decision:${decision.fingerprint}`;
   return decision;
@@ -88,6 +88,23 @@ describe("event-intelligence persistence schema/UoW decision", () => {
     expect(() => parseEventIntelligencePersistenceDecision(reseal(longName))).toThrow("EVENT_INTELLIGENCE_PERSISTENCE_FK_DESCRIPTOR_INVALID");
   });
 
+  it("names every PK and UNIQUE constraint deterministically and rejects collisions or overlength names", () => {
+    const decision = parsed();
+    for (const table of decision.tables) {
+      expect(table.primaryKeyName.length).toBeLessThanOrEqual(63);
+      expect(table.uniqueKeyNames).toHaveLength(table.uniqueKeys.length);
+      expect(new Set([table.primaryKeyName, ...table.uniqueKeyNames]).size).toBe(table.uniqueKeys.length + 1);
+    }
+    const duplicate = clone(decision); duplicate.tables[1].uniqueKeyNames[0] = duplicate.tables[0].primaryKeyName;
+    expect(() => parseEventIntelligencePersistenceDecision(reseal(duplicate))).toThrow("EVENT_INTELLIGENCE_PERSISTENCE_DECISION_INVALID");
+    const duplicateAcrossKinds = clone(decision); duplicateAcrossKinds.tables[0].foreignKeys[0].name = duplicateAcrossKinds.tables[0].indexNames[0];
+    expect(() => parseEventIntelligencePersistenceDecision(reseal(duplicateAcrossKinds))).toThrow("EVENT_INTELLIGENCE_PERSISTENCE_DECISION_INVALID");
+    const tooLong = clone(decision); tooLong.tables[0].primaryKeyName = "p".repeat(64);
+    expect(() => parseEventIntelligencePersistenceDecision(reseal(tooLong))).toThrow("EVENT_INTELLIGENCE_PERSISTENCE_DECISION_INVALID");
+    const unnamed = clone(decision); delete unnamed.tables[0].uniqueKeyNames;
+    expect(() => parseEventIntelligencePersistenceDecision(reseal(unnamed))).toThrow("EVENT_INTELLIGENCE_PERSISTENCE_DECISION_INVALID");
+  });
+
   it("requires PKs, valid canonical identifiers, structured parent keys and child FK indexes", () => {
     const noPk = clone(parsed()); noPk.tables[0].primaryKey = [];
     expect(() => parseEventIntelligencePersistenceDecision(noPk)).toThrow("EVENT_INTELLIGENCE_PERSISTENCE_DECISION_INVALID");
@@ -109,7 +126,8 @@ describe("event-intelligence persistence schema/UoW decision", () => {
       expect(candidateKeys, `${child.name}.${fk.name} parent catalog`).toBeDefined();
       expect(candidateKeys!.some(key => key.length === fk.parentColumns.length && key.every((column, index) => column === fk.parentColumns[index]))).toBe(true);
       expect(fk.columns.every(column => child.columns.some(candidate => candidate.name === column))).toBe(true);
-      expect(child.indexes.some(index => index.length >= fk.columns.length && fk.columns.every((column, indexPosition) => index[indexPosition] === column))).toBe(true);
+      const hasSupportingIndex = (index: readonly string[]) => fk.columns.length <= index.length && fk.columns.every((column, indexPosition) => index[indexPosition] === column);
+      expect([...child.indexes, child.primaryKey, ...child.uniqueKeys].some(hasSupportingIndex)).toBe(true);
       if (parent) for (let i = 0; i < fk.columns.length; i++) {
         expect(child.columns.find(column => column.name === fk.columns[i])?.type).toBe(parent.columns.find(column => column.name === fk.parentColumns[i])?.type);
       }
@@ -118,12 +136,20 @@ describe("event-intelligence persistence schema/UoW decision", () => {
         for (let i = 0; i < fk.columns.length; i++) expect(child.columns.find(column => column.name === fk.columns[i])?.type).toBe(externalTypes[fk.parentTable]?.[fk.parentColumns[i]]);
       }
     }
+    const constraintNames = tables.flatMap(table => [table.primaryKeyName, ...table.uniqueKeyNames]);
+    const indexNames = tables.flatMap(table => table.indexNames);
+    expect(new Set(constraintNames).size).toBe(constraintNames.length);
+    expect(new Set(indexNames).size).toBe(indexNames.length);
+    expect(constraintNames.every(name => name.length <= 63)).toBe(true);
+    expect(indexNames.every(name => name.length <= 63)).toBe(true);
+    expect(new Set([...constraintNames, ...indexNames]).size).toBe(constraintNames.length + indexNames.length);
   });
 
   it("reports the original scope-deficient lineage FK without loosening validation", () => {
     const invalid = clone(parsed());
     const child = invalid.tables.find((table: any) => table.name === "event_issuer_mapping_authorities");
     const fk = child.foreignKeys.find((item: any) => item.name === "issuer_authority_lineage_fk");
+    child.columns.push({ name: "source_lineage_fingerprint", type: "char(64)", nullable: false, authorityField: true, nullReason: null });
     fk.columns = ["source_lineage_id", "source_lineage_fingerprint"];
     fk.parentColumns = ["source_lineage_id", "fingerprint"];
     child.indexes.push(["source_lineage_id", "source_lineage_fingerprint"]);
@@ -141,6 +167,7 @@ describe("event-intelligence persistence schema/UoW decision", () => {
     ["non-unique parent index reference", (d: any) => { const fk = d.tables.find((t: any) => t.name === "event_issuer_mapping_authorities").foreignKeys.find((f: any) => f.name === "issuer_authority_lineage_fk"); fk.columns = ["source_lineage_id","source_lineage_fingerprint"]; fk.parentColumns = ["source_lineage_id","fingerprint"]; }],
     ["partial unique parent reference", (d: any) => { const fk = d.tables.find((t: any) => t.name === "event_issuer_mapping_authorities").foreignKeys.find((f: any) => f.name === "issuer_authority_lineage_fk"); fk.columns = ["source_lineage_id","source_lineage_fingerprint"]; fk.parentColumns = ["source_lineage_id","fingerprint"]; }],
     ["unknown parent", (d: any) => { d.tables[0].foreignKeys[0].parentTable = "unknown_parent_table"; }],
+    ["child/parent type mismatch", (d: any) => { const child = d.tables.find((t: any) => t.name === "event_issuer_mapping_authorities"); child.columns.find((column: any) => column.name === "provider_id").type = "integer"; }],
     ["missing child index", (d: any) => { const child = d.tables.find((t: any) => t.name === "event_issuer_mapping_authorities"); child.indexes = child.indexes.filter((index: string[]) => index[0] !== "source_lineage_id"); }],
     ["duplicate index name", (d: any) => { d.tables[1].indexNames[0] = d.tables[0].indexNames[0]; }],
     ["overlength PostgreSQL index name", (d: any) => { d.tables[0].indexNames[0] = "i".repeat(64); }],
@@ -169,6 +196,30 @@ describe("event-intelligence persistence schema/UoW decision", () => {
     expect(production.scheduler).toBe("BLOCKED");
     expect(production.signal).toBe("BLOCKED");
     expect(production.trading).toBe("BLOCKED");
-    expect(tables.every(table => table.rls === "ENABLED_NO_POLICIES" && table.immutableTrigger === "reject_intelligence_mutation")).toBe(true);
+    expect(tables.every(table => table.rls === "ENABLED_NO_POLICIES" && table.clientAccess === "REVOKE_ALL_NO_VIEWS" && table.immutableTrigger === "reject_intelligence_mutation" && table.triggerSecurity === "SECURITY_INVOKER" && table.triggerSearchPath === "public" && table.securityDefiner === false)).toBe(true);
+    expect(parsed().deferredTriggerPolicy).toEqual({ mode: "DEFERRABLE_INITIALLY_DEFERRED", security: "SECURITY_INVOKER", searchPath: "public, pg_temp", executeRevokedFrom: ["PUBLIC","anon","authenticated"], sqlstate: "23514", validateParentAndMemberWrites: true, lockOrder: "PARENT_BEFORE_MEMBER_DETERMINISTIC" });
+  });
+
+  it("persists normalized claims only and never duplicates external parent fingerprints", () => {
+    const claim = tables.find(table => table.name === "event_claims")!;
+    const mention = tables.find(table => table.name === "event_asset_mention_bindings")!;
+    const issuer = tables.find(table => table.name === "event_issuer_mapping_authorities")!;
+    const origins = tables.find(table => table.name === "event_source_origins")!;
+    const authority = tables.find(table => table.name === "event_issuer_disclosure_authorities")!;
+    expect(claim.objectKind).toBe("NORMALIZED_EVENT_CLAIM");
+    expect(claim.columns.map(column => column.name)).not.toContain("issuer_authority_fingerprint");
+    expect(claim.columns.map(column => column.name)).not.toContain("mapping_revision_fingerprint");
+    for (const [table, field] of [[issuer,"source_lineage_fingerprint"],[origins,"source_lineage_fingerprint"],[mention,"source_artifact_fingerprint"],[mention,"mapping_revision_fingerprint"],[claim,"mapping_revision_fingerprint"],[authority,"mapping_revision_fingerprint"]] as const) {
+      expect(table.columns.map(column => column.name)).not.toContain(field);
+    }
+    expect(mention.foreignKeys.map(fk => fk.name)).toContain("mention_claim_scope_fk");
+    expect(authority.foreignKeys.map(fk => fk.name)).toContain("authority_asset_binding_fk");
+  });
+
+  it("requires declared branch invariants for nullable foreign keys", () => {
+    const missingBranch = clone(parsed());
+    const origin = missingBranch.tables.find((table: any) => table.name === "event_source_origins");
+    origin.foreignKeys.find((fk: any) => fk.name === "origin_parent_fk").nullableBranchInvariant = null;
+    expect(() => parseEventIntelligencePersistenceDecision(reseal(missingBranch))).toThrow("EVENT_INTELLIGENCE_PERSISTENCE_FK_DESCRIPTOR_INVALID");
   });
 });
