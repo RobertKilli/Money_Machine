@@ -65,18 +65,28 @@ policy; corroboration counts origin groups, not URLs.
 Claim comparison uses canonical legal issuer, canonical asset representation,
 event type, form/item, lifecycle, binding state, amount classification/value,
 currency, signing/expected/completion dates, correction reference, and
-extraction version. Headline, ticker, symbol, amount, or date alone cannot
-deduplicate. Different issuers/assets/event types are different events;
-conflicting lifecycle or populated material is a conflict. No majority vote,
-newest-wins, highest-tier-only, first-match, or largest-value rule is used.
+extraction version. In v1, only the same immutable source claim or an explicit
+correction edge establishes event identity. The fixture claim contract has no
+stable agreement/transaction reference, so two different claims with matching
+issuer, asset, date and amount return `INSUFFICIENT_IDENTITY`; they are never
+deduplicated as one event. Headline, ticker, symbol, amount, or date alone
+cannot deduplicate. No majority vote, newest-wins, highest-tier-only,
+first-match, or largest-value rule is used.
 
-`evaluationAsOf` is the evidence cutoff. Evidence published after it or older
-than the policy freshness window blocks evaluation. `evaluatedAt` and receipt
+`evaluationAsOf` is the evidence cutoff. A policy reviewed/effective after the
+cutoff, evidence published after it, or evidence older than the policy
+freshness window blocks evaluation. In this fixture-backed version, claims
+are bound only to SEC filing artifacts; a caller cannot relabel the same
+artifact as journalism, issuer publication, wire, or exchange material to
+manufacture an independent origin. Additional source kinds require their own
+authenticated artifact and claim contracts. `evaluatedAt` and receipt
 time are recorded separately and do not affect result fingerprint when the
 cutoff and source material are unchanged. An origin retraction produces
-`RETRACTED`; a correction produces `CORRECTED` until a separately complete
-current lineage can be evaluated; missing lineage is `INCOMPLETE`, and
-correction forks are `CONFLICT`. Original material is never overwritten.
+`RETRACTED`; v1 conservatively returns `CORRECTED` whenever corrected source
+material is present. It does not yet select a current claim from amendment
+lineage. Missing lineage is `INCOMPLETE`, and correction forks are
+`CONFLICT`. Original material is never overwritten. Current-claim selection
+for a complete amendment chain remains a blocker for a later policy revision.
 
 The included lifecycle guards distinguish 8-K Item 1.01 definitive agreement
 disclosure from Item 2.01 completion disclosure. A completed purchase requires
@@ -114,3 +124,21 @@ append-only historical results, resolves complete correction lineage, and
 audits approvals. It must preserve the distinction between issuer disclosure
 and externally verified facts. Production acquisition, event authority,
 persistence, signal generation, and trading remain blocked.
+
+## Dependency security review (2026-10-01)
+
+The lockfile moves installed `next` and its pinned `@next/env`/platform SWC
+packages from 16.3.4 to 16.3.8. The existing `package.json` range
+`^16.3.4` already admits 16.3.8, so no manifest range change is needed. The
+lockfile records the 16.3.8 tarball integrity values; no overrides or
+resolutions were added and no force audit fix was used.
+
+The Next.js maintainers' `Remote Code Execution in next/og ImageResponse`
+advisory (GHSA-vcvr-r3jv-pc5j, CVE-2026-94545; checked 2026-10-01) lists
+`>=16.2.0 <16.3.6` as affected and 16.3.6 as the first patched version. The
+advisory scopes impact to Node `ImageResponse` use with attacker-controlled
+SVG content, attributes, or styles; it says Edge implementation and apps
+without those inputs are not affected. Version 16.3.8 is above that patched
+version. The official September 2026 security release separately says 16.3.8
+addresses the delayed critical and high-severity fixes for that release.
+Sources: [Next.js advisory, “Remote Code Execution in next/og ImageResponse”](https://github.com/vercel/next.js/security/advisories/GHSA-vcvr-r3jv-pc5j), checked 2026-10-01; [Next.js, “September 2026 Security Release”](https://nextjs.org/blog/september-2026-security-release), checked 2026-10-01.

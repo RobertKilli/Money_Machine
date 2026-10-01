@@ -137,8 +137,18 @@ export function compareEventClaims(a:EventClaimEvidence,b:EventClaimEvidence):"S
   if(!isAuthenticEventClaimEvidence(a)||!isAuthenticEventClaimEvidence(b)) return "INVALID";
   const x=claimMaterial(a.sourceClaim,a.mappedClaim),y=claimMaterial(b.sourceClaim,b.mappedClaim);
   if(!x.issuer||!x.asset||!y.issuer||!y.asset) return "INSUFFICIENT_IDENTITY";
+  // Matching descriptive fields do not identify a transaction. Only the same
+  // immutable extracted claim or an explicit correction edge establishes that
+  // two claims concern the same event in v1. This fixture grammar has no
+  // independently extracted agreement reference, so do not infer one.
+  if(a.sourceClaim.fingerprint===b.sourceClaim.fingerprint&&a.sourceClaim.claimId===b.sourceClaim.claimId) return "SAME_EVENT_SAME_CLAIM";
+  const correctionRelated=a.sourceClaim.correctionOfClaimId===b.sourceClaim.claimId||b.sourceClaim.correctionOfClaimId===a.sourceClaim.claimId;
+  if(!correctionRelated) {
+    if(x.issuer!==y.issuer||x.asset!==y.asset||x.event!==y.event) return "DIFFERENT_EVENT";
+    return "INSUFFICIENT_IDENTITY";
+  }
   if(x.issuer!==y.issuer||x.asset!==y.asset||x.event!==y.event) return "DIFFERENT_EVENT";
-  if(digest(x)===digest(y)) return "SAME_EVENT_SAME_CLAIM";
+  if(digest(x)===digest(y)) return "SAME_EVENT_COMPATIBLE_CLAIM";
   const sameScope=x.form===y.form&&x.item===y.item&&x.lifecycle===y.lifecycle&&x.binding===y.binding&&x.correctionOf===y.correctionOf;
   if(!sameScope) return "SAME_EVENT_CONFLICTING_CLAIM";
   const compared:[keyof typeof x,keyof typeof x][]=[["amountClass","amountClass"],["amount","amount"],["currency","currency"],["signing","signing"],["completion","completion"],["expected","expected"]];
@@ -161,11 +171,16 @@ export function evaluateEventCorroboration(input:{policy:EventPolicy;asOf:string
     const evaluatedAt=input.evaluatedAt??asOf;
     if(p.authoritySubject!=="ISSUER_DISCLOSURE") return result("UNSUPPORTED_AUTHORITY_SUBJECT",p,asOf,s,{blockers:["AUTHORITY_SUBJECT_UNSUPPORTED"]},evaluatedAt);
     if(p.status==="INVALID") return result("INVALID",p,asOf,s,{blockers:["POLICY_INVALID"]},evaluatedAt);
-    if(p.status!=="ACTIVE"||p.effectiveFrom>asOf||p.expiresAt<=asOf||s.claims.length===0||s.origins.length===0) return result("INCOMPLETE",p,asOf,s,{blockers:["POLICY_OR_INPUT_NOT_ACTIVE"]},evaluatedAt);
+    if(p.status!=="ACTIVE"||p.reviewedAt>asOf||p.effectiveFrom>asOf||p.expiresAt<=asOf||s.claims.length===0||s.origins.length===0) return result("INCOMPLETE",p,asOf,s,{blockers:["POLICY_OR_INPUT_NOT_ACTIVE"]},evaluatedAt);
     if(Object.values(p.approvals).some(v=>v!=="APPROVED")||p.blockers.length) return result("INCOMPLETE",p,asOf,s,{blockers:["POLICY_APPROVAL_OR_BLOCKER"]},evaluatedAt);
     const claimFps=new Set(s.claims.map(x=>x.mappedClaim.sourceArtifactFingerprint));
     const unlinked=s.origins.filter(o=>!claimFps.has(o.sourceArtifactFingerprint));
     if(s.claims.some(c=>!s.origins.some(o=>o.sourceArtifactId===c.mappedClaim.sourceArtifactId&&o.sourceArtifactFingerprint===c.mappedClaim.sourceArtifactFingerprint&&o.issuerId===c.mappedClaim.canonicalIssuerId))||unlinked.some(o=>o.correctionStatus==="ACTIVE"||!o.correctsOriginId||!s.origins.some(parent=>parent.originId===o.correctsOriginId))) return result("INCOMPLETE",p,asOf,s,{blockers:["SOURCE_ORIGIN_CLAIM_LINK_MISSING"]},evaluatedAt);
+    // v1 accepts claims only from the synthetic SEC fixture pipeline. A caller
+    // cannot relabel that same artifact as journalism, a wire, or an issuer
+    // release to manufacture an independent origin group. Other source kinds
+    // need their own authenticated artifact and claim contracts first.
+    if(s.claims.some(c=>s.origins.some(o=>o.sourceArtifactFingerprint===c.mappedClaim.sourceArtifactFingerprint&&o.kind!=="REGULATORY_FILING"))||s.claims.some(c=>!s.origins.some(o=>o.sourceArtifactFingerprint===c.mappedClaim.sourceArtifactFingerprint&&o.kind==="REGULATORY_FILING"&&o.sourceTier==="REGULATORY_FILING"&&o.canonicalPublicationId===c.sourceClaim.accession))) return result("INCOMPLETE",p,asOf,s,{blockers:["ORIGIN_KIND_OR_PUBLICATION_NOT_BOUND_TO_CLAIM"]},evaluatedAt);
     if(s.origins.some(o=>o.publicationAt>asOf||Date.parse(asOf)-Date.parse(o.publicationAt)>p.maxEvidenceAgeSeconds*1000)) return result("INCOMPLETE",p,asOf,s,{blockers:["EVIDENCE_OUTSIDE_TEMPORAL_WINDOW"]},evaluatedAt);
     if(s.claims.some(c=>c.sourceClaim.acceptanceAt>asOf||!s.origins.some(o=>o.sourceArtifactFingerprint===c.mappedClaim.sourceArtifactFingerprint&&o.publicationAt>=c.sourceClaim.acceptanceAt))) return result("INCOMPLETE",p,asOf,s,{blockers:["FILING_NOT_AVAILABLE_AT_CUTOFF"]},evaluatedAt);
     const correctionTargets=s.origins.filter(o=>o.correctionStatus!=="ACTIVE").map(o=>o.correctsOriginId!).filter(Boolean);
@@ -179,7 +194,12 @@ export function evaluateEventCorroboration(input:{policy:EventPolicy;asOf:string
     if(s.origins.some(o=>o.kind==="AGGREGATOR_COPY")&&s.origins.every(o=>o.kind==="AGGREGATOR_COPY"||o.sourceTier==="AGGREGATOR_DISCOVERY")) return result("INCOMPLETE",p,asOf,s,{blockers:["DISCOVERY_ONLY_CANNOT_AUTHORIZE"]},evaluatedAt);
     const first=s.claims[0]!; const identityMismatch=s.claims.some(x=>x.mappedClaim.canonicalIssuerId!==first.mappedClaim.canonicalIssuerId||x.mappedClaim.canonicalLegalEntityId!==first.mappedClaim.canonicalLegalEntityId||x.mappedClaim.canonicalRepresentationId!==first.mappedClaim.canonicalRepresentationId||x.sourceClaim.eventTypeCandidate!==first.sourceClaim.eventTypeCandidate);
     if(identityMismatch) return result("CONFLICT",p,asOf,s,{blockers:["EVENT_SCOPE_MISMATCH"],conflicts:["ISSUER_ASSET_OR_EVENT_TYPE"]},evaluatedAt);
-    for(let i=1;i<s.claims.length;i++) if(compareEventClaims(first,s.claims[i]!)==="SAME_EVENT_CONFLICTING_CLAIM") return result("CONFLICT",p,asOf,s,{blockers:["CLAIM_CONFLICT"],conflicts:["MATERIAL_CLAIM_FIELDS"]},evaluatedAt);
+    for(let i=1;i<s.claims.length;i++) {
+      const comparison=compareEventClaims(first,s.claims[i]!);
+      if(comparison==="SAME_EVENT_CONFLICTING_CLAIM") return result("CONFLICT",p,asOf,s,{blockers:["CLAIM_CONFLICT"],conflicts:["MATERIAL_CLAIM_FIELDS"]},evaluatedAt);
+      if(comparison==="INSUFFICIENT_IDENTITY"||comparison==="INVALID") return result("INCOMPLETE",p,asOf,s,{blockers:["EVENT_IDENTITY_INSUFFICIENT"]},evaluatedAt);
+      if(comparison==="DIFFERENT_EVENT") return result("CONFLICT",p,asOf,s,{blockers:["MULTIPLE_EVENT_CANDIDATES"],conflicts:["DIFFERENT_EVENTS_IN_SEALED_SET"]},evaluatedAt);
+    }
     if(s.claims.some(x=>!p.supportedEventTypes.includes(x.sourceClaim.eventTypeCandidate)||!p.supportedLifecycleStatuses.includes(x.sourceClaim.lifecycleStatusCandidate))) return result("INCOMPLETE",p,asOf,s,{blockers:["EVENT_OR_LIFECYCLE_NOT_SUPPORTED"]},evaluatedAt);
     if(s.claims.some(x=>x.sourceClaim.form!=="8-K"||x.sourceClaim.itemCode==="OTHER"||x.sourceClaim.eventTypeCandidate==="PURCHASE_COMPLETED"&&(x.sourceClaim.itemCode!=="2.01"||x.sourceClaim.completionDate===null||x.sourceClaim.completionDate>asOf.slice(0,10))||x.sourceClaim.eventTypeCandidate==="DEFINITIVE_PURCHASE_AGREEMENT"&&(x.sourceClaim.itemCode!=="1.01"||x.sourceClaim.bindingStatus!=="BINDING"||x.sourceClaim.completionDate!==null||x.sourceClaim.signingDate!==null&&x.sourceClaim.signingDate>asOf.slice(0,10)))) return result("INCOMPLETE",p,asOf,s,{blockers:["FORM_ITEM_LIFECYCLE_MATERIAL_MISMATCH"]},evaluatedAt);
     const groups=new Set(s.origins.filter(o=>o.kind!=="AGGREGATOR_COPY"&&o.kind!=="ISSUER_ATTRIBUTED_NEWSWIRE"&&o.sourceTier!=="AGGREGATOR_DISCOVERY").map(originGroup));
