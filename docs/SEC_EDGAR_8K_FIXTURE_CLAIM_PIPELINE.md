@@ -60,3 +60,9 @@ authoritative event. Production mapping registries remain empty. See
 That follow-on resolves mappings at the explicit claim `announcementAt`,
 requires the resolver witnesses to carry that same `asOf`, and includes filing
 package/artifact plus mention-binding fingerprints in the mapped-claim identity.
+
+The next policy layer evaluates mapped claims for issuer-disclosure
+eligibility after checking source origins, duplicate delivery, lifecycle,
+correction, cutoff and conflict rules. It does not issue event authority.
+`EXTERNALLY_VERIFIED_EVENT_FACT` remains unsupported. See
+[EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY](EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md).

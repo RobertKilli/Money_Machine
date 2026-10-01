@@ -127,3 +127,9 @@ source qualification, issuer and asset review provenance, correction and
 lifecycle resolution, conflict handling, and required approvals must be
 resolved before an authority issuer exists. Persistence, acquisition, and
 signal generation remain separately scoped future decisions.
+
+The corroboration policy evaluates issuer-disclosure eligibility from trusted
+mapped claims and source-origin groups. It does not convert mention mapping
+into event truth or write authority. Corrections remain append-only; an
+incomplete correction chain returns a blocked/corrected result. See
+[EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY](EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md).
