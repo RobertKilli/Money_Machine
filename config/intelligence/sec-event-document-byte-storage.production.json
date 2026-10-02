@@ -1,0 +1,13 @@
+﻿{
+  "contractVersion": "sec-event-document-byte-storage-production-config/v1",
+  "status": "BLOCKED_BACKEND_UNAPPROVED",
+  "selectedCandidate": "A_POSTGRES_BYTEA",
+  "enabled": false,
+  "liveAcquisition": "BLOCKED",
+  "rawByteStorage": "NOT_APPROVED",
+  "normalizedStorage": "NOT_APPROVED",
+  "authorityPersistence": "NOT_APPROVED",
+  "retention": "NOT_APPROVED",
+  "redistribution": "NOT_APPROVED",
+  "commercialUse": "NOT_APPROVED"
+}

@@ -896,3 +896,7 @@ its independent existing `AssetMappingRevision` lineage; issuer evidence must
 gain its own structured, fingerprint-bound provenance. Acquisition, artifact
 and lineage persistence, event authority, scheduler, signals and trading stay
 blocked.
+
+## SEC document byte storage decision
+
+The exact-byte backend candidate is PostgreSQL `bytea` with its immutable manifest and package membership in one transaction, under local caps of 8 MiB/document, 64 MiB/package and 32 documents/package. This is design-only: no bytes, schema, migration, adapter or acquisition are implemented. Production remains `BLOCKED_BACKEND_UNAPPROVED`; raw storage, retention, redistribution, commercial use and authority persistence remain separately unapproved. See [SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md](SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md).
