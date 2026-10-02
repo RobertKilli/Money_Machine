@@ -1,6 +1,6 @@
 # SEC EDGAR document artifact authority conflicts
 
-Checkpoint evidence verified locally on 2026-10-02 at baseline `52c51b91cb2b62b69adc702bae57342d6c4d843a`, before finalization commit/push. Production remains `BLOCKED_BACKEND_UNAPPROVED`. The subsequent complete A–G runs and their exact maps are in the [runtime verification report](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_VERIFICATION.md).
+Historical checkpoint evidence (the later [independent final review](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_FINAL_REVIEW.md) replaces raw-material construction with a test-compiler-only constructor). Checkpoint verified locally on 2026-10-02 at baseline `52c51b91cb2b62b69adc702bae57342d6c4d843a`, before finalization commit/push. Production remains `BLOCKED_BACKEND_UNAPPROVED`. The subsequent complete A–G runs and their exact maps are in the [runtime verification report](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_VERIFICATION.md).
 
 The real fixture application and PostgreSQL UoW first commit this baseline artifact. Every negative case then compares the entire artifact row (including material and joined profile binding) from a fresh connection to its pre-transaction snapshot:
 

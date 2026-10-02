@@ -1,5 +1,7 @@
 # SEC EDGAR provenance runtime verification
 
+This report preserves the pre-review checkpoint evidence. The [independent final review](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_FINAL_REVIEW.md) supersedes its catalog/test totals and trust/cycle descriptions after targeted fixes.
+
 Verified 2026-10-02 in `feat/sec-edgar-event-source-provenance-runtime`, baseline/start `52c51b91cb2b62b69adc702bae57342d6c4d843a`. Local disposable PostgreSQL **17.6**, Supabase CLI **2.117.0**, full 37-migration chain, no seed. Two final complete integration runs passed **55/55 each without reset between them**. A?C and D?F remain the approved checkpoints; changes to their test IDs only correct concrete repeat-run conflicts.
 
 Production is `BLOCKED_BACKEND_UNAPPROVED`. Evidence is synthetic and NON_AUTHORITATIVE. No hosted Supabase, Storage, SEC/provider acquisition, credential resolution, deployment, scheduler, event-authority-write, signal or trading operation was performed.
@@ -14,7 +16,7 @@ Production is `BLOCKED_BACKEND_UNAPPROVED`. Evidence is synthetic and NON_AUTHOR
 | A | Existing filing ID with changed CIK/accession/form | authoritative reread | `SEC_EVENT_FILING_IDENTITY_AUTHORITY_CONFLICT`; no SQLSTATE | full transaction |
 | A | 8-K/A parent missing / cross-CIK / second child | immediate FK / UNIQUE INSERT | 23503 / 23505; actual catalog names below | full transaction |
 | A | Parent filing date later than new child filing date | both identities, artifacts, packages and members INSERT successfully; deferred COMMIT | 23514; `SEC_EVENT_AMENDMENT_CHRONOLOGY_INVALID`, `sec_event_assert_amendment_parent` | all eleven counts unchanged |
-| A | Cycle | `UNREACHABLE_BY_CONSTRUCTION` | immediate composite parent FK, immutable rows, parent-before-child protocol; recursive deferred check retained as defense | no constraint weakening |
+| A | Cycle | authentic adapter/UoW construction cannot create it; direct multi-row SQL can | final review proves INSERT success then 23514 `SEC_EVENT_AMENDMENT_CYCLE` at COMMIT; immediate FK alone is insufficient | full rollback |
 | B | Request profile/fingerprint/filing scope, attempt request, receipt attempt/request/package scope | composite immediate FK INSERT | 23503; actual constraints below | all eleven counts unchanged |
 | B | Duplicate attempt ordinal | UNIQUE INSERT | 23505 | full transaction |
 | B | Same request/attempt/receipt ID with changed material | authoritative reread of every parent column + JSON material | corresponding `SEC_EVENT_ACQUISITION_*_AUTHORITY_CONFLICT`; no SQLSTATE | full transaction |
@@ -932,7 +934,7 @@ The final commit is followed by detached tracked-only `npm ci` / `npm run build`
 
 ## Scope, seam, memory and approvals
 
-The private artifact writer is accessible only through the integration Vitest loader, which appends an export to a test module copy; production exports no factory/trust bypass or WeakSet mutator. No production source imports the virtual module. The normal UoW guard checks same-runtime trust before BEGIN. Detached application bundles are inspected for the virtual module/test sentinel markers. See [artifact conflict evidence](SEC_EDGAR_DOCUMENT_ARTIFACT_AUTHORITY_CONFLICTS.md) for coordinated relational scopes.
+The private artifact writer is accessible only through the integration Vitest loader, which appends an export to a test module copy; production exports no unauthenticated factory/trust bypass or WeakSet mutator. No production source imports the virtual module. The normal UoW guard checks same-runtime trust before BEGIN. Detached application bundles are inspected for the virtual module/test sentinel markers. See [artifact conflict evidence](SEC_EDGAR_DOCUMENT_ARTIFACT_AUTHORITY_CONFLICTS.md) for coordinated relational scopes.
 
 Memory admission reserves `2 * package octets + 4 * largest document octets <= 96 MiB`. The independent 64 MiB package ceiling is not a promise that every package beneath it fits the memory budget. This is byte-payload reservation, not a measured process-RSS cap. A sealed body has one private snapshot shared by its material/authority projections; driver encoding/readback is bounded to one document at a time. No PostgreSQL streaming API is assumed. Additional process overhead and actual production provisioning remain operational approval work.
 

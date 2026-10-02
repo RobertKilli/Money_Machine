@@ -1,10 +1,11 @@
+import { createSecRuntimeBatch } from "test-only:sec-runtime-constructor";
 import { afterAll, describe, expect, it } from "vitest";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { runSecEdgar8kFixtureClaimPipeline } from "@/domain/intelligence/sec-edgar-8k-fixture-claim-pipeline";
 import { adaptSecEdgarFixtureToEntityBytes } from "@/domain/intelligence/sec-edgar-8k-fixture-claim-pipeline";
-import { createSecRuntimeBatch, isTrustedSecRuntimeBatch, parseSecRuntimeSourceProfile } from "@/domain/intelligence/sec-edgar-event-source-provenance-runtime";
+import { createSecRuntimeBatch as createAuthenticatedBatch, isTrustedSecRuntimeBatch, parseSecRuntimeSourceProfile } from "@/domain/intelligence/sec-edgar-event-source-provenance-runtime";
 import { canonicalSha256 } from "@/domain/intelligence/ingestion-provenance";
 import { createCanonicalSecEventSourceProvenanceDecision } from "@/domain/intelligence/sec-edgar-event-source-provenance-decision";
 import { persistSyntheticSecEdgarFixtureProvenance } from "@/application/intelligence/persist-sec-edgar-event-source-provenance";
@@ -26,8 +27,9 @@ const counts=async(sql:ReturnType<typeof connect>)=>{const rows=await sql`select
 type PgFailure=Error&{code?:string;constraint_name?:string;column_name?:string;table_name?:string;where?:string};
 type Tx=postgres.TransactionSql;
 async function expectDbFailure(name:string,expectedState:string,expectedConstraint:string,operation:(tx:Tx)=>Promise<unknown>){
-  const writer=connect();const before=await counts(writer);let failure:PgFailure|undefined;
-  try{await writer.begin(async tx=>operation(tx));}catch(error){failure=error as PgFailure;}finally{await writer.end({timeout:5});}
+  const writer=connect();const before=await counts(writer);let failure:PgFailure|undefined;let insertsSucceeded=false;
+  try{await writer.begin(async tx=>{await operation(tx);insertsSucceeded=true;});}catch(error){failure=error as PgFailure;}finally{await writer.end({timeout:5});}
+  expect(insertsSucceeded,`${name}: failure during INSERT`).toBe(false);
   expect(failure?.code,`${name}: SQLSTATE`).toBe(expectedState);
   expect(failure?.constraint_name??failure?.column_name,`${name}: actual constraint/column`).toBe(expectedConstraint);
   expect(failure?.message,`${name}: sanitized database error`).not.toMatch(/ITEM\||SYNTHETIC FIXTURE|agreement\.txt|[A-Za-z0-9+/]{80,}/);
@@ -36,8 +38,9 @@ async function expectDbFailure(name:string,expectedState:string,expectedConstrai
   return {name,expectedState,actualState:failure?.code,constraint:failure?.constraint_name??failure?.column_name,stage:"INSERT",before,after:before};
 }
 async function expectDeferredDbFailure(name:string,expectedState:string,invariant:string,functionName:string,operation:(tx:Tx)=>Promise<unknown>){
-  const writer=connect();const before=await counts(writer);let failure:PgFailure|undefined;
-  try{await writer.begin(async tx=>operation(tx));}catch(error){failure=error as PgFailure;}finally{await writer.end({timeout:5});}
+  const writer=connect();const before=await counts(writer);let failure:PgFailure|undefined;let insertsSucceeded=false;
+  try{await writer.begin(async tx=>{await operation(tx);insertsSucceeded=true;});}catch(error){failure=error as PgFailure;}finally{await writer.end({timeout:5});}
+  expect(insertsSucceeded,`${name}: INSERTs must succeed before COMMIT failure`).toBe(true);
   expect(failure?.code,`${name}: SQLSTATE`).toBe(expectedState);expect(failure?.message,`${name}: invariant`).toContain(invariant);expect(failure?.where,`${name}: function`).toContain(functionName);
   const verify=connect();let after:Record<string,number>;try{after=await counts(verify);expect(after,`${name}: all-table rollback`).toEqual(before);}finally{await verify.end({timeout:5});}
   console.info("SEC_TRUTH_TABLE_COUNTS",JSON.stringify({case:name,before,after,sqlState:failure?.code,functionName,stage:"COMMIT"}));
@@ -84,8 +87,8 @@ async function insertPackageCandidate(tx:Tx,batch:RuntimeBatch,options:Readonly<
   for(let i=0;i<docs.length;i++){const doc=docs[i]!;const ordinal=options.ordinals?.[i]??i;const material={packageId,packageFingerprint:fingerprint,ordinal,artifactId:doc.artifactId,fingerprint:doc.fingerprint,role:doc.role,documentType:doc.documentType,sequence:doc.sequence,locator:doc.locator,isPrimary:doc.role==="PRIMARY_DOCUMENT"};if(options.idempotent)await tx`insert into public.sec_event_package_document_members(package_id,package_fingerprint,filing_identity_id,member_ordinal,artifact_id,artifact_fingerprint,document_role,document_type,sequence_ordinal,canonical_locator,is_primary,material) values(${packageId},${fingerprint},${batch.filingIdentityId},${ordinal},${doc.artifactId},${doc.fingerprint},${doc.role},${doc.documentType},${doc.sequence},${doc.locator},${doc.role==="PRIMARY_DOCUMENT"},${tx.json(material)}) on conflict do nothing`;else await tx`insert into public.sec_event_package_document_members(package_id,package_fingerprint,filing_identity_id,member_ordinal,artifact_id,artifact_fingerprint,document_role,document_type,sequence_ordinal,canonical_locator,is_primary,material) values(${packageId},${fingerprint},${batch.filingIdentityId},${ordinal},${doc.artifactId},${doc.fingerprint},${doc.role},${doc.documentType},${doc.sequence},${doc.locator},${doc.role==="PRIMARY_DOCUMENT"},${tx.json(material)})`;}
   return {packageId,fingerprint};
 }
-async function insertLineageCandidate(tx:Tx,batch:RuntimeBatch,options:Readonly<{name:string;docs:readonly RuntimeDoc[];profileId?:string;profileFingerprint?:string;memberCount?:number;ordinals?:readonly number[];idempotent?:boolean}>){
-  const profileId=options.profileId??batch.material.profileId;const profileFingerprint=options.profileFingerprint??batch.profileFingerprint;const memberCount=options.memberCount??options.docs.length;const refs=options.docs.map(d=>({packageId:batch.packageId,packageFingerprint:batch.packageFingerprint,packageMemberOrdinal:d.sequence,artifactId:d.artifactId,artifactFingerprint:d.fingerprint}));const lineageId=canonicalSha256({sourceProfileId:profileId,orderedPackageDocumentMemberReferences:refs,memberCount});const rootFilingIdentityId=batch.amendmentParentFilingIdentityId??batch.filingIdentityId;const amendmentParentChain=batch.amendmentParentFilingIdentityId?[batch.amendmentParentFilingIdentityId,batch.filingIdentityId]:[batch.filingIdentityId];const material={lineageId,sourceProfileId:profileId,sourceProfileFingerprint:profileFingerprint,orderedPackageDocumentMemberSet:refs,memberCount,rootFilingIdentityId,amendmentParentChain};const fingerprint=canonicalSha256({lineageId,sourceProfileId:profileId,sourceProfileFingerprint:profileFingerprint,orderedPackageDocumentMemberSet:refs,memberCount,rootFilingIdentityId,amendmentParentChain});
+async function insertLineageCandidate(tx:Tx,batch:RuntimeBatch,options:Readonly<{name:string;docs:readonly RuntimeDoc[];profileId?:string;profileFingerprint?:string;rootFilingIdentityId?:string;amendmentParentChain?:readonly string[];memberCount?:number;ordinals?:readonly number[];idempotent?:boolean}>){
+  const profileId=options.profileId??batch.material.profileId;const profileFingerprint=options.profileFingerprint??batch.profileFingerprint;const memberCount=options.memberCount??options.docs.length;const refs=options.docs.map(d=>({packageId:batch.packageId,packageFingerprint:batch.packageFingerprint,packageMemberOrdinal:d.sequence,artifactId:d.artifactId,artifactFingerprint:d.fingerprint}));const lineageId=canonicalSha256({sourceProfileId:profileId,orderedPackageDocumentMemberReferences:refs,memberCount});const rootFilingIdentityId=options.rootFilingIdentityId??batch.amendmentParentFilingIdentityId??batch.filingIdentityId;const amendmentParentChain=options.amendmentParentChain??(batch.amendmentParentFilingIdentityId?[batch.amendmentParentFilingIdentityId,batch.filingIdentityId]:[batch.filingIdentityId]);const material={lineageId,sourceProfileId:profileId,sourceProfileFingerprint:profileFingerprint,orderedPackageDocumentMemberSet:refs,memberCount,rootFilingIdentityId,amendmentParentChain};const fingerprint=canonicalSha256({lineageId,sourceProfileId:profileId,sourceProfileFingerprint:profileFingerprint,orderedPackageDocumentMemberSet:refs,memberCount,rootFilingIdentityId,amendmentParentChain});
   if(options.idempotent)await tx`insert into public.sec_event_source_lineages(lineage_id,fingerprint,profile_id,profile_fingerprint,member_count,member_set_fingerprint,material) values(${lineageId},${fingerprint},${profileId},${profileFingerprint},${memberCount},${fingerprint},${tx.json(material)}) on conflict do nothing`;else await tx`insert into public.sec_event_source_lineages(lineage_id,fingerprint,profile_id,profile_fingerprint,member_count,member_set_fingerprint,material) values(${lineageId},${fingerprint},${profileId},${profileFingerprint},${memberCount},${fingerprint},${tx.json(material)})`;
   for(let i=0;i<options.docs.length;i++){const d=options.docs[i]!;const ordinal=options.ordinals?.[i]??i;const m={lineageId,ordinal,packageId:batch.packageId,packageFingerprint:batch.packageFingerprint,packageMemberOrdinal:d.sequence,artifactId:d.artifactId,artifactFingerprint:d.fingerprint};if(options.idempotent)await tx`insert into public.sec_event_source_lineage_members(lineage_id,member_ordinal,package_id,package_fingerprint,package_member_ordinal,artifact_id,artifact_fingerprint,material) values(${lineageId},${ordinal},${batch.packageId},${batch.packageFingerprint},${d.sequence},${d.artifactId},${d.fingerprint},${tx.json(m)}) on conflict do nothing`;else await tx`insert into public.sec_event_source_lineage_members(lineage_id,member_ordinal,package_id,package_fingerprint,package_member_ordinal,artifact_id,artifact_fingerprint,material) values(${lineageId},${ordinal},${batch.packageId},${batch.packageFingerprint},${d.sequence},${d.artifactId},${d.fingerprint},${tx.json(m)})`;}
   return {lineageId,fingerprint};
@@ -93,6 +96,73 @@ async function insertLineageCandidate(tx:Tx,batch:RuntimeBatch,options:Readonly<
 
 describe("SEC EDGAR provenance PostgreSQL runtime",()=>{
   const sql=connect();afterAll(async()=>sql.end({timeout:5}));
+  it("review: serializes concurrently arriving parent/child packages at deferred chronology validation",async()=>{
+    await persistSyntheticSecEdgarFixtureProvenance(fixture(0),url!);
+    const parent=artifactConflictBatch(adaptSecEdgarFixtureToEntityBytes(fixture(0))!,"review-package-race-parent");
+    const seed=artifactConflictBatch(parent.material,"review-package-race-child");
+    const child=createSecRuntimeBatch({...seed.material,form:"8-K/A",amendmentParent:parent.material.accession,filingDate:"2000-01-01",acceptanceAt:"2000-01-01T12:00:00.000Z"});
+    await sql.begin(async tx=>{for(const batch of [parent,child]){const m=batch.material;await tx`insert into public.sec_event_filing_identities(filing_identity_id,profile_id,profile_fingerprint,cik,accession_number,form,amendment_parent_filing_identity_id,material) values(${batch.filingIdentityId},${m.profileId},${batch.profileFingerprint},${m.cik},${m.accession},${m.form},${batch.amendmentParentFilingIdentityId},${tx.json({sourceProfileId:m.profileId,sourceProfileFingerprint:batch.profileFingerprint,cik:m.cik,accessionNumber:m.accession,form:m.form})})`;}});
+    const before=await counts(sql);let arrived=0;let release!:()=>void;const barrier=new Promise<void>(resolve=>{release=resolve;});
+    const observe=async(phase:string)=>{if(phase==="BEFORE_COMMIT"){arrived++;if(arrived===2)release();await barrier;}};
+    const a=createSecEventProvenanceUnitOfWork(url!),b=createSecEventProvenanceUnitOfWork(url!);
+    try{
+      const outcomes=await Promise.allSettled([a.persist(parent,observe),b.persist(child,observe)]);
+      expect(arrived).toBe(2);expect(outcomes.filter(x=>x.status==="fulfilled")).toHaveLength(1);
+      const failure=outcomes.find(x=>x.status==="rejected");if(failure?.status!=="rejected")throw new Error("SEC_TEST_EXPECTED_CHRONOLOGY_FAILURE");
+      expect(failure.reason.code).toBe("23514");expect(failure.reason.message).toBe("SEC_EVENT_AMENDMENT_CHRONOLOGY_INVALID");expect(failure.reason.where).toContain("sec_event_assert_amendment_parent");
+      const fresh=connect();try{const after=await counts(fresh);const delta:Record<string,number>={sec_event_source_profiles:0,sec_event_filing_identities:0,sec_event_acquisition_requests:1,sec_event_acquisition_attempts:1,sec_event_content_blobs:1,sec_event_document_artifacts:3,sec_event_filing_packages:1,sec_event_package_document_members:3,sec_event_acquisition_receipts:1,sec_event_source_lineages:1,sec_event_source_lineage_members:3};expect(after).toEqual(Object.fromEntries(tableNames.map(table=>[table,before[table]!+delta[table]!])));console.info("SEC_REVIEW_COUNTS",JSON.stringify({case:"concurrent amendment packages",before,after,sqlState:failure.reason.code,stage:"COMMIT",functionName:"sec_event_assert_amendment_parent",fulfilled:1,rejected:1}));}finally{await fresh.end({timeout:5});}
+    }finally{await Promise.all([a.close(),b.close()]);}
+  });
+  it.each(["root","chain"])("review: rejects contradictory lineage amendment %s context",async dimension=>{
+    const batch=artifactConflictBatch(adaptSecEdgarFixtureToEntityBytes(fixture(0))!,`review-lineage-${dimension}`);
+    const uow=createSecEventProvenanceUnitOfWork(url!);try{await uow.persist(batch);}finally{await uow.close();}
+    await expectDeferredDbFailure(`review lineage ${dimension} context`,"23514","SEC_EVENT_LINEAGE_CONTEXT_INVALID","sec_event_assert_lineage_seal",tx=>insertLineageCandidate(tx,batch,{name:caseId(`lineage-${dimension}`),docs:[batch.documents[1]!],...(dimension==="root"?{rootFilingIdentityId:caseId("wrong-root")}:{amendmentParentChain:[caseId("wrong-chain")]})}));
+  });
+  it("review: serializes a new identical receipt on an already committed request",async()=>{
+    const baseline=artifactConflictBatch(adaptSecEdgarFixtureToEntityBytes(fixture(0))!,"review-receipt-race");
+    const baselineUow=createSecEventProvenanceUnitOfWork(url!);try{await baselineUow.persist(baseline);}finally{await baselineUow.close();}
+    const batch=createSecRuntimeBatch({...baseline.material,receipt:{...baseline.material.receipt,receivedAt:"2026-10-06T12:00:00.000Z"}});
+    const before=await counts(sql);const left=connect(),right=connect();let releaseLeft!:()=>void;let leftArrived!:()=>void;let leftCommitted!:()=>void;
+    const leftGate=new Promise<void>(resolve=>{releaseLeft=resolve;});const arrival=new Promise<void>(resolve=>{leftArrived=resolve;});const committed=new Promise<void>(resolve=>{leftCommitted=resolve;});
+    const first=left.begin(async tx=>persistSecEventProvenance(tx as never,batch,async phase=>{if(phase==="REQUEST"){leftArrived();await leftGate;}}));
+    void first.then(()=>leftCommitted(),()=>leftCommitted());
+    try{
+      await arrival;
+      const second=right.begin(async tx=>{
+        const ordered=new Proxy(tx,{apply:async(target,thisArg,args)=>{
+          const query=(args[0] as TemplateStringsArray).join("?");
+          if(query.startsWith("select fingerprint,idempotency_key")&&query.includes("for update"))releaseLeft();
+          const rows=await Reflect.apply(target,thisArg,args);
+          if(query.startsWith("select attempt_ordinal from")){releaseLeft();await committed;}
+          return rows;
+        }});
+        return persistSecEventProvenance(ordered as never,batch);
+      });
+      const results=await Promise.all([first,second]);expect(results[0]).toEqual(results[1]);
+      const fresh=connect();try{const after=await counts(fresh);const expected={...before,sec_event_acquisition_attempts:before.sec_event_acquisition_attempts!+1,sec_event_acquisition_receipts:before.sec_event_acquisition_receipts!+1};expect(after).toEqual(expected);console.info("SEC_REVIEW_COUNTS",JSON.stringify({case:"new identical receipt race",before,after,results}));}finally{await fresh.end({timeout:5});}
+    }finally{releaseLeft();await first.catch(()=>{});await Promise.all([left.end({timeout:5}),right.end({timeout:5})]);}
+  });
+  it("review: rejects a late amendment package after filing identities were already committed",async()=>{
+    const parent=artifactConflictBatch(adaptSecEdgarFixtureToEntityBytes(fixture(0))!,"review-late-parent");
+    const uow=createSecEventProvenanceUnitOfWork(url!);try{await uow.persist(parent);}finally{await uow.close();}
+    const seed=artifactConflictBatch(parent.material,"review-late-child");
+    const child=createSecRuntimeBatch({...seed.material,form:"8-K/A",amendmentParent:parent.material.accession,filingDate:"2000-01-01",acceptanceAt:"2000-01-01T12:00:00.000Z"});
+    const material={sourceProfileId:child.material.profileId,sourceProfileFingerprint:child.profileFingerprint,cik:child.material.cik,accessionNumber:child.material.accession,form:child.material.form};
+    await sql.begin(async tx=>{await tx`insert into public.sec_event_filing_identities(filing_identity_id,profile_id,profile_fingerprint,cik,accession_number,form,amendment_parent_filing_identity_id,material) values(${child.filingIdentityId},${child.material.profileId},${child.profileFingerprint},${child.material.cik},${child.material.accession},${child.material.form},${parent.filingIdentityId},${tx.json(material)})`;});
+    await expectDeferredDbFailure("review late amendment package","23514","SEC_EVENT_AMENDMENT_CHRONOLOGY_INVALID","sec_event_assert_amendment_parent",tx=>persistSecEventProvenance(tx as never,child));
+  });
+  it("review: rejects a copied member document type that contradicts its immutable artifact",async()=>{
+    const batch=createSecRuntimeBatch(adaptSecEdgarFixtureToEntityBytes(fixture(0))!);await persistSyntheticSecEdgarFixtureProvenance(fixture(0),url!);
+    const docs=batch.documents.map((d,i)=>i===1?{...d,documentType:"CONTRADICTING-TYPE"}:d);
+    await expectDeferredDbFailure("review member document type","23514","SEC_EVENT_PACKAGE_UNSEALED","sec_event_assert_package_seal",tx=>insertPackageCandidate(tx,batch,{name:caseId("review-member-type"),docs}));
+  });
+  it("review: rejects a two-row INSERT amendment cycle without bypassing any constraint",async()=>{
+    const profile=`sec-review-cycle-${caseId("profile")}/v1`;const a=caseId("cycle-a"),b=caseId("cycle-b");
+    await expectDeferredDbFailure("review multi-row cycle","23514","SEC_EVENT_AMENDMENT_CYCLE","sec_event_assert_amendment_parent",async tx=>{
+      await insertTestProfile(tx,profile);
+      await tx`insert into public.sec_event_filing_identities(filing_identity_id,profile_id,profile_fingerprint,cik,accession_number,form,amendment_parent_filing_identity_id,material) values(${a},${profile},${"a".repeat(64)},'SYNTH-CIK-0001',${`SYNTH-ACC-${a}`},'8-K/A',${b},${tx.json({case:"cycle-a"})}),(${b},${profile},${"a".repeat(64)},'SYNTH-CIK-0001',${`SYNTH-ACC-${b}`},'8-K/A',${a},${tx.json({case:"cycle-b"})})`;
+    });
+  });
   it.each([
     {name:"provider",field:"provider_id",value:"CONFLICTING_PROVIDER"},
     {name:"endpoint profile",field:"endpoint_profile",value:"CONFLICTING_ENDPOINT"},
@@ -233,7 +303,8 @@ describe("SEC EDGAR provenance PostgreSQL runtime",()=>{
       const filingMaterial={sourceProfileId:scope.profileId,sourceProfileFingerprint:scope.profileFingerprint,cik:natural.material.cik,accessionNumber:natural.material.accession,form:natural.material.form};
       await sql`insert into public.sec_event_filing_identities(filing_identity_id,profile_id,profile_fingerprint,cik,accession_number,form,amendment_parent_filing_identity_id,material) values(${scope.filingIdentityId},${scope.profileId},${scope.profileFingerprint},${natural.material.cik},${natural.material.accession},${natural.material.form},null,${sql.json(filingMaterial)})`;
     }
-    // Application construction regenerates the ID. Only this test's private
+    // Private compiler access exercises the unchanged identity algorithm.
+    // Public construction additionally requires authentic adapter material. Only this test's private
     // persistence record deliberately reuses it; no trusted batch is fabricated.
     expect(naturalDoc.artifactId).not.toBe(baselineDoc.artifactId);
     const candidate:SecDocumentArtifactWrite={...scope,document:{...naturalDoc,artifactId:baselineDoc.artifactId}};
@@ -431,14 +502,14 @@ describe("SEC EDGAR provenance PostgreSQL runtime",()=>{
     expect(first?.classification).toBe("SYNTHETIC_NON_AUTHORITATIVE");expect(first?.eventAuthorityEligible).toBe(false);
     expect(isTrustedSecRuntimeBatch(first)).toBe(false);
     expect(adaptSecEdgarFixtureToEntityBytes(first)).toBeNull();
-    const fresh=connect();const batch=createSecRuntimeBatch(adaptSecEdgarFixtureToEntityBytes(input)!);
+    const fresh=connect();const batch=createAuthenticatedBatch(adaptSecEdgarFixtureToEntityBytes(input)!);
     try{
       for(const doc of batch.documents){const rows=await fresh`select entity_body,sha256,byte_length from public.sec_event_content_blobs where blob_id=${doc.blobId}`;expect(rows).toHaveLength(1);expect(rows[0]?.entity_body).toEqual(doc.bytes);expect(createHash("sha256").update(rows[0]!.entity_body).digest("hex")).toBe(doc.sha256);expect(Number(rows[0]?.byte_length)).toBe(doc.byteLength);}
       const committed=await counts(fresh);const delta=Object.fromEntries(tableNames.map(t=>[t,committed[t]!-before[t]!]));
       expect(delta).toEqual({sec_event_source_profiles:0,sec_event_filing_identities:1,sec_event_acquisition_requests:1,sec_event_acquisition_attempts:1,sec_event_content_blobs:1,sec_event_document_artifacts:3,sec_event_filing_packages:1,sec_event_package_document_members:3,sec_event_acquisition_receipts:1,sec_event_source_lineages:1,sec_event_source_lineage_members:3});
       expect(await persistSyntheticSecEdgarFixtureProvenance(input,url!)).toEqual(first);expect(await counts(fresh)).toEqual(committed);
       const receiptOverride={receivedAt:"2026-10-07T12:00:00.000Z",effectiveAvailableAt:"2026-10-06T12:00:00.000Z"};
-      const nextBatch=createSecRuntimeBatch(adaptSecEdgarFixtureToEntityBytes(input,receiptOverride)!);
+      const nextBatch=createAuthenticatedBatch(adaptSecEdgarFixtureToEntityBytes(input,receiptOverride)!);
       const existed=await fresh`select receipt_id from public.sec_event_acquisition_receipts where receipt_id=${nextBatch.receiptId}`;
       const later=await persistSyntheticSecEdgarFixtureProvenance(input,url!,receiptOverride);const after=await counts(fresh);
       expect(later?.packageId).toBe(first?.packageId);expect(later?.lineageId).toBe(first?.lineageId);expect(later?.receiptId).not.toBe(first?.receiptId);
@@ -531,8 +602,8 @@ describe("SEC EDGAR provenance PostgreSQL runtime",()=>{
     expect(catalog.map(r=>r.relname).sort()).toEqual([...tableNames].sort());
     const columns=await sql`select table_name,column_name,data_type,is_nullable,ordinal_position from information_schema.columns where table_schema='public' and table_name in ${sql(tableNames)} order by table_name,ordinal_position`;expect(columns.length).toBeGreaterThan(70);expect(columns.some(c=>c.table_name==="sec_event_content_blobs"&&c.column_name==="entity_body"&&c.data_type==="bytea"&&c.is_nullable==="NO")).toBe(true);
     const keys=await sql`select c.conname,c.contype,c.convalidated,c.condeferrable,c.condeferred,pg_get_constraintdef(c.oid) as definition from pg_constraint c join pg_class t on t.oid=c.conrelid join pg_namespace n on n.oid=t.relnamespace where n.nspname='public' and t.relname in ${sql(tableNames)} order by t.relname,c.conname`;expect(keys.length).toBeGreaterThan(40);expect(keys.filter(c=>["p","u","f"].includes(c.contype)).every(c=>c.convalidated)).toBe(true);
-    const deferred=await sql`select conname,condeferrable,condeferred,convalidated from pg_constraint where conname in ('sec_event_filing_identity_amendment_deferred','sec_event_filing_package_seal_deferred','sec_event_package_document_member_seal_deferred','sec_event_source_lineage_seal_deferred','sec_event_source_lineage_member_seal_deferred','sec_event_request_chronology_deferred','sec_event_attempt_chronology_deferred','sec_event_receipt_chronology_deferred')`;
-    expect(deferred).toHaveLength(8);expect(deferred.every(c=>c.condeferrable&&c.condeferred&&c.convalidated)).toBe(true);const triggers=await sql`select tgname,tgdeferrable,tginitdeferred,tgenabled from pg_trigger where not tgisinternal and tgname like 'sec_event_%_deferred'`;expect(triggers).toHaveLength(8);expect(triggers.every(t=>t.tgdeferrable&&t.tginitdeferred&&t.tgenabled==='O')).toBe(true);
+    const deferred=await sql`select conname,condeferrable,condeferred,convalidated from pg_constraint where conname in ('sec_event_filing_identity_amendment_deferred','sec_event_package_amendment_deferred','sec_event_filing_package_seal_deferred','sec_event_package_document_member_seal_deferred','sec_event_source_lineage_seal_deferred','sec_event_source_lineage_member_seal_deferred','sec_event_request_chronology_deferred','sec_event_attempt_chronology_deferred','sec_event_receipt_chronology_deferred')`;
+    expect(deferred).toHaveLength(9);expect(deferred.every(c=>c.condeferrable&&c.condeferred&&c.convalidated)).toBe(true);const triggers=await sql`select tgname,tgdeferrable,tginitdeferred,tgenabled from pg_trigger where not tgisinternal and tgname like 'sec_event_%_deferred'`;expect(triggers).toHaveLength(9);expect(triggers.every(t=>t.tgdeferrable&&t.tginitdeferred&&t.tgenabled==='O')).toBe(true);
     const functions=await sql`select p.proname,p.prosecdef,p.proconfig,has_function_privilege('public',p.oid,'execute') as public_execute,has_function_privilege('anon',p.oid,'execute') as anon_execute,has_function_privilege('authenticated',p.oid,'execute') as auth_execute,has_function_privilege('service_role',p.oid,'execute') as service_role_execute from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'sec_event_%'`;
     expect(functions.length).toBeGreaterThanOrEqual(4);expect(functions.every(f=>!f.prosecdef&&!f.public_execute&&!f.anon_execute&&!f.auth_execute&&!f.service_role_execute&&JSON.stringify(f.proconfig).includes('search_path=public, pg_temp'))).toBe(true);
     const immutable=await sql`select count(*)::int as count from pg_trigger where not tgisinternal and tgname like 'sec_event_%_immutable' and tgenabled='O'`;expect(immutable[0]?.count).toBe(11);

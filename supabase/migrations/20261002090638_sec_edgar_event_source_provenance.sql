@@ -125,27 +125,56 @@ create function public.sec_event_assert_package_seal() returns trigger language 
 declare pid text; fp char(64); expected integer; actual integer; bad boolean;
 begin pid:=coalesce(to_jsonb(new)->>'package_id',to_jsonb(old)->>'package_id'); fp:=coalesce(to_jsonb(new)->>'fingerprint',to_jsonb(new)->>'package_fingerprint',to_jsonb(old)->>'fingerprint',to_jsonb(old)->>'package_fingerprint'); select member_count into expected from public.sec_event_filing_packages where package_id=pid and fingerprint=fp; if not found then return null; end if;
 select count(*),coalesce(bool_or(member_ordinal<>ord),false) into actual,bad from (select member_ordinal,row_number() over(order by member_ordinal)-1 ord from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp) x;
-if actual<>expected or bad or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and document_role='FILING_INDEX')<>1 or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and document_role='PRIMARY_DOCUMENT')<>1 or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and is_primary<>(document_role='PRIMARY_DOCUMENT'))<>0 or (select count(*) from public.sec_event_package_document_members pm join public.sec_event_filing_packages p using(package_id) join public.sec_event_document_artifacts a on a.artifact_id=pm.artifact_id where p.package_id=pid and p.fingerprint=fp and pm.document_role='FILING_INDEX' and pm.artifact_id=p.filing_index_artifact_id and pm.artifact_fingerprint=p.filing_index_artifact_fingerprint and a.filing_identity_id=p.filing_identity_id)<>1 or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and document_role<>'FILING_INDEX')<>(select declared_document_count from public.sec_event_filing_packages where package_id=pid and fingerprint=fp) or (select coalesce(sum(b.byte_length),0) from public.sec_event_package_document_members pm join public.sec_event_document_artifacts a using(artifact_id) join public.sec_event_content_blobs b using(blob_id) where pm.package_id=pid and pm.package_fingerprint=fp)>67108864 or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and document_role<>'FILING_INDEX')>32 then raise exception 'SEC_EVENT_PACKAGE_UNSEALED' using errcode='23514'; end if; return null; end $$;
+if actual<>expected or bad or exists(select 1 from public.sec_event_package_document_members pm join public.sec_event_document_artifacts a using(artifact_id) where pm.package_id=pid and pm.package_fingerprint=fp and pm.document_type<>a.document_type) or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and document_role='FILING_INDEX')<>1 or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and document_role='PRIMARY_DOCUMENT')<>1 or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and is_primary<>(document_role='PRIMARY_DOCUMENT'))<>0 or (select count(*) from public.sec_event_package_document_members pm join public.sec_event_filing_packages p using(package_id) join public.sec_event_document_artifacts a on a.artifact_id=pm.artifact_id where p.package_id=pid and p.fingerprint=fp and pm.document_role='FILING_INDEX' and pm.artifact_id=p.filing_index_artifact_id and pm.artifact_fingerprint=p.filing_index_artifact_fingerprint and a.filing_identity_id=p.filing_identity_id)<>1 or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and document_role<>'FILING_INDEX')<>(select declared_document_count from public.sec_event_filing_packages where package_id=pid and fingerprint=fp) or (select coalesce(sum(b.byte_length),0) from public.sec_event_package_document_members pm join public.sec_event_document_artifacts a using(artifact_id) join public.sec_event_content_blobs b using(blob_id) where pm.package_id=pid and pm.package_fingerprint=fp)>67108864 or (select count(*) from public.sec_event_package_document_members where package_id=pid and package_fingerprint=fp and document_role<>'FILING_INDEX')>32 then raise exception 'SEC_EVENT_PACKAGE_UNSEALED' using errcode='23514'; end if; return null; end $$;
 create function public.sec_event_assert_lineage_seal() returns trigger language plpgsql security invoker set search_path=public,pg_temp as $$
-declare lid text; expected integer; actual integer; bad boolean; expected_profile_id text; expected_profile_fingerprint char(64);
-begin lid:=coalesce(new.lineage_id,old.lineage_id); select member_count,sec_event_source_lineages.profile_id,sec_event_source_lineages.profile_fingerprint into expected,expected_profile_id,expected_profile_fingerprint from public.sec_event_source_lineages where lineage_id=lid; if not found then return null; end if;
+declare lid text; expected integer; actual integer; bad boolean; expected_profile_id text; expected_profile_fingerprint char(64); context jsonb; chain jsonb; root_id text;
+begin lid:=coalesce(new.lineage_id,old.lineage_id); select member_count,sec_event_source_lineages.profile_id,sec_event_source_lineages.profile_fingerprint,material into expected,expected_profile_id,expected_profile_fingerprint,context from public.sec_event_source_lineages where lineage_id=lid; if not found then return null; end if;
 select count(*),coalesce(bool_or(member_ordinal<>ord),false) into actual,bad from (select member_ordinal,row_number() over(order by member_ordinal)-1 ord from public.sec_event_source_lineage_members where lineage_id=lid) x;
-if actual<>expected or bad or exists(select 1 from public.sec_event_source_lineage_members lm join public.sec_event_filing_packages p on p.package_id=lm.package_id and p.fingerprint=lm.package_fingerprint join public.sec_event_filing_identities fi on fi.filing_identity_id=p.filing_identity_id where lm.lineage_id=lid and (fi.profile_id<>expected_profile_id or fi.profile_fingerprint<>expected_profile_fingerprint)) then raise exception 'SEC_EVENT_LINEAGE_UNSEALED' using errcode='23514'; end if; return null; end $$;
+if actual<>expected or bad or exists(select 1 from public.sec_event_source_lineage_members lm join public.sec_event_filing_packages p on p.package_id=lm.package_id and p.fingerprint=lm.package_fingerprint join public.sec_event_filing_identities fi on fi.filing_identity_id=p.filing_identity_id where lm.lineage_id=lid and (fi.profile_id<>expected_profile_id or fi.profile_fingerprint<>expected_profile_fingerprint)) then raise exception 'SEC_EVENT_LINEAGE_UNSEALED' using errcode='23514'; end if;
+chain:=context->'amendmentParentChain'; root_id:=context->>'rootFilingIdentityId';
+if jsonb_typeof(chain) is distinct from 'array' then raise exception 'SEC_EVENT_LINEAGE_CONTEXT_INVALID' using errcode='23514'; end if;
+if jsonb_array_length(chain)=0 or root_id is null or chain->>0<>root_id
+  or exists(select 1 from jsonb_array_elements(chain) x where jsonb_typeof(x)<>'string')
+  or (select count(distinct x) from jsonb_array_elements_text(chain) x)<>jsonb_array_length(chain)
+  or exists(select 1 from jsonb_array_elements_text(chain) with ordinality x(id,ord)
+    left join public.sec_event_filing_identities f on f.filing_identity_id=x.id
+    left join public.sec_event_filing_identities root on root.filing_identity_id=root_id
+    where f.filing_identity_id is null or root.filing_identity_id is null
+      or f.profile_id<>expected_profile_id or f.profile_fingerprint<>expected_profile_fingerprint or f.cik<>root.cik
+      or (x.ord=1 and (f.form<>'8-K' or f.amendment_parent_filing_identity_id is not null))
+      or (x.ord>1 and (f.form<>'8-K/A' or f.amendment_parent_filing_identity_id is distinct from chain->>(x.ord::integer-2))))
+  or exists(select 1 from public.sec_event_source_lineage_members lm join public.sec_event_filing_packages p on p.package_id=lm.package_id where lm.lineage_id=lid and not(chain ? p.filing_identity_id))
+then raise exception 'SEC_EVENT_LINEAGE_CONTEXT_INVALID' using errcode='23514'; end if;
+return null; end $$;
 create function public.sec_event_assert_amendment_parent() returns trigger language plpgsql security invoker set search_path=public,pg_temp as $$
-declare cyclic boolean; chronology_invalid boolean;
+declare cyclic boolean; chronology_invalid boolean; filing public.sec_event_filing_identities%rowtype; root_id text;
 begin
-  if new.form='8-K' and new.amendment_parent_filing_identity_id is not null then raise exception 'SEC_EVENT_AMENDMENT_PARENT_INVALID' using errcode='23514'; end if;
-  if new.form='8-K/A' and new.amendment_parent_filing_identity_id is null then raise exception 'SEC_EVENT_AMENDMENT_PARENT_INVALID' using errcode='23514'; end if;
-  if new.amendment_parent_filing_identity_id is not null then
+  select * into strict filing from public.sec_event_filing_identities where filing_identity_id=new.filing_identity_id;
+  if filing.form='8-K' and filing.amendment_parent_filing_identity_id is not null then raise exception 'SEC_EVENT_AMENDMENT_PARENT_INVALID' using errcode='23514'; end if;
+  if filing.form='8-K/A' and filing.amendment_parent_filing_identity_id is null then raise exception 'SEC_EVENT_AMENDMENT_PARENT_INVALID' using errcode='23514'; end if;
+  if filing.amendment_parent_filing_identity_id is not null then
     with recursive ancestry(filing_identity_id,parent_id,path,cycle_found) as (
-      select f.filing_identity_id,f.amendment_parent_filing_identity_id,array[f.filing_identity_id],false from public.sec_event_filing_identities f where f.filing_identity_id=new.amendment_parent_filing_identity_id
+      select f.filing_identity_id,f.amendment_parent_filing_identity_id,array[f.filing_identity_id],false from public.sec_event_filing_identities f where f.filing_identity_id=filing.amendment_parent_filing_identity_id
       union all
       select f.filing_identity_id,f.amendment_parent_filing_identity_id,a.path||f.filing_identity_id,f.filing_identity_id=any(a.path) from public.sec_event_filing_identities f join ancestry a on f.filing_identity_id=a.parent_id where not a.cycle_found
-    ) select coalesce(bool_or(filing_identity_id=new.filing_identity_id or cycle_found),false) into cyclic from ancestry;
+    ) select coalesce(bool_or(filing_identity_id=filing.filing_identity_id or cycle_found),false) into cyclic from ancestry;
     if cyclic then raise exception 'SEC_EVENT_AMENDMENT_CYCLE' using errcode='23514'; end if;
-    select exists(select 1 from public.sec_event_filing_packages parent_package join public.sec_event_filing_packages child_package on child_package.filing_identity_id=new.filing_identity_id where parent_package.filing_identity_id=new.amendment_parent_filing_identity_id and (parent_package.filing_date>child_package.filing_date or (parent_package.acceptance_at is not null and child_package.acceptance_at is not null and parent_package.acceptance_at>=child_package.acceptance_at))) into chronology_invalid;
-    if chronology_invalid then raise exception 'SEC_EVENT_AMENDMENT_CHRONOLOGY_INVALID' using errcode='23514'; end if;
+
   end if;
+  -- Serialize package chronology across the same amendment tree. The root
+  -- authority is immutable, but its row lock orders concurrent validations.
+  with recursive ancestry as (
+    select filing_identity_id,amendment_parent_filing_identity_id from public.sec_event_filing_identities where filing_identity_id=filing.filing_identity_id
+    union all
+    select f.filing_identity_id,f.amendment_parent_filing_identity_id from public.sec_event_filing_identities f join ancestry a on f.filing_identity_id=a.amendment_parent_filing_identity_id
+  ) select filing_identity_id into root_id from ancestry where amendment_parent_filing_identity_id is null;
+  perform 1 from public.sec_event_filing_identities where filing_identity_id=root_id for no key update;
+  select exists(select 1 from public.sec_event_filing_identities child
+    join public.sec_event_filing_packages parent_package on parent_package.filing_identity_id=child.amendment_parent_filing_identity_id
+    join public.sec_event_filing_packages child_package on child_package.filing_identity_id=child.filing_identity_id
+    where (child.filing_identity_id=filing.filing_identity_id or child.amendment_parent_filing_identity_id=filing.filing_identity_id)
+      and (parent_package.filing_date>child_package.filing_date or (parent_package.acceptance_at is not null and child_package.acceptance_at is not null and parent_package.acceptance_at>=child_package.acceptance_at))) into chronology_invalid;
+  if chronology_invalid then raise exception 'SEC_EVENT_AMENDMENT_CHRONOLOGY_INVALID' using errcode='23514'; end if;
   return null;
 end $$;
 
@@ -163,6 +192,7 @@ begin
 end $$;
 
 create constraint trigger sec_event_filing_identity_amendment_deferred after insert or update on public.sec_event_filing_identities deferrable initially deferred for each row execute function public.sec_event_assert_amendment_parent();
+create constraint trigger sec_event_package_amendment_deferred after insert on public.sec_event_filing_packages deferrable initially deferred for each row execute function public.sec_event_assert_amendment_parent();
 create constraint trigger sec_event_filing_package_seal_deferred after insert or update on public.sec_event_filing_packages deferrable initially deferred for each row execute function public.sec_event_assert_package_seal();
 create constraint trigger sec_event_package_document_member_seal_deferred after insert or update or delete on public.sec_event_package_document_members deferrable initially deferred for each row execute function public.sec_event_assert_package_seal();
 create constraint trigger sec_event_source_lineage_seal_deferred after insert or update on public.sec_event_source_lineages deferrable initially deferred for each row execute function public.sec_event_assert_lineage_seal();

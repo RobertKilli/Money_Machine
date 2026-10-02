@@ -1,10 +1,51 @@
-import { describe, expect, it } from "vitest";
-import { createSecRuntimeBatch, createSecRuntimeDeadline, hashExactEntityBody, isTrustedSecRuntimeBatch, parseSecRuntimeSourceProfile, SEC_EVENT_RUNTIME_LIMITS, secRuntimeBoundsAreValid } from "@/domain/intelligence/sec-edgar-event-source-provenance-runtime";
+import { createSecRuntimeBatch } from "test-only:sec-runtime-constructor";
+import { describe, expect, it, vi } from "vitest";
+import * as postgresUow from "@/infrastructure/postgres/sec-edgar-event-source-provenance-uow";
+import { persistSyntheticSecEdgarFixtureProvenance } from "@/application/intelligence/persist-sec-edgar-event-source-provenance";
+import { createSecRuntimeBatch as createAuthenticatedBatch } from "@/domain/intelligence/sec-edgar-event-source-provenance-runtime";
+import { adaptSecEdgarFixtureToEntityBytes, runSecEdgar8kFixtureClaimPipeline } from "@/domain/intelligence/sec-edgar-8k-fixture-claim-pipeline";
+import { SEC_EDGAR_8K_SYNTHETIC_FIXTURES } from "../fixtures/sec-edgar-8k-fixture-claim-pipeline";
+import { createSecRuntimeDeadline, hashExactEntityBody, isTrustedSecRuntimeBatch, parseSecRuntimeSourceProfile, SEC_EVENT_RUNTIME_LIMITS, secRuntimeBoundsAreValid } from "@/domain/intelligence/sec-edgar-event-source-provenance-runtime";
 
 const bytes=(s:string)=>new TextEncoder().encode(s);
 const material=(overrides:Record<string,unknown>={})=>({profileId:"sec-edgar-synthetic-fixture-profile/v1",profileFingerprint:"a".repeat(64),cik:"SYNTH-CIK-0001",accession:"SYNTH-ACC-AGREE-0001",form:"8-K" as const,filingDate:"2026-10-01",acceptanceAt:"2026-10-01T12:00:00.000Z",reportPeriod:null,amendmentParent:null,receipt:{receiptId:"SYNTH-RECEIPT-TEST-0001",receivedAt:"2026-10-02T12:00:00.000Z",effectiveAvailableAt:"2026-10-01T12:00:00.000Z",responseStatus:200},documents:[{locator:"/synthetic-edgar/archive/SYNTH-CIK-0001/SYNTH-ACC-AGREE-0001/index.json",role:"FILING_INDEX" as const,documentType:"FILING_INDEX",sequence:0,contentType:"application/json",contentEncoding:"identity" as const,bytes:bytes("index")},{locator:"/synthetic-edgar/archive/SYNTH-CIK-0001/SYNTH-ACC-AGREE-0001/primary.txt",role:"PRIMARY_DOCUMENT" as const,documentType:"PRIMARY_DOCUMENT",sequence:1,contentType:"text/plain",contentEncoding:"identity" as const,bytes:bytes("primary")},{locator:"/synthetic-edgar/archive/SYNTH-CIK-0001/SYNTH-ACC-AGREE-0001/exhibit.txt",role:"EXHIBIT" as const,documentType:"EXHIBIT-99.1",sequence:2,contentType:"text/plain",contentEncoding:"identity" as const,bytes:bytes("exhibit")}],...overrides});
 
 describe("SEC provenance runtime foundation domain",()=>{
+  it("preserves the original transaction Error if connection/lease cleanup also fails",async()=>{
+    const input=runSecEdgar8kFixtureClaimPipeline([SEC_EDGAR_8K_SYNTHETIC_FIXTURES[0]]);const primary=new Error("SEC_TEST_PRIMARY_FAILURE");let releases=0;
+    const factory=vi.spyOn(postgresUow,"createSecEventProvenanceUnitOfWork").mockImplementation(()=>({persist:async()=>{throw primary;},close:async()=>{throw new Error("SEC_TEST_CLOSE_FAILURE");}}));
+    try{await expect(persistSyntheticSecEdgarFixtureProvenance(input,"unused",undefined,{assertCanStartTransaction(){},reservePayload:()=>({release:()=>{releases++;throw new Error("SEC_TEST_RELEASE_FAILURE");}})})).rejects.toBe(primary);expect(releases).toBe(1);}finally{factory.mockRestore();}
+  });
+  it("propagates payload cancellation before byte allocation or UoW",async()=>{
+    const input=runSecEdgar8kFixtureClaimPipeline([SEC_EDGAR_8K_SYNTHETIC_FIXTURES[0]]);let starts=0;const failure=new Error("SEC_EVENT_REQUEST_CANCELLED");
+    await expect(persistSyntheticSecEdgarFixtureProvenance(input,"unused",undefined,{reservePayload:()=>{throw failure;},assertCanStartTransaction:()=>{starts++;}})).rejects.toBe(failure);expect(starts).toBe(0);
+  });
+  it.each(["success","parser","admission","uow"])("releases payload admission on %s",async scenario=>{
+    const fixture=runSecEdgar8kFixtureClaimPipeline([SEC_EDGAR_8K_SYNTHETIC_FIXTURES[0]]);
+    const failure=new Error("SEC_TEST_RESOURCE_FAILURE");let reserved=0,released=0,starts=0;
+    const factory=vi.spyOn(postgresUow,"createSecEventProvenanceUnitOfWork").mockImplementation(()=>({persist:async()=>{starts++;if(scenario==="uow")throw failure;return Object.freeze({profileId:"test",filingIdentityId:"test",packageId:"test",packageFingerprint:"test",receiptId:"test",lineageId:"test",documentCount:2,memberCount:3,blobCount:3,status:"PERSISTED_VERIFIED",classification:"SYNTHETIC_NON_AUTHORITATIVE",eventAuthorityEligible:false});},close:async()=>{}}));
+    try{
+      const operation=persistSyntheticSecEdgarFixtureProvenance(fixture,"unused",scenario==="parser"?{receivedAt:"invalid",effectiveAvailableAt:"invalid"}:undefined,{reservePayload:budget=>{expect(budget).toBeGreaterThan(0);expect(budget).toBeLessThanOrEqual(SEC_EVENT_RUNTIME_LIMITS.workerBytes);reserved++;return {release:()=>{released++;}};},assertCanStartTransaction:()=>{expect(reserved).toBe(1);if(scenario==="admission")throw failure;}});
+      if(scenario==="success")await operation;else if(scenario==="parser")await expect(operation).rejects.toThrow("SEC_EVENT_RUNTIME_INPUT_INVALID");else await expect(operation).rejects.toBe(failure);
+      expect(reserved).toBe(1);expect(released).toBe(1);expect(starts).toBe(scenario==="success"||scenario==="uow"?1:0);
+    }finally{factory.mockRestore();}
+  });
+  it("does not issue production trust to caller material, copies, or proxies",()=>{
+    let reads=0;
+    const proxy=new Proxy(material(),{get(){reads++;throw new Error("sensitive");},getPrototypeOf(){reads++;throw new Error("sensitive");}});
+    for(const input of [material(),proxy])expect(()=>createAuthenticatedBatch(input)).toThrow("SEC_EVENT_RUNTIME_TRUST_REQUIRED");
+    const adapted=adaptSecEdgarFixtureToEntityBytes(runSecEdgar8kFixtureClaimPipeline([SEC_EDGAR_8K_SYNTHETIC_FIXTURES[0]]))!;
+    expect(isTrustedSecRuntimeBatch(createAuthenticatedBatch(adapted))).toBe(true);
+    for(const input of [{...adapted},structuredClone(adapted),JSON.parse(JSON.stringify(adapted))])expect(()=>createAuthenticatedBatch(input)).toThrow("SEC_EVENT_RUNTIME_TRUST_REQUIRED");
+    expect(reads).toBe(0);
+    const original=createAuthenticatedBatch(adapted);adapted.documents[1]!.bytes[0]^=1;
+    expect(Reflect.set(adapted.documents[1]!,"role","EXHIBIT")).toBe(false);
+    expect(createAuthenticatedBatch(adapted).packageId).toBe(original.packageId);
+  });
+  it("rejects source-profile proxies before any trap",()=>{
+    let traps=0;const input=new Proxy({}, {getPrototypeOf(){traps++;throw new Error("sensitive");},ownKeys(){traps++;throw new Error("sensitive");}});
+    expect(()=>parseSecRuntimeSourceProfile(input)).toThrow("SEC_EVENT_SOURCE_PROFILE_INVALID");expect(traps).toBe(0);
+  });
   const validProfile={profileId:"sec-edgar-synthetic-fixture-profile/v1",contractVersion:"sec-edgar-synthetic-fixture-profile/v1",providerId:"SYNTHETIC_FIXTURE",datasetId:"sec-edgar-8k-fixture",datasetVersion:"sec-edgar-8k-fixture-package/v1",endpointProfile:"SYNTHETIC_FIXTURE_ADAPTER",pathTemplate:"/synthetic-edgar/archive/{cik}/{accession}",method:"FIXTURE_ADAPTER",requestIdentityPolicy:"synthetic-fixture-replay/v1"};
   it.each([["blank provider",{providerId:""}],["whitespace provider",{providerId:"  "}],["blank endpoint profile",{endpointProfile:""}],["blank contract version",{contractVersion:" "}],["blank profile ID",{profileId:""}],["noncanonical profile ID",{profileId:"../unsafe"}]])("rejects source profile parser input before any UoW: %s",(_name,change)=>expect(()=>parseSecRuntimeSourceProfile({...validProfile,...change})).toThrow("SEC_EVENT_SOURCE_PROFILE_INVALID"));
   it("accepts and freezes the canonical source profile descriptor",()=>{const parsed=parseSecRuntimeSourceProfile(validProfile);expect(parsed.providerId).toBe("SYNTHETIC_FIXTURE");expect(Object.isFrozen(parsed)).toBe(true);});

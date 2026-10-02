@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import { types as utilTypes } from "node:util";
+import { isAuthenticSecFixtureEntityMaterial } from "@/domain/intelligence/sec-edgar-8k-fixture-claim-pipeline";
 import { canonicalSha256 } from "@/domain/intelligence/ingestion-provenance";
 
 export const SEC_EVENT_BYTE_STORAGE_CONTRACT = "sec-event-document-byte-storage-decision/v1" as const;
 export type SecRuntimeSourceProfileDescriptor=Readonly<{profileId:string;contractVersion:string;providerId:string;datasetId:string;datasetVersion:string;endpointProfile:string;pathTemplate:string;method:string;requestIdentityPolicy:string}>;
 export function parseSecRuntimeSourceProfile(input:unknown):SecRuntimeSourceProfileDescriptor {
-  if(!input||typeof input!=="object"||Array.isArray(input)||Object.getPrototypeOf(input)!==Object.prototype)throw new Error("SEC_EVENT_SOURCE_PROFILE_INVALID");
+  if(!input||typeof input!=="object"||utilTypes.isProxy(input)||Array.isArray(input)||Object.getPrototypeOf(input)!==Object.prototype)throw new Error("SEC_EVENT_SOURCE_PROFILE_INVALID");
   const descriptors=Object.getOwnPropertyDescriptors(input);const keys=Object.keys(descriptors);const expected=["profileId","contractVersion","providerId","datasetId","datasetVersion","endpointProfile","pathTemplate","method","requestIdentityPolicy"];
   if(keys.length!==expected.length||keys.some(key=>!expected.includes(key))||Reflect.ownKeys(input).length!==expected.length||expected.some(key=>!descriptors[key]?.enumerable||!("value" in descriptors[key]!)))throw new Error("SEC_EVENT_SOURCE_PROFILE_INVALID");
   const value=Object.fromEntries(expected.map(key=>[key,descriptors[key]!.value])) as Record<string,unknown>;
@@ -31,7 +33,13 @@ const safeFixtureLocator=(x:string,cik:string,accession:string)=>x.startsWith(`/
 // for readback and driver encoding. This is a payload budget, not a V8 RSS cap.
 export function secRuntimeBoundsAreValid(sizes:readonly number[],documentCount:number):boolean { return sizes.length===documentCount+1&&documentCount>=1&&documentCount<=SEC_EVENT_RUNTIME_LIMITS.documents&&sizes.every(n=>Number.isSafeInteger(n)&&n>=1&&n<=SEC_EVENT_RUNTIME_LIMITS.documentBytes)&&sizes.reduce((a,b)=>a+b,0)<=SEC_EVENT_RUNTIME_LIMITS.packageBytes&&2*sizes.reduce((a,b)=>a+b,0)+4*Math.max(...sizes)<=SEC_EVENT_RUNTIME_LIMITS.workerBytes; }
 export function isTrustedSecRuntimeBatch(x:unknown): x is SecRuntimeTrustedBatch { return !!x && typeof x === "object" && trusted.has(x as object); }
-export function createSecRuntimeBatch(material:SecRuntimeMaterial):SecRuntimeTrustedBatch {
+export function createSecRuntimeBatch(material:unknown):SecRuntimeTrustedBatch {
+  if(!isAuthenticSecFixtureEntityMaterial(material))throw new Error("SEC_EVENT_RUNTIME_TRUST_REQUIRED");
+  return constructSecRuntimeBatch(material);
+}
+// Private construction. Tests expose this only through their compiler loader;
+// application code can obtain trust only from the authentic fixture adapter.
+function constructSecRuntimeBatch(material:SecRuntimeMaterial):SecRuntimeTrustedBatch {
   const docs=[...material.documents].sort((a,b)=>a.sequence-b.sequence);
   if(!/^sec-edgar-synthetic-fixture-profile\/v1$/.test(material.profileId) || !/^[0-9a-f]{64}$/.test(material.profileFingerprint) || !/^SYNTH-CIK-[0-9]{4}$/.test(material.cik) || !/^SYNTH-ACC-[A-Z0-9-]{4,32}$/.test(material.accession) || !["8-K","8-K/A"].includes(material.form) || (material.form==="8-K"&&material.amendmentParent!==null) || (material.form==="8-K/A"&&(!material.amendmentParent||material.amendmentParent===material.accession||!/^SYNTH-ACC-[A-Z0-9-]{4,32}$/.test(material.amendmentParent))) || !canonicalDate(material.filingDate)||!canonicalDate(material.reportPeriod)||!canonicalTime(material.acceptanceAt)||docs.length<2 || docs.length>SEC_EVENT_RUNTIME_LIMITS.documents+1 || !secRuntimeBoundsAreValid(docs.map(x=>x.bytes.byteLength),docs.filter(x=>x.role!=="FILING_INDEX").length) || new Set(docs.map(x=>x.locator)).size!==docs.length || docs.filter(x=>x.role==="FILING_INDEX").length!==1 || docs.filter(x=>x.role==="PRIMARY_DOCUMENT").length!==1 || docs.some((d,i)=>!(["FILING_INDEX","PRIMARY_DOCUMENT","EXHIBIT"].includes(d.role))||d.sequence!==i || d.contentEncoding!=="identity" || !safeFixtureLocator(d.locator,material.cik,material.accession)||!/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(d.contentType)) || !/^SYNTH-RECEIPT-[A-Z0-9-]{4,32}$/.test(material.receipt.receiptId)||material.receipt.responseStatus!==200 || !canonicalTime(material.receipt.receivedAt)||!canonicalTime(material.receipt.effectiveAvailableAt)) throw new Error("SEC_EVENT_RUNTIME_INPUT_INVALID");
   const filingIdentityId=canonicalSha256({sourceProfileId:material.profileId,sourceProfileFingerprint:material.profileFingerprint,cik:material.cik,accessionNumber:material.accession,form:material.form});
@@ -43,7 +51,7 @@ export function createSecRuntimeBatch(material:SecRuntimeMaterial):SecRuntimeTru
   const lineageMembers=docAuthorities.map((d,i)=>({packageId,packageFingerprint,packageMemberOrdinal:i,artifactId:d.artifactId,artifactFingerprint:d.fingerprint}));const lineageId=canonicalSha256({sourceProfileId:material.profileId,orderedPackageDocumentMemberReferences:lineageMembers,memberCount:lineageMembers.length});const amendmentParentChain=amendmentParentFilingIdentityId?[amendmentParentFilingIdentityId,filingIdentityId]:[filingIdentityId];const lineageFingerprint=canonicalSha256({lineageId,sourceProfileId:material.profileId,sourceProfileFingerprint:material.profileFingerprint,orderedPackageDocumentMemberSet:lineageMembers,memberCount:lineageMembers.length,rootFilingIdentityId:amendmentParentFilingIdentityId??filingIdentityId,amendmentParentChain});
   // Reuse each authority's private snapshot. Two full package snapshots would
   // exceed the 96 MiB worker budget for a maximum-size package.
-  const sealedDocuments=Object.freeze(docs.map((d,i)=>Object.freeze({...d,get bytes(){return docAuthorities[i]!.bytes;}})));
+  const sealedDocuments=Object.freeze(docs.map((d,i)=>Object.freeze({locator:d.locator,role:d.role,documentType:d.documentType,sequence:d.sequence,contentType:d.contentType,contentEncoding:d.contentEncoding,get bytes(){return docAuthorities[i]!.bytes;}})));
   const sealedPackageMaterial=Object.freeze({...packageMaterial,orderedDocumentMemberSet:Object.freeze(packageMaterial.orderedDocumentMemberSet.map(member=>Object.freeze({...member})))});
   const batch=Object.freeze({material:Object.freeze({...material,receipt:Object.freeze({...material.receipt}),documents:sealedDocuments}),filingIdentityId,amendmentParentFilingIdentityId,requestId,attemptId,packageId,packageFingerprint,packageMaterial:sealedPackageMaterial,documents:Object.freeze(docAuthorities),receiptId,receiptFingerprint,responseMaterialFingerprint, lineageId,lineageFingerprint,profileFingerprint:material.profileFingerprint});trusted.add(batch);return batch;
 }

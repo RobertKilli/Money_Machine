@@ -3,11 +3,12 @@ import { readFile } from "node:fs/promises";
 
 import { defineConfig } from "vitest/config";
 import { transformWithOxc } from "vite";
+import { secRuntimePrivateLoader } from "./tests/helpers/sec-runtime-private-loader";
 
 export default defineConfig({
   // Test-only access to the production UoW's private persistence operation.
   // This loader is absent from application builds; it creates no trusted input.
-  plugins: [{
+  plugins: [secRuntimePrivateLoader(),{
     name: "sec-artifact-private-integration-access",
     enforce: "pre",
     resolveId(id) {

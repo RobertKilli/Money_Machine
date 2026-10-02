@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
 import { canonicalSha256 } from "./ingestion-provenance";
-import { parseSecRuntimeSourceProfile, type SecRuntimeMaterial } from "./sec-edgar-event-source-provenance-runtime";
+import { parseSecRuntimeSourceProfile, secRuntimeBoundsAreValid, type SecRuntimeMaterial } from "./sec-edgar-event-source-provenance-runtime";
 
 export const SEC_EDGAR_8K_FIXTURE_PACKAGE_VERSION = "sec-edgar-8k-fixture-package/v1" as const;
 export const SEC_EDGAR_8K_FIXTURE_PIPELINE_VERSION = "sec-edgar-8k-fixture-claim-pipeline/v1" as const;
@@ -18,6 +18,7 @@ const artifactTrust = new WeakSet<object>();
 const claimTrust = new WeakSet<object>();
 const claimSetTrust = new WeakSet<object>();
 const resultTrust = new WeakSet<object>();
+const entityMaterialTrust = new WeakSet<object>();
 const privatePackageData = new WeakMap<object, Readonly<{ documents: readonly Readonly<{ filename: string; text: string; lines: readonly string[] }>[]; parsed: ParsedPackage }>>();
 
 type ParsedPackage = Readonly<{
@@ -408,7 +409,11 @@ export function isAuthenticSecEdgar8kFixtureClaim(value: unknown): value is SecE
 export function isAuthenticSecEdgar8kFixtureClaimSet(value: unknown): boolean { return !!value && typeof value === "object" && claimSetTrust.has(value); }
 export function isAuthenticSecEdgar8kFixtureResult(value: unknown): value is SecEdgar8kFixtureResult { return !!value && typeof value === "object" && resultTrust.has(value); }
 /** Versioned synthetic adapter. UTF-8 bytes here are fixture entity bodies, never observed SEC HTTP responses. */
-export function adaptSecEdgarFixtureToEntityBytes(value: unknown, receiptOverride?: Readonly<{receivedAt:string;effectiveAvailableAt:string}>, selectedAccession?:string): SecRuntimeMaterial | null {
+export function isAuthenticSecFixtureEntityMaterial(value:unknown):value is SecRuntimeMaterial {
+  return !!value && typeof value === "object" && entityMaterialTrust.has(value);
+}
+export function adaptSecEdgarFixtureToEntityBytes(value: unknown, receiptOverride?: Readonly<{receivedAt:string;effectiveAvailableAt:string}>, selectedAccession?:string,reservePayload?:(byteBudget:number)=>void): SecRuntimeMaterial | null {
+  let reservationFailed=false;
   try {
     if (!isAuthenticSecEdgar8kFixtureResult(value)) return null;
     if(selectedAccession!==undefined&&(typeof selectedAccession!=="string"||!SYNTH_ACCESSION.test(selectedAccession)))return null;
@@ -418,10 +423,16 @@ export function adaptSecEdgarFixtureToEntityBytes(value: unknown, receiptOverrid
     const p=stored.parsed; const sourceProfile=parseSecRuntimeSourceProfile({profileId:"sec-edgar-synthetic-fixture-profile/v1",contractVersion:"sec-edgar-synthetic-fixture-profile/v1",providerId:"SYNTHETIC_FIXTURE",datasetId:"sec-edgar-8k-fixture",datasetVersion:SEC_EDGAR_8K_FIXTURE_PACKAGE_VERSION,endpointProfile:"SYNTHETIC_FIXTURE_ADAPTER",pathTemplate:"/synthetic-edgar/archive/{cik}/{accession}",method:"FIXTURE_ADAPTER",requestIdentityPolicy:"synthetic-fixture-replay/v1"});const profileId=sourceProfile.profileId;
     const profileFingerprint=canonicalSha256({contractVersion:sourceProfile.contractVersion,provider:sourceProfile.providerId,dataset:sourceProfile.datasetId,version:sourceProfile.datasetVersion,endpointProfile:sourceProfile.endpointProfile,hostnameAllowlist:[],pathTemplate:sourceProfile.pathTemplate,method:sourceProfile.method,supportedForms:["8-K","8-K/A"],authenticationKind:"NONE",acceptedContentEncoding:["identity"],requestIdentityPolicy:sourceProfile.requestIdentityPolicy,maxTimeoutMs:15_000,maxResponseBytes:8*1024*1024,maxPackageDocuments:32,classification:"SYNTHETIC_NON_AUTHORITATIVE"});
     const archive=`/synthetic-edgar/archive/${p.filing.cik}/${p.filing.accession}`;
-    const indexBody=Buffer.from(canonicalJson({adapter:"sec-edgar-synthetic-entity-bytes/v1",filing:p.filing,descriptors:p.descriptors,documentCount:p.descriptors.length,requiredEvidenceFilenames:p.requiredEvidenceFilenames}),"utf8");
+    const indexText=canonicalJson({adapter:"sec-edgar-synthetic-entity-bytes/v1",filing:p.filing,descriptors:p.descriptors,documentCount:p.descriptors.length,requiredEvidenceFilenames:p.requiredEvidenceFilenames});
+    const sizes=[Buffer.byteLength(indexText,"utf8"),...p.descriptors.map(d=>Buffer.byteLength(stored.documents.find(x=>x.filename===d.filename)!.text,"utf8"))];
+    if(!secRuntimeBoundsAreValid(sizes,p.descriptors.length))return null;
+    try{reservePayload?.(2*sizes.reduce((sum,size)=>sum+size,0)+4*Math.max(...sizes));}catch(error){reservationFailed=true;throw error;}
+    const indexBody=Buffer.from(indexText,"utf8");
     const documents:SecRuntimeMaterial["documents"][number][]=[{locator:`${archive}/index.json`,role:"FILING_INDEX",documentType:"FILING_INDEX",sequence:0,contentType:"application/json",contentEncoding:"identity",bytes:indexBody}];
     for(const d of p.descriptors){const doc=stored.documents.find(x=>x.filename===d.filename);if(!doc)return null;documents.push({locator:`${archive}/${d.filename}`,role:d.type==="PRIMARY"?"PRIMARY_DOCUMENT":"EXHIBIT",documentType:d.documentType,sequence:d.sequence,contentType:"text/plain",contentEncoding:"identity",bytes:Buffer.from(doc.text,"utf8")});}
-    return Object.freeze({profileId,profileFingerprint,cik:p.filing.cik,accession:p.filing.accession,form:p.filing.form,filingDate:p.filing.filingDate,acceptanceAt:p.filing.acceptanceDateTime,reportPeriod:p.filing.reportDate,amendmentParent:p.filing.amendmentOfAccession,receipt:Object.freeze({receiptId:p.receipt.receiptId,receivedAt:receiptOverride?.receivedAt??p.receipt.receivedAt,effectiveAvailableAt:receiptOverride?.effectiveAvailableAt??p.receipt.effectiveAvailableAt,responseStatus:200}),documents:Object.freeze(documents)});
-  } catch { return null; }
+    const material=Object.freeze({profileId,profileFingerprint,cik:p.filing.cik,accession:p.filing.accession,form:p.filing.form,filingDate:p.filing.filingDate,acceptanceAt:p.filing.acceptanceDateTime,reportPeriod:p.filing.reportDate,amendmentParent:p.filing.amendmentOfAccession,receipt:Object.freeze({receiptId:p.receipt.receiptId,receivedAt:receiptOverride?.receivedAt??p.receipt.receivedAt,effectiveAvailableAt:receiptOverride?.effectiveAvailableAt??p.receipt.effectiveAvailableAt,responseStatus:200}),documents:Object.freeze(documents.map(doc=>{const snapshot=doc.bytes;return Object.freeze({...doc,get bytes(){return Buffer.from(snapshot);}});}))});
+    entityMaterialTrust.add(material);
+    return material;
+  } catch(error) { if(reservationFailed)throw error;return null; }
 }
 export function rejectSecEdgar8kFixtureClaimAsAuthority(value: unknown): null { void value; return null; }
