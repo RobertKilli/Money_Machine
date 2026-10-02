@@ -112,3 +112,7 @@ Synthetic tests cover exact-byte changes, receipt-independent document identity,
 - Approve retention, access, redistribution and commercial-use terms separately.
 
 The uncommitted persistence-runtime migration `20261001191840_event_intelligence_persistence.sql` is not in this review worktree, was not read from the original dirty worktree, and is **not approved**. Live SEC acquisition, byte/artifact storage, event-source lineage, issuer evidence, event authority, scheduler, signals and trading remain `BLOCKED`.
+
+## Exact-byte backend decision
+
+The previously blocked exact-byte backend is now a technical candidate decision: PostgreSQL `bytea`, immutable artifact manifest and package membership share one transaction; bounded readback rehash is required before authority commit and on every authoritative read. Supabase Storage and external object storage are not selected for v1 due to cross-service atomicity/recovery boundaries. This decision does not implement or approve persistence, acquisition, raw-byte storage, retention or usage. Production remains `BLOCKED_BACKEND_UNAPPROVED`. See [SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md](SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md).

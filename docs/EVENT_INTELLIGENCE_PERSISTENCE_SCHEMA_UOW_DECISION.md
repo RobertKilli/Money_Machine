@@ -152,3 +152,7 @@ existing asset-mapping revision's own provenance. The existing canonical
 asset mapping remains the sole asset authority. The uncommitted runtime
 migration remains unapproved and must be reconciled before it can be run.
 The SEC provenance decision also leaves exact document-byte persistence/readback blocked: no PostgreSQL bytea, Supabase Storage or object-store backend is selected. Package completeness members and selected event-source lineage members are separate authorities; M5 provider/dataset rows do not substitute for a reviewed SEC profile.
+
+## SEC exact-byte storage boundary
+
+SEC document `bytea`, immutable manifest and package membership are selected as a technical first-version candidate so a single PostgreSQL transaction can reread/hash bytes and atomically commit authority. Storage remains a separate design-only decision: no migration/UoW/runtime implementation, raw-byte approval, retention approval or event persistence approval is granted. Production stays `BLOCKED_BACKEND_UNAPPROVED`. See [SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md](SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md).

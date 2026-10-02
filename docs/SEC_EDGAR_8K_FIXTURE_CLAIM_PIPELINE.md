@@ -95,3 +95,7 @@ lineage model. It binds canonical document bytes and package membership while
 keeping receipt timestamps outside document identity. No live source bytes,
 database rows or event authority are added by this decision. See
 [`SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md`](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md).
+
+## Exact-byte backend decision
+
+Fixture text and normalized/extracted content remain distinct from exact HTTP entity-body octets. The selected first-version backend candidate is PostgreSQL `bytea` plus immutable manifest/package membership in one transaction, with readback SHA-256 over entity-body octets before authority. No fixture string, decoded text, or extracted claim substitutes for raw bytes. No storage or acquisition is implemented or approved; production remains `BLOCKED_BACKEND_UNAPPROVED`. See [SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md](SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md).
