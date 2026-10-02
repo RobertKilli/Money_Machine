@@ -8,6 +8,7 @@
   "normalizedStorage": "NOT_APPROVED",
   "authorityPersistence": "NOT_APPROVED",
   "retention": "NOT_APPROVED",
+  "deletion": "NOT_APPROVED",
   "redistribution": "NOT_APPROVED",
   "commercialUse": "NOT_APPROVED"
 }
