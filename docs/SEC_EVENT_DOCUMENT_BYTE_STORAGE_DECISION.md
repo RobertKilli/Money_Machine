@@ -5,7 +5,7 @@ Decision contract: `sec-event-document-byte-storage-decision/v1`
 Reviewed and official-source control date: 2026-10-02
 Status: technical candidate selected; production remains `BLOCKED_BACKEND_UNAPPROVED`.
 
-This is a design decision only. It creates no storage adapter, SQL, migration, repository, live acquisition, or persisted bytes. A technical selection does not approve live acquisition, raw-byte storage, normalized storage, authority persistence, retention, redistribution, or commercial use. Each remains `NOT_APPROVED` pending its own source, legal, usage, security, backup, and operations review.
+This document records the byte-storage design decision. The separately scoped synthetic runtime foundation now implements its initial PostgreSQL `bytea` boundary; it creates no live acquisition path and does not approve live acquisition, raw-byte storage, normalized storage, authority persistence, retention, redistribution, or commercial use. Each remains `NOT_APPROVED` pending its own source, legal, usage, security, backup, and operations review.
 
 ## Decision
 
@@ -98,4 +98,8 @@ No ETag guarantee was found that makes ETag a SHA-256 content identity; the cont
 
 ## Exact next implementation slice
 
+The separately authorized synthetic [provenance runtime](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME.md) implements content-addressed deduplicated blobs and application rehash over logical `bytea` readback, under one PostgreSQL transaction. Its [verification report](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_VERIFICATION.md) records exact counts, trust and rollback boundaries, concurrent writers, RLS/revokes and local advisors. The database validates digest format/address/octet length; it does not recompute SHA-256. Private snapshots are shared by material/artifact projections, receipt metadata is frozen, and a separate 96 MiB payload reservation can reject packages below the 64 MiB ceiling. This does not approve raw SEC-byte storage or retention, and adds no live SEC transport.
+
 After source/legal approval for raw SEC-byte storage and explicit backend, retention, backup/RPO/RTO and operational sign-off, implement only the PostgreSQL bytea bounded server adapter and forward-only schema/UoW: immutable manifest/blob/package membership, transaction-local authoritative reread/hash, RLS/client-deny/insert-only constraints, crash/replay/concurrency tests, and local PostgreSQL integration. Keep acquisition and authority persistence separately blocked until their own approvals and slices.
+
+Independent [runtime pre-PR review evidence](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_FINAL_REVIEW.md) supersedes checkpoint implementation totals; it leaves this versioned decision and all production approvals unchanged.

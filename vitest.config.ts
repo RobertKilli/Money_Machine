@@ -1,7 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { secRuntimePrivateLoader } from "./tests/helpers/sec-runtime-private-loader";
 
 export default defineConfig({
+  plugins:[secRuntimePrivateLoader()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

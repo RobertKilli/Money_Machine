@@ -73,6 +73,10 @@ The contract defines these acyclic formulas:
 - receipt identity/fingerprint: request, attempt, endpoint/profile, response material, retrieved/effective availability and package revision. It is excluded from document identity.
 - lineage identity/fingerprint: its own exact ordered references to package-document members. It is not the complete package member set.
 
+### Runtime receipt and lineage semantics
+
+The runtime authority graph preserves this separation. A later acquisition receipt creates a new attempt and receipt/availability row while reusing the source profile, filing identity, content blobs, document artifacts, filing package, package members, and event-source lineage when the exact package member set and amendment context are unchanged. The merged decision defines lineage identity from source profile and ordered package-document member references; its fingerprint also binds amendment context. Receipt ID, retrieval time, and effective availability are deliberately absent. This is therefore a stable evidence-set lineage across repeated observations, while each observation remains separately auditable through its receipt. A future contract that selects one observation as lineage material must version that identity rule rather than silently changing v1.
+
 An exhibit-only byte change gives the exhibit a new artifact identity and the containing package revision a new fingerprint/ID; an unchanged primary artifact remains stable. The package-document membership authority has exact count, contiguous zero-based ordinals, unique locators, one filing index and exactly one primary. It must reconcile missing, extra, duplicate and undeclared members against the bounded filing-index manifest. Amendment packages retain the original and point to the exact parent filing identity; same-profile/CIK, accession ordering, no fork/cycle and complete parents are deferred invariants.
 
 Filing date (`date`), acceptance/publication timestamp, report period (`date`), event time, signing time, expected closing, completion and retrieval time remain separate. Receipt variation appends receipt provenance; it never supersedes the document/package by newest-wins.
@@ -115,4 +119,8 @@ The uncommitted persistence-runtime migration `20261001191840_event_intelligence
 
 ## Exact-byte backend decision
 
+The separately scoped synthetic runtime now implements the eleven authority tables and a bounded server PostgreSQL UoW. See [runtime protocol](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME.md) and [A–G verification](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_VERIFICATION.md) for actual column/key bindings, receipt-independent lineage identity, canonical reread, rollback, concurrency and security evidence. This implementation does not change this decision's production approval boundary or promote synthetic claims to event authority.
+
 The previously blocked exact-byte backend is now a technical candidate decision: PostgreSQL `bytea`, immutable artifact manifest and package membership share one transaction; bounded readback rehash is required before authority commit and on every authoritative read. Supabase Storage and external object storage are not selected for v1 due to cross-service atomicity/recovery boundaries. This decision does not implement or approve persistence, acquisition, raw-byte storage, retention or usage. Production remains `BLOCKED_BACKEND_UNAPPROVED`. See [SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md](SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md).
+
+Independent [runtime pre-PR review evidence](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_FINAL_REVIEW.md) supersedes checkpoint implementation totals; it leaves this versioned decision and all production approvals unchanged.
