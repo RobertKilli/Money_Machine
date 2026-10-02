@@ -193,3 +193,14 @@ All sources below are first-party provider docs, pricing or terms. Checked 2026-
 - Bitquery: [Ethereum holders](https://docs.bitquery.io/docs/blockchain/Ethereum/token-holders/token-holder-api/), [balances](https://docs.bitquery.io/docs/blockchain/Ethereum/balances/), [plans/history](https://bitquery.io/pricing), [terms](https://bitquery.io/terms-of-service).
 - GoPlus: [token security](https://docs.gopluslabs.io/reference/tokensecurityusingget_1), [address security](https://docs.gopluslabs.io/reference/addresscontractusingget_1), [rate limits](https://docs.gopluslabs.io/reference/support), [security API information](https://gopluslabs.io/en/security-api).
 - DEX Screener: [API reference](https://docs.dexscreener.com/api/reference), [API terms](https://docs.dexscreener.com/api/api-terms-and-conditions).
+
+## Coinbase ETH-USD observation prerequisite (2026-10-02)
+
+A separate [Coinbase Exchange smoke boundary](M5_COINBASE_ETH_USD_LIVE_SMOKE_BOUNDARY.md)
+now plans only ETH-USD public product/candles/stats requests and parses synthetic
+observations. Exact host/path/query, zero credentials, bounded streams, lossless
+decimals and empty local/production registries keep execute blocked. Production
+source decision, readiness and approval registry are unchanged. This is neither
+a canonical ETH/WETH mapping nor usage/storage approval. The next operative step
+requires a separate authorization for one tiny live smoke; no live call is made
+and no source is qualified or persisted by this slice.

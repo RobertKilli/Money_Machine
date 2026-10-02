@@ -103,3 +103,13 @@ Before any source can become `QUALIFIED`, a later reviewed phase must supply: an
 | CoinMarketCap API Pricing | https://coinmarketcap.com/api/pricing/ | 2026-09-30 06:05 UTC | Plan table and FAQ describe commercial-use scope and restrictions; selected plan/terms not accepted, no approval inferred. |
 
 No terms were accepted. This document is not legal advice.
+
+## Coinbase smoke prerequisite (2026-10-02)
+
+The separate [ETH-USD smoke boundary](M5_COINBASE_ETH_USD_LIVE_SMOKE_BOUNDARY.md)
+validates stats decimals and returns field presence only. It supplies no rolling
+window/asOf, venue-universe seal, mapping or qualification witness. Both smoke
+registries are empty and execution is blocked; all test data is synthetic. Coinbase
+remains PARTIAL and usage/storage/retention/commercial approvals remain absent.
+Next operative step is one separately authorized product/candle/stats live smoke,
+which observes a tiny sample and does not persist or qualify the source.

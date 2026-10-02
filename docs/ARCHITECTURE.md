@@ -906,3 +906,13 @@ The exact-byte backend candidate is PostgreSQL `bytea` with its immutable manife
 The synthetic SEC runtime is documented in [SEC EDGAR event-source provenance runtime](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME.md), with its consolidated [A–G verification evidence](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_VERIFICATION.md). Its eleven authorities are isolated from M5 market-data lineage and remain synthetic/non-authoritative; production configuration stays `BLOCKED_BACKEND_UNAPPROVED`. PostgreSQL `bytea` stores exact logical entity-body octets in a deduplicated content-blob authority, while document artifacts retain distinct filing locator/role identity. Filing packages and selected event-source lineages are separately sealed ordered sets. Receipt variation records a new acquisition attempt and availability receipt while preserving content, package, and lineage identity when the member set and amendment context are stable. One READ COMMITTED UoW writes in deterministic parent/key order, rehashes each logical blob readback, rereads material columns and exact member sets, and commits only after deferred invariants pass. RLS/no-policy/revokes and immutable triggers deny ordinary mutations and client access. Resource admission checks a separate 96 MiB payload budget before entity-buffer allocation; an optional worker lease is released in application finally. A package below its 64 MiB ceiling can fail this gate. No live acquisition, event-authority write, scheduler, signal or trading path is added.
 
 The [independent final review](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_FINAL_REVIEW.md) records authenticated construction, locked receipt ordinal allocation, chronology coverage on later/concurrent package arrivals, verified amendment context and the corrected catalog totals.
+
+## Coinbase Exchange ETH-USD smoke boundary
+
+The separate [Coinbase smoke boundary](M5_COINBASE_ETH_USD_LIVE_SMOKE_BOUNDARY.md)
+adds strict request planning, same-runtime descriptive authorization, lossless
+synthetic response observations and a bounded fake-port-tested HTTP boundary.
+Both authorization registries are empty; execute has zero network side effects
+and remains BLOCKED_BACKEND_UNAPPROVED. No credentials, persistence, ETH/WETH
+mapping, source qualification or production readiness is added. CoinGecko Demo
+smoke and approval policies are unchanged.

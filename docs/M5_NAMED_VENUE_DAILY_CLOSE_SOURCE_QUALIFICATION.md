@@ -52,3 +52,15 @@ Candidate qualification is not usage approval or mapping authority. The projecti
 ## Next slice
 
 First obtain static, official evidence for exact listed instrument identities and the UTC daily boundary, then resolve gap, correction/finality and required-history policies. Keep technical endpoint qualification separate from provider permission, storage/retention, display and commercial approval. A later persistence slice must add new versioned records additively; it must not rewrite old metric authority. Only after those gates pass should an independently approved acquisition slice consider transport. No API calls, database, migration, scheduler, persistence or canonical writes are included here.
+
+## Coinbase smoke prerequisite (2026-10-02)
+
+The [ETH-USD smoke boundary](M5_COINBASE_ETH_USD_LIVE_SMOKE_BOUNDARY.md) adds a
+separate observation-only product/candles/stats plan and lossless parser, tested
+with synthetic fixtures. Its empty authority registries block execution. Coinbase
+remains PARTIAL: current listing, exact UTC-close, history/gaps, corrections and
+finality are not qualified. The REST rate-limit page was successfully checked in
+this later boundary review (10 public requests/s/IP, burst up to 15); the table
+above records the earlier review. A local lease does not represent that IP bucket.
+Next operative step is one separately authorized live smoke with a tiny sample,
+without qualification or persistence. No canonical ETH/WETH mapping is issued.
