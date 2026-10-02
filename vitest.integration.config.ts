@@ -1,8 +1,24 @@
 import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 
 import { defineConfig } from "vitest/config";
+import { transformWithOxc } from "vite";
 
 export default defineConfig({
+  // Test-only access to the production UoW's private persistence operation.
+  // This loader is absent from application builds; it creates no trusted input.
+  plugins: [{
+    name: "sec-artifact-private-integration-access",
+    enforce: "pre",
+    resolveId(id) {
+      if (id === "test-only:sec-artifact-uow") return "\0sec-artifact-private-integration.ts";
+    },
+    async load(id) {
+      if (id !== "\0sec-artifact-private-integration.ts") return;
+      const source = await readFile(new URL("./src/infrastructure/postgres/sec-edgar-event-source-provenance-uow.ts", import.meta.url), "utf8");
+      return transformWithOxc(`${source}\nexport { persistDocumentArtifact };\n`, "sec-artifact-private-integration.ts", { lang: "ts" });
+    },
+  }],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
