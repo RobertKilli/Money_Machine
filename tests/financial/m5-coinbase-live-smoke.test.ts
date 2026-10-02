@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { executeM5ProviderLiveSmoke } from "@/application/intelligence/m5-provider-live-smoke";
+import { executeM5ProviderLiveAcquisition, isTrustedM5ProviderLiveAcquisitionForIngestion } from "@/application/intelligence/m5-provider-live-acquisition";
+import { executeM5CoinGeckoAcquisitionIngestionHandoff } from "@/application/intelligence/m5-coingecko-acquisition-ingestion-handoff";
+import { executeManualIngestionToLineage } from "@/application/intelligence/manual-ingestion-to-lineage";
 import { COINBASE_SMOKE_AUTHORITY_REGISTRIES, COINBASE_SMOKE_LIMITS, COINBASE_SMOKE_PROFILES, COINBASE_SMOKE_SCOPE, COINBASE_SMOKE_STATUS, COINBASE_SMOKE_VERSION, createCoinbaseSmokeAuthorization, isRuntimeCoinbaseSmokeAuthorization, parseCoinbaseSmokeAuthorization, planCoinbaseSmoke, validateCoinbaseSmokeRequest } from "@/application/intelligence/m5-coinbase-smoke-contract";
 import { parseCoinbaseSmokeResponse } from "@/application/intelligence/m5-coinbase-smoke-parser";
 import { executeCoinbaseSmoke } from "@/application/intelligence/m5-coinbase-live-smoke";
@@ -17,15 +24,15 @@ const stats = '{"open":"2000","high":"2100","low":"1900","last":"2001","volume":
 const encode = (text: string) => new TextEncoder().encode(text);
 const parse = (text: string, index = 0, receivedAt = now) => parseCoinbaseSmokeResponse({ request: request(index), body: encode(text), receivedAt, evaluationAt: now });
 function fakePorts(text = product) {
-  const cancel = vi.fn();
+  const cancel = vi.fn(), release = vi.fn();
   const response: Awaited<ReturnType<CoinbaseSmokeHttpPorts["open"]>> = { status: 200, contentType: "application/json; charset=utf-8", contentEncoding: null, body: (async function* () { yield encode(text); })(), cancel };
   const ports = {
-    acquireLease: vi.fn(async () => true),
+    acquireLease: vi.fn<CoinbaseSmokeHttpPorts["acquireLease"]>(async () => ({ release })),
     resolveIpv4: vi.fn(async () => ["8.8.8.8"]),
     open: vi.fn<CoinbaseSmokeHttpPorts["open"]>(async () => response),
     currentTime: vi.fn(() => now),
   } satisfies CoinbaseSmokeHttpPorts;
-  return { ports, cancel, response };
+  return { ports, cancel, response, release };
 }
 afterEach(() => vi.useRealTimers());
 
@@ -44,7 +51,7 @@ describe("Coinbase descriptive smoke authorization and request plan", () => {
     expect(() => createCoinbaseSmokeAuthorization({ ...draft(), scope: { ...COINBASE_SMOKE_SCOPE, [key]: "other" } })).toThrow("SCOPE_INVALID");
     expect(() => planCoinbaseSmoke({ ...config(), [key]: "other" })).toThrow("SCOPE_INVALID");
   });
-  it.each(["maximumRequests", "maximumRequestsPerProfile", "maximumPages", "maximumResponseBytes", "maximumTotalResponseBytes", "timeoutMs", "retries", "retryAfterWaitMs", "maximumDailyBuckets"])("pins budget %s", key => {
+  it.each(["maximumRequests", "maximumRequestsPerProfile", "maximumPages", "maximumResponseBytes", "maximumTotalResponseBytes", "timeoutMs", "retries", "retryAfterWaitMs", "maximumDailyBuckets", "maximumProviderCandles"])("pins budget %s", key => {
     expect(() => createCoinbaseSmokeAuthorization({ ...draft(), limits: { ...COINBASE_SMOKE_LIMITS, [key]: Number.MAX_SAFE_INTEGER } })).toThrow("LIMITS_INVALID");
   });
   it.each(["fingerprint", "authorizationId"])("rejects forged identity %s", key => {
@@ -110,7 +117,7 @@ describe("Coinbase sanitized lossless observations", () => {
     expect(parse(`[[${first},2e3,2.1e3,2000,2001,0e2]]`, 1).candles[0].volume.decimal).toBe("0");
   });
   it.each([
-    "[[1,2,3]]", `[${candle()},${candle()}]`, `[${candle()},${candle(first + 60)}]`, `[${candle()},${candle(first + 86400)},${candle(first + 172800)}]`, `[${candle(first - 86400)}]`, `[${candle(first + 172800)}]`, `[[${first},2100,2000,2001,2001,1]]`, `[[${first},0,2000,1,1,1]]`, `[[${first},2000,2002,2001,"2001",1]]`, `[[${first},2000,2002,2001,2001,-1]]`, `[[${first}.5,2000,2002,2001,2001,1]]`, `[${candle(first, "1e999")}]`,
+    "[[1,2,3]]", `[${candle()},${candle()}]`, `[${candle()},${candle(first + 60)}]`, `[[${first},2100,2000,2001,2001,1]]`, `[[${first},0,2000,1,1,1]]`, `[[${first},2000,2002,2001,"2001",1]]`, `[[${first},2000,2002,2001,2001,-1]]`, `[[${first}.5,2000,2002,2001,2001,1]]`, `[${candle(first, "1e999")}]`,
   ])("rejects malformed/out-of-budget/order/OHLC candles %s", source => expect(() => parse(source, 1)).toThrow("M5_COINBASE_SMOKE_"));
   it("accepts missing candles as unknown history and does not assert gap-free/finalized UTC-close", () => {
     const empty = parse("[]", 1); expect(empty.candleCount).toBe(0); expect(empty.capabilityObservations).toEqual([]);
@@ -163,11 +170,11 @@ describe("credential-free bounded transport boundary with fake ports only", () =
     expect(options.headers).toEqual({ accept: "application/json", "accept-encoding": "identity" }); expect(options.signal.aborted).toBe(true);
     expect(JSON.stringify(result)).not.toMatch(/synthetic-private-canary|headers|cookies|credential|rawPayload/);
   });
-  it.each(["Authorization", "CB-ACCESS-KEY", "CB-ACCESS-SIGN", "CB-ACCESS-TIMESTAMP", "CB-ACCESS-PASSPHRASE", "cookie", "x-api-key"])("rejects injected header %s before lease/DNS/HTTP", async header => {
+  it.each(["Authorization", "Proxy-Authorization", "CB-ACCESS-KEY", "CB-ACCESS-SIGN", "CB-ACCESS-TIMESTAMP", "CB-ACCESS-PASSPHRASE", "cookie", "x-api-key"])("rejects injected header %s before lease/DNS/HTTP", async header => {
     const { ports } = fakePorts(); await expect(requestCoinbaseSmokeObservation({ request: request(), headers: { [header]: "secret-canary" } }, ports)).rejects.toThrow("SHAPE_INVALID");
     expect(ports.acquireLease).not.toHaveBeenCalled(); expect(ports.resolveIpv4).not.toHaveBeenCalled(); expect(ports.open).not.toHaveBeenCalled();
   });
-  it.each(["credential", "credentials", "credentialReferences", "environment", "retry", "signal"])("rejects extra transport field %s before any port", async key => {
+  it.each(["credential", "credentials", "credentialReferences", "environment", "retry"])("rejects extra transport field %s before any port", async key => {
     const { ports } = fakePorts(); await expect(requestCoinbaseSmokeObservation({ request: request(), [key]: "secret-canary" }, ports)).rejects.toThrow("SHAPE_INVALID"); expect(ports.acquireLease).not.toHaveBeenCalled();
   });
   it.each(["127.0.0.1", "10.0.0.1", "169.254.169.254", "192.168.1.1", "100.64.0.1", "::1", "::ffff:127.0.0.1", "8.8.8.8.evil", "008.8.8.8", "198.18.0.1"])("rejects SSRF address %s before HTTP", async address => {
@@ -177,14 +184,15 @@ describe("credential-free bounded transport boundary with fake ports only", () =
   it("rejects a mixed DNS set and denied local lease", async () => {
     const { ports } = fakePorts(); ports.resolveIpv4.mockResolvedValue(["8.8.8.8", "127.0.0.1"]);
     await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow("DNS_REJECTED");
-    ports.acquireLease.mockResolvedValue(false); await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow("RATE_LEASE_DENIED"); expect(ports.resolveIpv4).toHaveBeenCalledTimes(1);
+    ports.acquireLease.mockResolvedValue(null); await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow("RATE_LEASE_DENIED"); expect(ports.resolveIpv4).toHaveBeenCalledTimes(1);
   });
   it.each([
     { status: 301, code: "REDIRECT_REJECTED" }, { status: 429, code: "HTTP_REJECTED" }, { contentType: "text/html", code: "CONTENT_TYPE_REJECTED" }, { contentType: "application/json; charset=latin1", code: "CONTENT_TYPE_REJECTED" }, { contentEncoding: "gzip", code: "CONTENT_ENCODING_REJECTED" },
   ])("rejects transport response %j with cancellation/no retries", async patch => {
     const { ports, cancel, response } = fakePorts();
-    ports.open.mockImplementation(async () => ({ ...response, ...patch }));
-    await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow(patch.code); expect(ports.open).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce();
+    const { code, ...material } = patch;
+    ports.open.mockImplementation(async () => ({ ...response, ...material }));
+    await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow(code); expect(ports.open).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce();
   });
   it("bounds streaming and snapshots chunks to prevent aliases", async () => {
     const { ports, response } = fakePorts();
@@ -232,9 +240,181 @@ describe("credential-free bounded transport boundary with fake ports only", () =
   });
 });
 
+describe("independent adversarial review regressions", () => {
+  it("rejects unsafe cancellation prototypes/accessors without traps or port calls", async () => {
+    const trap = vi.fn(() => { throw new Error("private-abort-canary"); });
+    const prototype = new Proxy({}, { getPrototypeOf: trap, get: trap });
+    const signal = Object.defineProperty(new AbortController().signal, "aborted", { get: trap });
+    const { ports } = fakePorts();
+    for (const unsafe of [Object.create(prototype), signal, new Proxy(signal, { get: trap })]) {
+      await expect(requestCoinbaseSmokeObservation({ request: request(), signal: unsafe }, ports)).rejects.toThrow("CANCEL_SIGNAL_INVALID");
+    }
+    expect(trap).not.toHaveBeenCalled(); expect(ports.acquireLease).not.toHaveBeenCalled(); expect(ports.resolveIpv4).not.toHaveBeenCalled(); expect(ports.open).not.toHaveBeenCalled();
+  });
+  it("orders lease before DNS before open, and snapshots trusted ports before awaiting", async () => {
+    const { ports, response, release } = fakePorts(), order: string[] = [];
+    const replacement = vi.fn(async () => response);
+    ports.acquireLease.mockImplementation(async () => { order.push("lease"); ports.open = replacement; return { release }; });
+    ports.resolveIpv4.mockImplementation(async () => { order.push("DNS"); return ["8.8.8.8"]; });
+    const original = ports.open; original.mockImplementation(async () => { order.push("HTTP"); return response; });
+    await requestCoinbaseSmokeObservation({ request: request() }, ports);
+    expect(order).toEqual(["lease", "DNS", "HTTP"]); expect(replacement).not.toHaveBeenCalled();
+  });
+  it.each([
+    { query: [{ key: "end", value: config().end }, { key: "end", value: config().end }, { key: "start", value: config().start }] },
+    { query: [{ key: "start", value: config().start }, { key: "granularity", value: "86400" }, { key: "end", value: config().end }] },
+    { body: null }, { port: 443 }, { fragment: "private-canary" }, { userinfo: "private-canary" },
+  ])("rejects noncanonical query and extra URL/body dimensions %j before any ports", async patch => {
+    const { ports } = fakePorts();
+    await expect(requestCoinbaseSmokeObservation({ request: { ...request(1), ...patch } }, ports)).rejects.toThrow("M5_COINBASE_SMOKE_");
+    expect(ports.acquireLease).not.toHaveBeenCalled(); expect(ports.resolveIpv4).not.toHaveBeenCalled(); expect(ports.open).not.toHaveBeenCalled();
+  });
+  it("deep freezes every nested result and plan without exposing producer-owned bytes", () => {
+    const frozen = (value: unknown): void => {
+      if (!value || typeof value !== "object") return;
+      expect(Object.isFrozen(value)).toBe(true); for (const child of Object.values(value)) frozen(child);
+    };
+    frozen(createCoinbaseSmokeAuthorization(draft())); frozen(planCoinbaseSmoke(config()));
+    frozen(parse(product)); frozen(parse(`[${candle()}]`, 1)); frozen(parse(stats, 2));
+    const bytes = encode(product), result = parseCoinbaseSmokeResponse({ request: request(), body: bytes, receivedAt: now, evaluationAt: now });
+    bytes.fill(0); expect(result.payloadFingerprint).toBe(parse(product).payloadFingerprint); expect(result.product?.status).toBe("online");
+  });
+  it("validates up to 300 provider candles but selects/audits only two in-range buckets", () => {
+    const rows = Array.from({ length: 300 }, (_, index) => candle(first + (1 - index) * 86400));
+    const result = parse(`[${rows.join(",")}]`, 1);
+    expect(result.providerCandleCount).toBe(300); expect(result.candleCount).toBe(2);
+    expect(result.excludedBeforeStart).toBe(298); expect(result.excludedAtOrAfterEnd).toBe(0);
+    expect(result.candles.map(row => row.bucketStart)).toEqual([config().start, "2026-10-01T00:00:00.000Z"]);
+    expect(() => parse(`[${rows.join(",")},${candle(first - 300 * 86400)}]`, 1)).toThrow("PROVIDER_CANDLE_LIMIT_EXCEEDED");
+    const outside = parse(`[${candle(first - 86400)},${candle()},${candle(first + 86400)},${candle(first + 172800)}]`, 1);
+    expect(outside).toMatchObject({ providerCandleCount: 4, candleCount: 2, excludedBeforeStart: 1, excludedAtOrAfterEnd: 1 });
+    expect(() => parse(`[${candle(first - 86400)},${candle(first - 86400)}]`, 1)).toThrow("CANDLE_ORDER_INVALID");
+  });
+  it("does not fill missing buckets or assert finality for a current candle", () => {
+    const current = parse(`[${candle(first + 86400)}]`, 1); expect(current.candleCount).toBe(1);
+    expect(current.providerTimestamp).toBeNull(); expect(JSON.stringify(current)).not.toMatch(/READY|QUALIFIED|FINALIZED|AUTHORITATIVE_DAILY_CLOSE/);
+  });
+  it("sorts independently of locale and rejects full-response order reversal", () => {
+    const locale = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => { throw new Error("locale-canary"); });
+    try {
+      expect(parse(`[${candle(first + 86400)},${candle()}]`, 1).candles[0].bucketStart).toBe(config().start);
+      createCoinbaseSmokeAuthorization(draft()); expect(locale).not.toHaveBeenCalled();
+    } finally { locale.mockRestore(); }
+    expect(() => parse(`[${candle(first - 86400)},${candle(first + 86400)},${candle()}]`, 1)).toThrow("CANDLE_ORDER_INVALID");
+  });
+  it.each(["-0", "-1", "1e129", "1e-129", "1".repeat(129)])("rejects decimal grammar/atom/scale violation %s", volume => {
+    expect(() => parse(`[[${first},2000,2002,2001,2001,${volume}]]`, 1)).toThrow("DECIMAL_INVALID");
+  });
+  it("rejects timestamp overflow and excessive JSON depth/node count", () => {
+    expect(() => parse(`[[253402300800,2000,2002,2001,2001,1]]`, 1)).toThrow("CANDLE_TIMESTAMP_INVALID");
+    expect(() => parse('['.repeat(18) + '0' + ']'.repeat(18), 1)).toThrow("JSON_INVALID");
+    expect(() => parse('[' + Array(4100).fill('0').join(',') + ']', 1)).toThrow("JSON_INVALID");
+  });
+  it("uses intrinsic byte lengths and copies without caller iterator/getter calls", async () => {
+    const getter = vi.fn(() => { throw new Error("byte-getter-canary"); });
+    const body = encode(product);
+    Object.defineProperty(body, "byteLength", { get: getter }); Object.defineProperty(body, Symbol.iterator, { get: getter });
+    expect(parseCoinbaseSmokeResponse({ request: request(), body, receivedAt: now, evaluationAt: now }).product?.id).toBe("ETH-USD");
+    expect(getter).not.toHaveBeenCalled();
+    const large = new Uint8Array(524289); Object.defineProperty(large, "byteLength", { value: 1 });
+    expect(() => parseCoinbaseSmokeResponse({ request: request(), body: large, receivedAt: now, evaluationAt: now })).toThrow("BODY_INVALID");
+    const { ports, response, release } = fakePorts();
+    ports.open.mockImplementation(async () => ({ ...response, body: (async function* () { yield large; })() }));
+    await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow("RESPONSE_TOO_LARGE"); expect(release).toHaveBeenCalledOnce();
+  });
+  it.each(["success", "DNS", "HTTP", "parse"])("releases acquired lease once on %s", async phase => {
+    const { ports, response, cancel, release } = fakePorts(phase === "parse" ? "{" : product);
+    if (phase === "DNS") ports.resolveIpv4.mockResolvedValue(["127.0.0.1"]);
+    if (phase === "HTTP") ports.open.mockImplementation(async () => ({ ...response, status: 500 }));
+    if (phase === "success") await requestCoinbaseSmokeObservation({ request: request() }, ports);
+    else await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow("M5_COINBASE_SMOKE_");
+    expect(release).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledTimes(phase === "DNS" ? 0 : 1);
+  });
+  it("releases a late lease after timeout without DNS/HTTP", async () => {
+    vi.useFakeTimers(); const { ports, release } = fakePorts();
+    let settle!: (handle: { release(): void }) => void;
+    ports.acquireLease.mockImplementation(() => new Promise(resolve => { settle = resolve; }));
+    const rejected = expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow("TIMEOUT");
+    await vi.advanceTimersByTimeAsync(5000); await rejected;
+    settle({ release }); await vi.advanceTimersByTimeAsync(0);
+    expect(release).toHaveBeenCalledOnce(); expect(ports.resolveIpv4).not.toHaveBeenCalled(); expect(ports.open).not.toHaveBeenCalled();
+  });
+  it("cancels late HTTP completion, releases lease and never consumes late body", async () => {
+    vi.useFakeTimers(); const { ports, response, release, cancel } = fakePorts();
+    let settle!: (response: Awaited<ReturnType<CoinbaseSmokeHttpPorts["open"]>>) => void;
+    const consume = vi.fn(); ports.open.mockImplementation(() => new Promise(resolve => { settle = resolve; }));
+    const rejected = expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow("TIMEOUT");
+    await vi.advanceTimersByTimeAsync(5000); await rejected;
+    settle({ ...response, body: (async function* () { consume(); yield encode(product); })() }); await vi.advanceTimersByTimeAsync(0);
+    expect(release).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce(); expect(consume).not.toHaveBeenCalled();
+  });
+  it("propagates sanitized cancellation during stream and rejects pre-aborted input before ports", async () => {
+    const { ports, response, release, cancel } = fakePorts(); const controller = new AbortController();
+    controller.abort("private-abort-canary");
+    await expect(requestCoinbaseSmokeObservation({ request: request(), signal: controller.signal }, ports)).rejects.toThrow(/^M5_COINBASE_SMOKE_CANCELLED$/);
+    expect(ports.acquireLease).not.toHaveBeenCalled();
+    const active = new AbortController();
+    ports.open.mockImplementation(async () => ({ ...response, body: (async function* () { active.abort("private-abort-canary"); yield encode(product); })() }));
+    await expect(requestCoinbaseSmokeObservation({ request: request(), signal: active.signal }, ports)).rejects.toThrow(/^M5_COINBASE_SMOKE_CANCELLED$/);
+    expect(release).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce();
+  });
+  it("does not read opaque Error.message getters or accept forged internal error codes", async () => {
+    const { ports } = fakePorts(); const getter = vi.fn(() => { throw new Error("private-error-canary"); });
+    const unsafe = Object.defineProperty(new Error(), "message", { get: getter });
+    ports.open.mockRejectedValue(unsafe);
+    await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow(/^M5_COINBASE_SMOKE_TRANSPORT_FAILED$/);
+    expect(getter).not.toHaveBeenCalled();
+    ports.open.mockRejectedValue(new Error("M5_COINBASE_SMOKE_TIMEOUT"));
+    await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow(/^M5_COINBASE_SMOKE_TRANSPORT_FAILED$/);
+  });
+  it.each(["0.0.0.0", "172.31.255.255", "192.0.2.1", "198.51.100.1", "203.0.113.1", "224.0.0.1", "240.0.0.1", "255.255.255.255", "2001:db8::1", "::ffff:8.8.8.8"])("denies reserved/documentation/IPv6 answer %s", async address => {
+    const { ports, release } = fakePorts(); ports.resolveIpv4.mockResolvedValue([address]);
+    await expect(requestCoinbaseSmokeObservation({ request: request() }, ports)).rejects.toThrow("DNS_REJECTED"); expect(ports.open).not.toHaveBeenCalled(); expect(release).toHaveBeenCalledOnce();
+  });
+  it("parser/create do not issue operational authority and registries cannot be mutated", () => {
+    const description = createCoinbaseSmokeAuthorization(draft()); expect(isRuntimeCoinbaseSmokeAuthorization(description)).toBe(false);
+    expect(isRuntimeCoinbaseSmokeAuthorization(parseCoinbaseSmokeAuthorization(description))).toBe(false);
+    expect(() => Array.prototype.push.call(COINBASE_SMOKE_AUTHORITY_REGISTRIES.LOCAL_SMOKE, { authorizationId: description.authorizationId, fingerprint: description.fingerprint })).toThrow();
+  });
+  it("CoinGecko acquisition, smoke and ingestion/persistence reject Coinbase observation before ports", async () => {
+    const observation = parse(product), send = vi.fn(), acquire = vi.fn(), resolveCredential = vi.fn();
+    expect(isTrustedM5ProviderLiveAcquisitionForIngestion(observation)).toBe(false);
+    const smoke = await executeM5ProviderLiveSmoke({ config: observation, authorization: observation, providerId: "coingecko", environment: "LOCAL_SMOKE", asOf: now, currentTime: () => now, trustedRegistry: [], credentials: { resolve: resolveCredential }, transport: { send }, rateLimit: { acquire } });
+    expect(smoke.status).toBe("INVALID"); expect(smoke.code).toBe("M5_PROVIDER_SMOKE_CONFIG_INVALID");
+    const acquisition = await executeM5ProviderLiveAcquisition(observation as unknown as Parameters<typeof executeM5ProviderLiveAcquisition>[0]);
+    expect(acquisition).toEqual({ status: "INVALID", code: "M5_PROVIDER_LIVE_REQUEST_INVALID" });
+    const withTransaction = vi.fn(async () => { throw new Error("must-not-start-uow"); });
+    const handoff = await executeM5CoinGeckoAcquisitionIngestionHandoff({ acquisition: observation, asOf: now, scope: {} as Parameters<typeof executeM5CoinGeckoAcquisitionIngestionHandoff>[0]["scope"], apply: true, unitOfWork: { withTransaction } });
+    expect(handoff).toEqual({ status: "BLOCKED", code: "M5_ACQUISITION_HANDOFF_UNTRUSTED_ACQUISITION" });
+    await expect(executeManualIngestionToLineage(observation, { apply: true, unitOfWork: { withTransaction } })).rejects.toThrow();
+    expect(withTransaction).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled(); expect(acquire).not.toHaveBeenCalled(); expect(resolveCredential).not.toHaveBeenCalled();
+  });
+  it.each([
+    { args: ["--help"], exit: 0, kind: "usage" },
+    { args: ["--start", config().start, "--end", config().end], exit: 0, kind: "mode" },
+    { args: ["--start", config().start, "--end", config().end, "--execute", "--environment", "LOCAL_SMOKE", "--authorization", "review:synthetic"], exit: 2, kind: "status" },
+    { args: ["--unknown", "private-cli-canary"], exit: 2, kind: "error" },
+    { args: ["--start", config().start, "--end", config().end, "--environment", ""], exit: 2, kind: "error" },
+    { args: ["--start", config().start, "--end", config().end, "--execute"], exit: 2, kind: "error" },
+    { args: ["--start", config().start, "--end", config().end, "--start", config().start], exit: 2, kind: "error" },
+  ])("CLI subprocess: %j (no listen IPC, no inherited environment)", ({ args, exit, kind }) => {
+    const api = pathToFileURL(resolve("node_modules/tsx/dist/esm/api/index.mjs")).href;
+    const initializer = `import {register} from ${JSON.stringify(api)};register({tsconfig:${JSON.stringify(resolve("scripts/tsconfig.json"))}});`;
+    const child = spawnSync(process.execPath, ["--no-warnings", "--import", `data:text/javascript,${encodeURIComponent(initializer)}`, resolve("scripts/m5-coinbase-smoke.ts"), ...args], { env: { NODE_ENV: "test" }, encoding: "utf8", timeout: 15000, windowsHide: true });
+    expect(child.error).toBeUndefined(); expect(child.status).toBe(exit);
+    expect(child.stdout + child.stderr).not.toMatch(/private-cli-canary|EPERM|\.env.local|secret|raw-payload/);
+    const json = JSON.parse(kind === "error" ? child.stderr.trim() : child.stdout.trim());
+    if (kind === "mode") expect(json).toMatchObject({ mode: "DRY_RUN", credentialReferences: [], productionStatus: "BLOCKED_BACKEND_UNAPPROVED" });
+    if (kind === "status") expect(json).toMatchObject({ status: "BLOCKED", requestCount: 0 });
+    if (kind === "error") expect(json).toEqual({ status: "INVALID", code: "M5_COINBASE_SMOKE_ARGUMENT_OR_PLAN_INVALID" });
+    if (kind === "usage") expect(json.usage).toContain("Usage:");
+  });
+});
+
 describe("empty registry and side-effect-free CLI", () => {
   it("rejects copies/serialization/clones/lookalikes as runtime trust", () => {
-    const auth = createCoinbaseSmokeAuthorization(draft()); expect(isRuntimeCoinbaseSmokeAuthorization(auth)).toBe(true);
+    const auth = createCoinbaseSmokeAuthorization(draft()); expect(isRuntimeCoinbaseSmokeAuthorization(auth)).toBe(false);
     for (const copied of [{ ...auth }, JSON.parse(JSON.stringify(auth)), structuredClone(auth), {}, new Proxy(auth, {})]) {
       expect(isRuntimeCoinbaseSmokeAuthorization(copied)).toBe(false);
       expect(() => executeCoinbaseSmoke({ config: config(), authorization: copied, environment: "LOCAL_SMOKE", evaluationAt: now })).toThrow("AUTHORITY_NOT_RUNTIME_TRUSTED");

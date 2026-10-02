@@ -1,10 +1,8 @@
 import "server-only";
 import { createHash } from "node:crypto";
-import { types } from "node:util";
-import { canonicalSha256 } from "@/domain/intelligence/ingestion-provenance";
-import { COINBASE_SMOKE_LIMITS, COINBASE_SMOKE_SCOPE, COINBASE_SMOKE_STATUS, smokeArray, smokeError, smokeFreeze, smokeRecord, smokeTime, validateCoinbaseSmokeRequest } from "./m5-coinbase-smoke-contract";
+import { COINBASE_SMOKE_LIMITS, COINBASE_SMOKE_SCOPE, COINBASE_SMOKE_STATUS, smokeSha256, smokeArray, smokeByteSnapshot, smokeError, smokeFreeze, smokeRecord, smokeTime, validateCoinbaseSmokeRequest } from "./m5-coinbase-smoke-contract";
 
-export const COINBASE_SMOKE_PARSER_VERSION = "m5-coinbase-exchange-smoke-parser/v1" as const;
+export const COINBASE_SMOKE_PARSER_VERSION = "m5-coinbase-exchange-smoke-parser/v2" as const;
 class DecimalToken { constructor(readonly text: string) { Object.freeze(this); } }
 /** Preserve every JSON number lexeme. Financial values never pass through binary floating point. */
 function losslessJson(body: Uint8Array): unknown {
@@ -81,16 +79,18 @@ const STATS_FIELDS = ["open", "high", "low", "last", "volume", "volume_30day", "
 export function parseCoinbaseSmokeResponse(input: unknown) {
   const root = smokeRecord(input, ["request", "body", "receivedAt", "evaluationAt"]);
   const request = validateCoinbaseSmokeRequest(root.request);
-  if (!root.body || typeof root.body !== "object" || types.isProxy(root.body) || !(root.body instanceof Uint8Array) || root.body.byteLength === 0 || root.body.byteLength > COINBASE_SMOKE_LIMITS.maximumResponseBytes) return smokeError("BODY_INVALID");
+  const bytes = smokeByteSnapshot(root.body, COINBASE_SMOKE_LIMITS.maximumResponseBytes, "BODY_INVALID");
+  if (bytes.byteLength === 0) return smokeError("BODY_INVALID");
   const receivedAt = smokeTime(root.receivedAt), evaluationAt = smokeTime(root.evaluationAt);
   if (receivedAt > evaluationAt) return smokeError("RECEIPT_INVALID");
-  const bytes = Uint8Array.from(root.body), parsed = losslessJson(bytes);
+  const parsed = losslessJson(bytes);
   const payloadFingerprint = createHash("sha256").update(bytes).digest("hex");
   const product = { id: "ETH-USD", baseCurrency: "ETH", quoteCurrency: "USD", displayName: "ETH/USD", status: "" };
   const availability: Record<string, boolean> = {};
   const candles: { bucketStart: string; low: SmokeDecimal; high: SmokeDecimal; open: SmokeDecimal; close: SmokeDecimal; volume: SmokeDecimal }[] = [];
   const statsFieldsPresent: string[] = [];
   const capabilities: string[] = [];
+  let providerCandleCount = 0, excludedBeforeStart = 0, excludedAtOrAfterEnd = 0;
   if (request.profile === "PRODUCT_IDENTITY") {
     const row = smokeRecord(parsed, PRODUCT_FIELDS, ["id", "base_currency", "quote_currency", "display_name", "status"]);
     if (row.id !== "ETH-USD" || row.base_currency !== "ETH" || row.quote_currency !== "USD" || row.display_name !== "ETH/USD" || !["online", "offline", "internal", "delisted"].includes(row.status as string)) return smokeError("PRODUCT_IDENTITY_MISMATCH");
@@ -100,15 +100,17 @@ export function parseCoinbaseSmokeResponse(input: unknown) {
     if (Object.hasOwn(row, "status_message") && (typeof row.status_message !== "string" || row.status_message.length > 256)) return smokeError("PRODUCT_INVALID");
     capabilities.push("PRODUCT_IDENTITY_FIELDS", "PRODUCT_STATUS_FIELDS");
   } else if (request.profile === "DAILY_CANDLES") {
-    const rows = smokeArray(parsed), start = request.query[2]!.value, end = request.query[0]!.value;
+    if (!Array.isArray(parsed)) return smokeError("CANDLE_INVALID");
+    if (parsed.length > COINBASE_SMOKE_LIMITS.maximumProviderCandles) return smokeError("PROVIDER_CANDLE_LIMIT_EXCEEDED");
+    const rows = smokeArray(parsed, COINBASE_SMOKE_LIMITS.maximumProviderCandles), start = request.query[2]!.value, end = request.query[0]!.value;
+    providerCandleCount = rows.length;
     const expected = (Date.parse(end) - Date.parse(start)) / 86_400_000;
-    if (rows.length > expected || rows.length > 2 || rows.length > 300) return smokeError("CANDLE_BUDGET_EXCEEDED");
     let previous: bigint | undefined, direction = 0;
     for (const raw of rows) {
       const row = smokeArray(raw);
       if (row.length !== 6 || !(row[0] instanceof DecimalToken) || !/^(0|[1-9]\d*)$/.test(row[0].text)) return smokeError("CANDLE_INVALID");
       const seconds = BigInt(row[0].text);
-      if (seconds > 253402300799n || seconds * 1000n < BigInt(Date.parse(start)) || seconds * 1000n >= BigInt(Date.parse(end))) return smokeError("CANDLE_RANGE_INVALID");
+      if (seconds > 253402300799n) return smokeError("CANDLE_TIMESTAMP_INVALID");
       if (previous !== undefined) {
         const nextDirection = seconds > previous ? 1 : seconds < previous ? -1 : 0;
         if (!nextDirection || (direction && nextDirection !== direction) || (seconds > previous ? seconds - previous : previous - seconds) < 86400n) return smokeError("CANDLE_ORDER_INVALID");
@@ -117,16 +119,19 @@ export function parseCoinbaseSmokeResponse(input: unknown) {
       previous = seconds;
       const [low, high, open, close, volume] = row.slice(1).map(value => decimal(value, true));
       if (BigInt(low!.coefficient) === 0n || compare(low!, high!) > 0 || compare(open!, low!) < 0 || compare(open!, high!) > 0 || compare(close!, low!) < 0 || compare(close!, high!) > 0) return smokeError("CANDLE_OHLC_INVALID");
+      if (seconds * 1000n < BigInt(Date.parse(start))) { excludedBeforeStart++; continue; }
+      if (seconds * 1000n >= BigInt(Date.parse(end))) { excludedAtOrAfterEnd++; continue; }
+      if (candles.length >= expected || candles.length >= COINBASE_SMOKE_LIMITS.maximumDailyBuckets) return smokeError("CANDLE_SELECTION_BUDGET_EXCEEDED");
       // This is the observed bucket start, not a qualified UTC-close or provider publication time.
       candles.push({ bucketStart: new Date(Number(seconds * 1000n)).toISOString(), low: low!, high: high!, open: open!, close: close!, volume: volume! });
     }
-    candles.sort((a, b) => a.bucketStart.localeCompare(b.bucketStart));
+    candles.sort((a, b) => a.bucketStart < b.bucketStart ? -1 : a.bucketStart > b.bucketStart ? 1 : 0);
     if (candles.length) capabilities.push("DAILY_CANDLE_FIELDS", "CLOSE_FIELD_PRESENCE", "CANDLE_VOLUME_FIELD_PRESENCE");
   } else {
     const row = smokeRecord(parsed, STATS_FIELDS, ["open", "high", "low", "last", "volume"]);
     for (const field of STATS_FIELDS) if (Object.hasOwn(row, field)) { decimal(row[field], false); statsFieldsPresent.push(field); }
     capabilities.push("STATS_FIELD_PRESENCE");
   }
-  const observation = { authorityStatus: COINBASE_SMOKE_STATUS, scope: COINBASE_SMOKE_SCOPE, endpointProfile: request.profile, requestCount: 1, responseByteLength: bytes.byteLength, receivedAt, evaluationAt, providerTimestamp: null, parserContractVersion: COINBASE_SMOKE_PARSER_VERSION, payloadFingerprint, product: request.profile === "PRODUCT_IDENTITY" ? { ...product, availability } : null, candles, candleCount: candles.length, statsFieldsPresent, capabilityObservations: capabilities.map(capability => ({ capability, outcome: "OBSERVED_FIELD_ONLY" })) };
-  return smokeFreeze({ ...observation, observationFingerprint: canonicalSha256({ ...observation, request }) });
+  const observation = { authorityStatus: COINBASE_SMOKE_STATUS, scope: COINBASE_SMOKE_SCOPE, endpointProfile: request.profile, requestCount: 1, responseByteLength: bytes.byteLength, receivedAt, evaluationAt, providerTimestamp: null, parserContractVersion: COINBASE_SMOKE_PARSER_VERSION, payloadFingerprint, product: request.profile === "PRODUCT_IDENTITY" ? { ...product, availability } : null, candles, candleCount: candles.length, providerCandleCount, excludedBeforeStart, excludedAtOrAfterEnd, statsFieldsPresent, capabilityObservations: capabilities.map(capability => ({ capability, outcome: "OBSERVED_FIELD_ONLY" })) };
+  return smokeFreeze({ ...observation, observationFingerprint: smokeSha256({ ...observation, request }) });
 }

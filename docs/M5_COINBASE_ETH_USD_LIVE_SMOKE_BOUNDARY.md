@@ -12,7 +12,10 @@ binds Coinbase Exchange / `coinbase-exchange`, instrument `ETH-USD`, ETH base,
 USD quote, exact hostname, profiles/paths/query fields, observed-field capabilities,
 validity times, operator/review references, retention and every request budget.
 Both `LOCAL_SMOKE` and `PRODUCTION` registries are empty and frozen. Parsing a
-contract issues only module-local same-runtime descriptive trust, never approval.
+contract issues only module-local same-runtime descriptive provenance, never
+operational authority or approval. The public runtime-authority predicate returns
+false for parsed/created descriptions. Only the private registry resolver can
+issue operational trust after an exact registry match; it exports no issuer.
 Copies, spread, JSON and structured clones lack that trust. Execute additionally
 requires the exact registry ID/fingerprint and valid environment/time; it currently
 returns BLOCKED with zero requests. No caller registry or operational adapter can
@@ -47,9 +50,10 @@ The port-level HTTP boundary handles one response per invocation; its separate
 infrastructure batch runner accepts only authentic immutable plans and enforces
 aggregate count/byte caps sequentially, once per profile. It is tested only with
 fake ports and is not wired to CLI/execute. Real DNS/HTTP wiring is not installed.
-The local lease
-is required even for public profiles and does not represent Coinbase's shared
-IP-wide token bucket.
+The local lease is required even for public profiles and does not represent
+Coinbase's shared IP-wide token bucket. Its reservation handle is released once
+on success, error, deadline or caller cancellation, including late completion.
+Releasing the local reservation does not refund a provider request token.
 
 ## HTTP boundary and parser
 
@@ -57,17 +61,22 @@ IP-wide token bucket.
 fake lease, DNS and transport ports. It validates fixed HTTPS/GET/scope before
 ports, acquires a lease, accepts only canonical public IPv4 answers, rejects mixed
 public/private sets, and passes the selected address plus the unchanged TLS
-servername to `open`. The open-port contract requires pinned lookup and no
+servername and exact request host to `open`. The open-port contract requires pinned lookup and no
 redirect following. It is separate from the existing credential-bearing Node
 transport; only its public-IP predicate is reused. IPv6 is denied in v1.
 
 The total deadline includes lease, DNS, open and bounded body consumption.
-Timeout aborts and cancellation closes the response; late port completion cannot
+Timeout and optional caller cancellation abort and close the response; late port completion cannot
 start subsequent phases. Non-200 (including 429), redirects, non-JSON content type,
 non-identity encoding, oversized streams and excessive stream chunks fail closed.
-Every chunk is copied before later producer mutation, and only one bounded body
-is parsed. Ports are trusted infrastructure interfaces, not a caller-controlled
-network implementation. No raw response/header/cookie/error is returned.
+Every chunk is checked using intrinsic typed-array byte length before allocation
+and copied without caller getters, iterators or species. Only one bounded body is
+parsed. Opaque transport errors are never inspected for message/code getters;
+only internally branded safe error codes are preserved. Ports are snapshotted
+before awaiting and are trusted infrastructure interfaces. Actual socket lookup,
+TLS SNI, Host, proxy exclusion and redirect behavior remain obligations of the
+future adapter: fake-port assertions prove the interface contract, not real Node
+transport behavior. No raw response/header/cookie/error is returned.
 
 Strict UTF-8 decoding and a bounded lossless JSON parser reject duplicate keys,
 bad syntax, BOM, unpaired surrogate escapes, excessive nesting/node count and
@@ -80,10 +89,17 @@ Stats decimal strings are validated but only field presence is returned.
 Candles must contain exactly `[time, low, high, open, close, volume]`, with unique
 non-overlapping timestamps and valid positive-price OHLC bounds/nonnegative volume.
 Ascending or descending monotonic provider order is accepted and normalized to
-ascending observed bucket starts. More rows than the planned expected count,
-out-of-range rows (including documented possible pre-start rows), overlapping or
-duplicate starts, bad decimals and malformed arrays are rejected. Missing buckets
-are observable as lower count, never filled or treated as history completeness.
+ascending observed bucket starts using locale-independent ordering. Parser
+`m5-coinbase-exchange-smoke-parser/v2` validates the entire bounded provider
+response, up to the documented 300 candles, while selecting/auditing at most two
+buckets in the planned half-open range. Valid pre-start and at/after-end rows are
+excluded and counted separately (`providerCandleCount`, `excludedBeforeStart`,
+`excludedAtOrAfterEnd`); they are not classified as corruption merely for being
+outside the range. Duplicate/nonmonotonic/overlapping starts, bad decimals and
+malformed arrays anywhere in the response still fail closed. The 512 KiB body,
+300 provider-row and two selected-bucket bounds are separate gates. Excluded rows
+grant no history coverage; the exact-body fingerprint includes them. Missing
+buckets are observable as lower count, never filled or treated as completeness.
 
 ## Sanitized result and temporal boundaries
 
@@ -92,7 +108,9 @@ evaluation timestamps, parser version, exact-body SHA-256 payload fingerprint,
 receipt-dependent observation fingerprint, observed product/status/availability,
 candle timestamps/count/lossless values and stats-field presence. `providerTimestamp`
 is null because these three reviewed schemas do not supply a distinct publication
-timestamp; candle bucket start is kept separately. No payload, transport header,
+timestamp; candle bucket start is kept separately. Fingerprints use canonical
+UTF-16 key ordering without locale; the exact-body hash never includes receipt.
+No payload, transport header,
 private status-message text, source-qualification witness, normalized acquisition
 package, persistence input, event authority, signal or trade is emitted.
 
@@ -125,17 +143,17 @@ qualify or persist the source. This implementation is not permission for that st
 ## Official source review
 
 The following primary pages were checked on **2026-10-02**, control time
-**2026-10-02T19:00:23Z**. Documentation browsing was the only Coinbase access;
+**2026-10-02T19:26:07Z** for the independent pre-PR recheck. Documentation browsing was the only Coinbase access;
 no `api.exchange.coinbase.com` endpoint or embedded example was executed.
 
 | Page title | URL | Control time (UTC) |
 |---|---|---|
-| Get single product | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-single-product | 2026-10-02T19:00:23Z |
-| Get product candles | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-candles | 2026-10-02T19:00:23Z |
-| Get product stats | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-stats | 2026-10-02T19:00:23Z |
-| Exchange REST API Authentication | https://docs.cdp.coinbase.com/exchange/rest-api/authentication | 2026-10-02T19:00:23Z |
-| REST Rate Limits Overview | https://docs.cdp.coinbase.com/exchange/rest-api/rate-limits | 2026-10-02T19:00:23Z |
-| Market Data Terms of Use | https://www.coinbase.com/legal/market_data | 2026-10-02T19:00:23Z |
+| Get single product | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-single-product | 2026-10-02T19:26:07Z |
+| Get product candles | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-candles | 2026-10-02T19:26:07Z |
+| Get product stats | https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-stats | 2026-10-02T19:26:07Z |
+| Exchange REST API Authentication | https://docs.cdp.coinbase.com/exchange/rest-api/authentication | 2026-10-02T19:26:07Z |
+| REST Rate Limits Overview | https://docs.cdp.coinbase.com/exchange/rest-api/rate-limits | 2026-10-02T19:26:07Z |
+| Market Data Terms of Use | https://www.coinbase.com/legal/market_data (resolved regional official page: https://www.coinbase.com/en-it/legal/market_data) | 2026-10-02T19:26:07Z |
 | Exchange REST API Requests | https://docs.cdp.coinbase.com/exchange/rest-api/requests | 2026-10-02T19:12:00Z |
 
 Product documentation establishes response fields, not today's ETH-USD listing.
@@ -176,3 +194,38 @@ smoke, execution, readiness and qualification regressions **203/203** across
 `npm ls --all` exited 0. CLI dry-run passed and CLI execute returned the expected
 BLOCKED/zero-request result. Final commit build is verified separately in a
 detached worktree with no `.env*` during install/build, before push.
+
+## Independent pre-PR review (2026-10-02)
+
+Scope: all twelve changed files in `origin/main...40b1c76d615708495285a7e3e1173d4fdedbf961`,
+including the complete contract, planner, parser, boundary, CLI, tests and linked
+qualification documents. No provider/production policy, persistence or canonical
+asset mapping changes are part of the fixes.
+
+| Finding | Severity | Correction and targeted proof |
+|---|---|---|
+| Shadowed typed-array byte length/iterator could defeat admission before copy | High, resource boundary | Intrinsic byte slots checked before allocation; shadowed getters/iterator never called; oversized chunk rejected during streaming |
+| Documented pre-start candles were classified as parser corruption | Medium | Separate 300-row provider validation from two selected buckets; 298 excluded + 2 selected test, post-end count, malformed/duplicate excluded rows still rejected |
+| Local rate lease had no release contract | Medium | Once-only reservation cleanup on success, DNS/HTTP/parse error, timeout and cancellation; late lease/open never starts the next phase |
+| Opaque error message access could invoke getters or fail sanitization | Medium | Private error branding; opaque message getter untouched and forged internal message rejected |
+| Exported descriptive parser issued operational runtime trust | Medium, latent authority surface; empty registry blocked execution | Separate descriptive provenance from private registry-issued authority; parsed/copy/serialized objects never satisfy runtime-authority predicate |
+| Shared hashing depended on locale ordering | Medium, deterministic identity | Local canonical UTF-16 ordering; throwing localeCompare proves no dependency; CoinGecko primitive unchanged |
+| Blank CLI argument bypassed dry-run environment rejection | Low | Reject empty values; Windows subprocess exit-code and sanitized output tests |
+
+The tests explicitly reject Coinbase observations at CoinGecko smoke, acquisition,
+acquisition-ingestion handoff and manual persistence boundaries before credential,
+rate, transport or UoW calls. Deep-freeze checks traverse every nested authority,
+plan and observation. CLI subprocesses use an explicit minimal environment, the
+programmatic TypeScript loader without IPC listening, and no network ports.
+
+Review verification: focused Coinbase tests **158/158 twice**; provider/smoke/
+execution/readiness/acquisition/qualification regressions **203/203** across
+18 files; full unit suite **990 passed / 35 skipped**. Typecheck and lint pass;
+`npm audit --audit-level=high` finds **0 vulnerabilities** and `npm ls --all`
+exits 0 without invalid/extraneous/missing packages. Both working diff and
+`origin/main...HEAD` pass `git diff --check`. Detached final-SHA env-free build
+and test-material output scans are verified separately before push. The existing
+Vite warning about the SEC test loader import extension is unchanged baseline
+information. No SEC/database integration tests are run by this review.
+Operational execution, source qualification and use/storage approvals remain
+blocked.

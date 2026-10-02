@@ -3,7 +3,7 @@ import { COINBASE_SMOKE_AUTHORITY_REGISTRIES, COINBASE_SMOKE_SCOPE, COINBASE_SMO
 const USAGE = "Usage: npm run m5:coinbase:smoke -- --start <UTC ISO timestamp> --end <UTC ISO timestamp> [--execute --environment LOCAL_SMOKE --authorization <reviewed-reference>]";
 export function parseCoinbaseSmokeArgs(input: unknown) {
   const argv = smokeArray(input);
-  if (argv.some(value => typeof value !== "string" || value.trim() !== value || value.length > 200)) return smokeError("ARGUMENT_INVALID");
+  if (argv.some(value => typeof value !== "string" || !value || value.trim() !== value || value.length > 200)) return smokeError("ARGUMENT_INVALID");
   const options: Record<string, string> = {};
   let execute = false;
   for (let index = 0; index < argv.length; index++) {
@@ -19,7 +19,7 @@ export function parseCoinbaseSmokeArgs(input: unknown) {
 /** CLI has no environment, credential, DNS, HTTP or persistence ports. */
 export function runCoinbaseSmokeCli(argv: unknown) {
   const args = parseCoinbaseSmokeArgs(argv);
-  if (args.help) return { usage: USAGE };
+  if (args.help) return smokeFreeze({ usage: USAGE });
   const plan = planCoinbaseSmoke({ ...COINBASE_SMOKE_SCOPE, start: args.options["--start"], end: args.options["--end"], granularity: 86400 });
   if (!args.execute) return plan;
   // There is no authority to load. A reference/string is never an executable authority.
