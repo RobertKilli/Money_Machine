@@ -175,3 +175,6 @@ Source routing treats missing issuer and asset mapping as explicit queue blocker
 Missing issuer and asset mappings may become distinct evidence-review blockers. Queue projection does not create or satisfy mapping authority.
 
 The downstream queue view model preserves these as separate safe labels and does not serialize candidate mapping IDs or mint mapping trust.
+# Composition integration note
+
+The synthetic evidence-review composition consumes only the routing contract's simulated mapping flags and never creates an issuer or asset mapping authority. A composed or non-authoritative-review-complete item remains unusable as mapping input. Production mapping approval and registry state are unchanged.

@@ -175,3 +175,6 @@ The review's focused discovery tests passed **113/113 twice**, selected event/SE
 Discovery candidates may enter the separate source-portfolio routing decision as untrusted review inputs. Aggregator hits remain `DISCOVERY_ONLY`; they cannot change jurisdiction, issuer/asset mapping, origin count, corroboration, event authority, signal, or trading state. Routing itself is non-operative and production remains blocked. See `EVENT_INTELLIGENCE_SOURCE_PORTFOLIO_ROUTING_DECISION.md`.
 
 Discovery candidates may later be projected into an evidence-review snapshot only through the separately reviewed routing and queue contracts. The queue cannot promote discovery, mapping, corroboration, or authority status. Its separate view-model child is a one-way, allowlisted presentation projection of authentic sealed snapshots; it cannot feed routing or authority trust back into domain boundaries.
+# Composition integration note
+
+The composition checkpoint accepts only runtime-authentic `SYNTHETIC` discovery candidates and validates the complete common-cutoff origin set before routing. Future correction/retraction material is excluded by the discovery contract. This does not parse provider responses or establish source coverage, rights, mapping, event truth, or authority.

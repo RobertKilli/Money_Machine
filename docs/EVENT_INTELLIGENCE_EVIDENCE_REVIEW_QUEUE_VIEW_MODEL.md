@@ -30,3 +30,6 @@ Every item time is canonical UTC ISO text; no local timezone or relative-time co
 `createBlockedEvidenceReviewQueueViewModel` supplies the deterministic production-only empty blocked model. It uses no fixture, environment switch, clock, network, database, or domain sample. Queue projection and persistence, scheduler, notifications, reviewer assignment, acquisition, authority, signal, and trading remain blocked. No loader or Next.js route is added.
 
 The separate child UI checkpoint at `feat/event-intelligence-evidence-review-queue-ui` consumes this degraded contract through a server-only blocked loader. Its client receives only this serializable view model, never domain queue items. No persistence, scheduler, notifications, source integration, or sibling source checkpoint import is included. The review queue remains non-authoritative and never a signal or trading dashboard.
+# Composition integration note
+
+The synthetic composition checkpoint passes only the sealed queue set through this adapter, then returns the resulting serializable view model. No composition result includes domain objects, queue IDs, fingerprints, canonical source material, or trust. Production remains disconnected and uses the deterministic blocked/empty model.

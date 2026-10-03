@@ -71,3 +71,6 @@ Production configuration selects no source, contains no credentials or active ro
 The full chain remains: discovery → stronger source retrieval → issuer/asset mapping → primary disclosure → correction/lifecycle review → later corroboration policy → separate eligibility review. A later event-authority and signal phase, if ever approved, must be separately designed and cannot be an automatic next state. The final source portfolio must be selected only after sibling source checkpoints are independently reviewed and integrated on updated main.
 
 A stacked child checkpoint defines a separate evidence-review queue projection over trusted routing results. A later child degrades only sealed queue sets to a JSON-safe view model; that presentation model cannot be routed back into domain trust. The queue and view model are not persistence, scheduler, notification, UI, or authority wiring; production remains blocked.
+# Composition integration note
+
+The composition checkpoint (stacked on UI parent `4724b9de8a29f6ce6b2f1e3d1cfb691fabd44663`) calls the existing routing evaluator from `DISCOVERED` and follows its trusted transition results only. Synthetic route facts are test scenarios, not source retrieval, rights approval, mappings, corroboration, event authority, or production qualification. The production loader and source portfolio remain blocked.

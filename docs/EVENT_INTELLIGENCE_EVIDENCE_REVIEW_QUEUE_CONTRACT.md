@@ -64,3 +64,6 @@ The strict production config has no selected portfolio, active queue policy, cre
 ## Later integration
 
 The intended non-authoritative path is discovery → source portfolio routing → evidence review snapshot → separately reviewed mapping/source/correction/corroboration → any separately authorized event-authority policy. Review priority does not imply investment confidence. Production remains blocked. This child depends on its routing parent and must be integrated only after both checkpoints are independently reviewed on updated `main`; sibling source checkpoints are not imported here. The expected audit blocker is independent of contract correctness.
+# Composition integration note
+
+The composition checkpoint (stacked on the queue UI branch, parent `4724b9de8a29f6ce6b2f1e3d1cfb691fabd44663`) invokes this contract only after every synthetic candidate has passed discovery and routing validation. The queue sealer remains responsible for precedence, candidate uniqueness, and canonical ordering; the application layer does not calculate item status or priority. Queue items are converted through the existing view-model adapter, and no queue-set/domain trust is exposed.

@@ -25,3 +25,6 @@ Native labeled search/select controls are grouped in a `fieldset` with a `legend
 ## Later integration
 
 Real records require a separately reviewed read-model loader and approved acquisition/persistence boundary. That integration must continue to pass only this degraded, schema-validated view model into the client. No UI route in this checkpoint enables queue persistence, scheduling, notifications, reviewer assignment, source acquisition, event authority, signal generation, or trading. The parent audit blocker must be resolved on `main` before review readiness can change.
+# Composition integration note
+
+The in-memory composition checkpoint is not a production data source. The `/intelligence/events/review` server page remains connected exclusively to the blocked production loader and receives only the safe view model. Synthetic composition-to-component rendering is tested without adding a route switch, demo path, or client import of domain modules.
