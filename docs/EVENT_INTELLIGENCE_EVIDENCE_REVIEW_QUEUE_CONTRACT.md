@@ -55,7 +55,7 @@ Items expose only categorical source families/strength, jurisdiction/listing, pu
 
 `sealEvidenceReviewQueueSet` accepts only a plain dense array of runtime-authentic routing results for the authentic decision. It derives items, requires one historical cutoff and one snapshot per candidate, rejects repeated members and identity collisions after canonical-material comparison, sorts by versioned categorical priority then UTC publication time then lexical stable item identity, and assigns contiguous zero-based ordinals. The immutable set binds decision, decision fingerprint, cutoff, count, ordering, ordinals, member identities and set fingerprint. Serialized/copied sets and items lose trust. The set asserts neither event authority nor persistence authority.
 
-The optional UI view-model adapter is deliberately deferred. A safe stable public key cannot yet be provided without exposing internal identity material. No fingerprints, raw candidate text/payload, credentials, URLs, WeakSet state, or internal authority object are prepared for UI serialization in this slice.
+The separate child `EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_VIEW_MODEL` adds a one-way presentation adapter for authentic sealed queue sets. It derives a versioned opaque public key by hashing the private item identity under a separate domain; the UI key does not expose or grant that identity. The adapter emits only allowlisted labels, safe counts/flags, and UTC timestamps. It does not accept raw item arrays or make the resulting model valid at any domain boundary. No raw candidate text/payload, credentials, URLs, fingerprints, WeakSet state, or authority object enter the view model. A route/component remains a later, separately reviewed slice.
 
 ## Production configuration
 

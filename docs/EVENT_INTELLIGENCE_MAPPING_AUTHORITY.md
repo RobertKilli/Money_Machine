@@ -173,3 +173,5 @@ there is no discovery-specific issuer merge or asset registry.
 Source routing treats missing issuer and asset mapping as explicit queue blockers. Tickers, listing labels, parent/subsidiary names, and ETH/WETH mentions do not create or bypass the runtime-authentic mapping authorities described here. No mapping is selected or persisted by the routing decision.
 
 Missing issuer and asset mappings may become distinct evidence-review blockers. Queue projection does not create or satisfy mapping authority.
+
+The downstream queue view model preserves these as separate safe labels and does not serialize candidate mapping IDs or mint mapping trust.

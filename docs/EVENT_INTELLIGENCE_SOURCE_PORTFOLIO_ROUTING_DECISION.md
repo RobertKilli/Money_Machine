@@ -70,4 +70,4 @@ Production configuration selects no source, contains no credentials or active ro
 
 The full chain remains: discovery → stronger source retrieval → issuer/asset mapping → primary disclosure → correction/lifecycle review → later corroboration policy → separate eligibility review. A later event-authority and signal phase, if ever approved, must be separately designed and cannot be an automatic next state. The final source portfolio must be selected only after sibling source checkpoints are independently reviewed and integrated on updated main.
 
-A stacked child checkpoint defines a separate evidence-review queue projection over trusted routing results. The queue is not implemented as persistence, scheduler, notification, or authority wiring; production remains blocked.
+A stacked child checkpoint defines a separate evidence-review queue projection over trusted routing results. A later child degrades only sealed queue sets to a JSON-safe view model; that presentation model cannot be routed back into domain trust. The queue and view model are not persistence, scheduler, notification, UI, or authority wiring; production remains blocked.
