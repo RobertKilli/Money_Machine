@@ -184,3 +184,15 @@ this policy can evaluate authentic inputs. Production remains blocked.
 # Persistence boundary
 
 The follow-on schema/UoW proposal is design-only in [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). Eligibility remains a pre-write derived result; only a separately approved `ISSUER_DISCLOSURE` authority could be persisted. `EXTERNALLY_VERIFIED_EVENT_FACT` remains unsupported. No migration or persistence is enabled. The decision stores no eligibility row: the authority identity pins the exact policy/evaluation material, and the future transaction must recompute eligibility from locked claims, correction lineage, mappings, and origin members before authority insertion. External parent fingerprints remain on their immutable source rows and are not copied into event children.
+
+## NewsAPI and GDELT discovery are not corroboration
+
+NewsAPI `/v2/everything` material and GDELT DOC results are discovery metadata
+only. Provider labels, matching URLs, headlines, authors, or timestamps do not
+establish publisher independence or issuer disclosure authority. A projected
+`NON_AUTHORITATIVE_DISCOVERY_CANDIDATE` cannot be passed to this policy as an
+`EventSourceOrigin` or claim evidence. The linked publisher source must be
+retrieved and qualified through a separate authority path before corroboration
+can be evaluated. Article snippets and provider metadata remain subject to
+separate usage, storage, retention, redistribution, and commercial-use review.
+Production remains blocked.

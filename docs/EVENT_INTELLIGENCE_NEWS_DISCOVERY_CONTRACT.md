@@ -170,3 +170,14 @@ Review-start SHA `b76d746123dcb3da56f5857f8626610aecabc81f`; baseline/origin/mai
 Official pages were rechecked on `2026-10-03` at `06:16 UTC`: [NewsAPI Everything](https://newsapi.org/docs/endpoints/everything) documents article source/title/description/URL, UTC publication and content truncated to 200 characters; [NewsAPI Pricing](https://newsapi.org/pricing) lists a free development/testing plan and paid production tiers; [NewsAPI Terms](https://newsapi.org/terms) restrict Developer use to development and address third-party content/IP and attribution. Pricing does not approve content storage. [GDELT DOC 2.0](https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/) documents search/discovery; [GDELT Terms](https://gdeltproject.org/about.html) grant use/redistribution rights for released datasets with attribution, not a license to linked publisher articles. [Microsoft Investor Relations](https://www.microsoft.com/en-us/investor/contact-information) is one issuer IR example and does not establish class-wide RSS. [Business Wire pricing](https://www.businesswire.com/pricing) concerns issuer distribution rather than reader/API access; [GlobeNewswire about](https://www.globenewswire.com/en/about) describes corporate release distribution. [SEC RSS Feeds](https://www.sec.gov/about/rss-feeds) documents SEC/EDGAR feed classes, not all exchange feeds. Concrete Money Machine acquisition, storage, retention, redistribution and commercial permissions remain `UNKNOWN` pending scope review; local approvals remain `NOT_APPROVED`. No legal conclusion was made, and no terms, account, subscription or API call was made.
 
 The review's focused discovery tests passed **113/113 twice**, selected event/SEC/mapping/corroboration/lineage regressions passed **318/318 across 19 files**, and the full unit suite passed **1,103 with 35 skipped**. Typecheck, lint, `npm ls --all` (no invalid, extraneous or missing required packages), and both diff-checks passed. The single review audit run exited 1 with five high findings, all the same baseline GHSA-vfj7-8cjw-p6xm chain; `npm audit` also suggested a breaking `eslint-config-next@14.2.35` downgrade, which was not run. Final-SHA build was not run while audit remains blocked. Review status is `REVIEWED_CHECKPOINT_BLOCKED_UPSTREAM`.
+
+## NewsAPI Everything source qualification
+
+The sibling [NewsAPI Everything qualification](EVENT_INTELLIGENCE_NEWSAPI_SOURCE_QUALIFICATION.md)
+pins `/v2/everything` as a fixed-query discovery candidate only. Provider
+source labels, author, headline, snippets, URL and reported totals do not
+establish original publisher, issuer, asset, event completion, independent
+origin or coverage completeness. It uses an internal synthetic response
+normal form, not native response parsing. Production acquisition, storage,
+retention, redistribution, commercial use and all authority stages remain
+blocked.

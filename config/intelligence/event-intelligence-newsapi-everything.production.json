@@ -1,0 +1,49 @@
+{
+  "contractVersion": "event-intelligence-newsapi-everything-production/v1",
+  "status": "BLOCKED_BACKEND_UNAPPROVED",
+  "candidateStatus": "PARTIAL_DISCOVERY_ONLY",
+  "selectedSource": null,
+  "credentialReference": null,
+  "authenticationTransport": "X-Api-Key",
+  "operations": {
+    "acquisition": "BLOCKED",
+    "rawArticleStorage": "BLOCKED",
+    "metadataProcessing": "BLOCKED",
+    "metadataPersistence": "BLOCKED",
+    "normalizedDiscoveryPersistence": "BLOCKED",
+    "issuerMapping": "BLOCKED",
+    "assetMapping": "BLOCKED",
+    "corroboration": "BLOCKED",
+    "eventAuthority": "BLOCKED",
+    "scheduler": "BLOCKED",
+    "signal": "BLOCKED",
+    "trading": "BLOCKED"
+  },
+  "usages": {
+    "RAW_ACQUISITION": "NOT_APPROVED",
+    "RAW_ARTIFACT_STORAGE": "NOT_APPROVED",
+    "NORMALIZED_CLAIM_STORAGE": "NOT_APPROVED",
+    "AUTHORITY_ISSUANCE": "NOT_APPROVED",
+    "REDISTRIBUTION": "NOT_APPROVED",
+    "COMMERCIAL_USE": "NOT_APPROVED",
+    "SIGNAL_RESEARCH": "NOT_APPROVED"
+  },
+  "rawArticleStorage": "NOT_APPROVED",
+  "metadataStorage": "NOT_APPROVED",
+  "normalizedStorage": "NOT_APPROVED",
+  "retention": "NOT_APPROVED",
+  "redistribution": "NOT_APPROVED",
+  "commercialUse": "NOT_APPROVED",
+  "blockers": [
+    "PRODUCTION_PLAN_AND_ACQUISITION_NOT_APPROVED",
+    "DEVELOPER_PLAN_NOT_ALLOWED_OUTSIDE_DEVELOPMENT",
+    "THIRD_PARTY_ARTICLE_CONTENT_RIGHTS_UNRESOLVED",
+    "METADATA_STORAGE_RETENTION_AND_REDISTRIBUTION_NOT_APPROVED",
+    "NATIVE_RESPONSE_NULL_AND_RUNTIME_SCHEMA_NOT_QUALIFIED",
+    "SOURCE_COVERAGE_COMPLETENESS_UNKNOWN",
+    "CORRECTION_RETRACTION_LINEAGE_NOT_PROVIDED",
+    "FRESHNESS_AND_PLAN_DEPENDENT_HISTORY"
+  ],
+  "credentialReferences": [],
+  "environmentReferences": []
+}

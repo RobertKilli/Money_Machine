@@ -168,3 +168,8 @@ IDs. Existing mapping constructors reject discovery results through their
 private SEC source/claim and mapping trust gates. A future discovery workflow
 must retrieve legitimate source evidence and use these existing mappings;
 there is no discovery-specific issuer merge or asset registry.
+
+NewsAPI Everything mentions are likewise discovery-only metadata. Its source
+name and author are not issuer identity; ticker or asset words remain
+unresolved candidates. The source-specific contract requires this existing
+issuer and asset mapping boundary after independent original-source retrieval.

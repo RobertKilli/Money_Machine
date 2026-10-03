@@ -136,3 +136,7 @@ and local approvals. No terms, subscription or API key is accepted or used.
 Discovery origin groups do not add independent authorities, and no headline
 or intention is converted to a completed event. Existing qualification,
 approval and readiness decisions are unchanged.
+
+## NewsAPI Everything qualification (2026-10-03)
+
+The sibling [NewsAPI Everything qualification](EVENT_INTELLIGENCE_NEWSAPI_SOURCE_QUALIFICATION.md) records `/v2/everything` as `PARTIAL_DISCOVERY_ONLY`, never publisher authority or corroboration. Official docs allow API keys in the `X-Api-Key` header and recommend header auth to avoid URL/log exposure; the design selects this header, while the production credential reference remains null. The official pricing page says Developer is limited to development/testing and excludes staging/production, including internal use; paid production plans are listed but none is selected or purchased. Published API access does not itself approve metadata/article storage, retention, redistribution, or commercial use. Third-party article/image rights and exact native response/null semantics remain blockers. No qualification, approval registry, readiness, mapping, authority or signal status is changed.

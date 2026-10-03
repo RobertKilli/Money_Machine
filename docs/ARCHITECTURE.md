@@ -933,3 +933,15 @@ empty provider/source stacks and all operations/usage approvals blocked. No
 transport, credentials, persistence, migration or scheduler is added. The
 baseline braces security audit prevents READY_FOR_REVIEW; a preserved Git
 checkpoint does not waive that gate.
+
+## NewsAPI Everything discovery qualification
+
+The sibling [NewsAPI Everything qualification](EVENT_INTELLIGENCE_NEWSAPI_SOURCE_QUALIFICATION.md)
+models a fixed `/v2/everything` request and synthetic normalized response only.
+It uses no key, network transport, persistence or selected production source.
+Future auth is constrained to a server-only `X-Api-Key` header; Developer-plan
+use is development/testing only. NewsAPI source labels and article text are
+not publisher/event authority, and rights/storage approvals remain blocked.
+The projection is a `NON_AUTHORITATIVE_DISCOVERY_CANDIDATE`; all later mapping,
+retrieval, lifecycle, corroboration, event-authority and signal stages remain
+separate. No signal/trading dashboard or execution path is introduced.
