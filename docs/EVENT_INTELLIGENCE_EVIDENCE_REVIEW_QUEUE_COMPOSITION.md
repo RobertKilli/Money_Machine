@@ -23,3 +23,5 @@ The service accepts 1–64 candidates, at most nine routing evaluations per cand
 `/intelligence/events/review` continues to call only its server-only blocked production loader. There is no composition switch, environment/cookie/header path, provider integration, credential lookup, database, persistence, scheduler, notification, authority, signal, or trading wiring. The composition module is server-only and must not be imported into the client graph. Synthetic scenario integration is test-only; the UI consumes only the already degraded view model.
 
 No live provider data, rights, coverage, qualification, or production behavior is demonstrated. The baseline audit remains blocked by `GHSA-vfj7-8cjw-p6xm` (`braces@3.0.3`, five high findings through `eslint-config-next`). No final-SHA production build is run while that gate is red.
+
+The follow-on read-model decision recommends immutable derived snapshots only after separately approved source-family provenance and rights. Composition results remain in-memory; no database trust restoration, durable snapshot, or production loader is added.

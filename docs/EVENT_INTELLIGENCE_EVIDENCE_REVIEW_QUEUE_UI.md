@@ -28,3 +28,5 @@ Real records require a separately reviewed read-model loader and approved acquis
 # Composition integration note
 
 The in-memory composition checkpoint is not a production data source. The `/intelligence/events/review` server page remains connected exclusively to the blocked production loader and receives only the safe view model. Synthetic composition-to-component rendering is tested without adding a route switch, demo path, or client import of domain modules.
+
+The read-model decision recommends, but does not implement, immutable safe-view snapshots as a later source for this page. The route stays empty and blocked; stored rows must be validated and degraded again and may not carry domain trust into the client.

@@ -67,3 +67,5 @@ The intended non-authoritative path is discovery â†’ source portfolio routing â†
 # Composition integration note
 
 The composition checkpoint (stacked on the queue UI branch, parent `4724b9de8a29f6ce6b2f1e3d1cfb691fabd44663`) invokes this contract only after every synthetic candidate has passed discovery and routing validation. The queue sealer remains responsible for precedence, candidate uniqueness, and canonical ordering; the application layer does not calculate item status or priority. Queue items are converted through the existing view-model adapter, and no queue-set/domain trust is exposed.
+
+The subsequent read-model decision chooses immutable snapshots of the safe serialized view-model as a future persistence strategy, not queue-domain objects. No schema, UoW, or loader is approved; old snapshots remain cutoff-bound and append-only, while current selection is a separate presentation query.

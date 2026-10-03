@@ -33,3 +33,5 @@ The separate child UI checkpoint at `feat/event-intelligence-evidence-review-que
 # Composition integration note
 
 The synthetic composition checkpoint passes only the sealed queue set through this adapter, then returns the resulting serializable view model. No composition result includes domain objects, queue IDs, fingerprints, canonical source material, or trust. Production remains disconnected and uses the deterministic blocked/empty model.
+
+The read-model decision names this safe view-model as the only queue payload that could be durably snapshotted later. Persisted bytes must be exact-schema validated and do not regain domain trust. No write or read integration is present; production stays blocked.

@@ -945,3 +945,7 @@ Event-intelligence evidence review is a separate, read-only in-memory projection
 # Event evidence composition checkpoint
 
 The evidence review composition is a server-only, in-memory synthetic application boundary stacked on the review queue UI checkpoint (parent `4724b9de8a29f6ce6b2f1e3d1cfb691fabd44663`). It uses the existing discovery, routing, queue sealing, and queue view-model contracts in order. It is not a source integration and is deliberately disconnected from `/intelligence/events/review`; that route remains empty and blocked. Production qualification and audit readiness remain blocked, including the baseline `GHSA-vfj7-8cjw-p6xm` audit finding.
+
+## Evidence queue read model decision
+
+The stacked `event-intelligence-evidence-review-queue-read-model-decision/v1` selects immutable derived snapshots as a future read strategy, but records `DECISION_ONLY_BLOCKED_UPSTREAM`. Routing, queue sets, and view models remain derived and non-authoritative; storage cannot restore runtime trust. No snapshot schema or read path is implemented, and the review route remains empty/blocked until provenance parents, scope, rights, retention, and runtime are separately approved.
