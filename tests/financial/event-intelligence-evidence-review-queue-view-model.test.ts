@@ -2,13 +2,28 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { getSourcePortfolioDecision, evaluateSourcePortfolioRouting, isAuthenticRoutingEvaluation } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
 import { getEvidenceReviewQueueContract, sealEvidenceReviewQueueSet, isAuthenticEvidenceReviewItem, isAuthenticEvidenceReviewQueueSet, projectRoutingResultToEvidenceReviewItem } from "@/domain/intelligence/event-intelligence-evidence-review-queue";
+import { isAuthenticEventIssuerMappingAuthority, isAuthenticEventAssetMentionBinding, isAuthenticMappedNonAuthoritativeEventClaim, rejectMappedClaimAsEventAuthority } from "@/domain/intelligence/event-intelligence-mapping-authority";
+import { isAuthenticEventSourceOrigin, isAuthenticEventClaimEvidence, isAuthenticEventAuthorityEligibilityResult, rejectEligibilityAsEventAuthorityOrPersistence } from "@/domain/intelligence/event-intelligence-corroboration-authority-policy";
 import { adaptEvidenceReviewQueueSetToViewModel, createBlockedEvidenceReviewQueueViewModel, EVIDENCE_REVIEW_QUEUE_VIEW_MODEL_PRODUCTION_STATE, EVIDENCE_REVIEW_QUEUE_VIEW_MODEL_VERSION, getEvidenceReviewQueueViewModelContract, isAuthenticEvidenceReviewQueueViewModelContract, isSerializableEvidenceReviewQueueViewModel } from "@/domain/intelligence/event-intelligence-evidence-review-queue-view-model";
 
 const base = (patch: Record<string, unknown> = {}) => ({ provenance: "SYNTHETIC", candidateId: "candidate:ui-0001", jurisdiction: "US_SEC", listingScopes: ["listing:us-sec"], eventHint: "PURCHASE_INTENT", seenFamilies: ["DISCOVERY_AGGREGATOR"], availableFamilies: ["FILING_AUTHORITY"], issuerMapped: true, assetMapped: true, duplicate: false, rightsApproved: true, credentialAvailable: true, completionMaterialPresent: false, primaryAvailable: true, qualificationComplete: true, correctionPresent: false, correctionResolved: true, correctionFieldHints: [], retracted: false, conflicts: [], stale: false, originBindings: [], publicationAt: "2026-10-01T00:00:00.000Z", discoveredAt: "2026-10-01T00:01:00.000Z", receivedAt: "2026-10-01T00:02:00.000Z", correctionAvailableAt: null, evaluationAsOf: "2026-10-03T00:00:00.000Z", ...patch });
 function route(patch: Record<string, unknown> = {}) { return evaluateSourcePortfolioRouting(getSourcePortfolioDecision(), base(patch)); }
+function routeAtCorrection(patch: Record<string, unknown>) {
+  const decision = getSourcePortfolioDecision(); const materialized = base(patch);
+  let evaluated = evaluateSourcePortfolioRouting(decision, materialized);
+  const trace = [evaluated ? `${evaluated.currentState}->${evaluated.nextState}` : "initial-null"];
+  const allowed = ["DISCOVERED", "SOURCE_RETRIEVAL_REQUIRED", "ISSUER_MAPPING_REQUIRED", "ASSET_MAPPING_REQUIRED", "PRIMARY_DISCLOSURE_REQUIRED", "CORRECTION_REVIEW_REQUIRED", "CORROBORATION_REVIEW_REQUIRED", "ELIGIBILITY_REVIEW_REQUIRED"];
+  while (evaluated && evaluated.nextState !== "CORRECTION_REVIEW_REQUIRED" && allowed.includes(evaluated.nextState) && evaluated.nextState !== "NON_AUTHORITATIVE_REVIEW_COMPLETE") { evaluated = evaluateSourcePortfolioRouting(decision, materialized, evaluated); trace.push(evaluated ? `${evaluated.currentState}->${evaluated.nextState}` : "step-null"); }
+  if (!evaluated) throw new Error(trace.join(","));
+  if (evaluated.nextState !== "CORRECTION_REVIEW_REQUIRED") throw new Error(trace.join(","));
+  return evaluated?.nextState === "CORRECTION_REVIEW_REQUIRED" ? evaluateSourcePortfolioRouting(decision, materialized, evaluated) : null;
+}
 function set(patches: Record<string, unknown>[] = [{}]) {
-  const results = patches.map((patch, i) => route({ ...patch, candidateId: patch.candidateId ?? `candidate:ui-${String(i).padStart(4, "0")}` }));
-  if (results.some(x => !x)) throw new Error("synthetic routing setup failed");
+  const results = patches.map((patch, i) => {
+    const material: Record<string, unknown> = { ...patch, candidateId: patch.candidateId ?? `candidate:ui-${String(i).padStart(4, "0")}` };
+    return material.eventHint === "CORRECTION_AMENDMENT" && material.correctionResolved === true ? routeAtCorrection(material) : route(material);
+  });
+  if (results.some(x => !x)) throw new Error(`synthetic routing setup failed: ${results.map(x => x ? `${x.currentState}->${x.nextState}` : "null").join(",")}`);
   const sealed = sealEvidenceReviewQueueSet(getSourcePortfolioDecision(), results);
   return sealed.status === "SEALED" ? sealed.queueSet : null;
 }
@@ -22,6 +37,7 @@ describe("evidence review queue view model boundary", () => {
     if (result.status !== "PROJECTED") return;
     expect(result.model).toMatchObject({ version: EVIDENCE_REVIEW_QUEUE_VIEW_MODEL_VERSION, state: "HAS_REVIEW_ITEMS", generatedForAsOf: "2026-10-03T00:00:00.000Z", summary: { totalItems: 2, correctionsRequiringReview: 1 } });
     expect(Object.isFrozen(result.model)).toBe(true); expect(Object.isFrozen(result.model.items)).toBe(true);
+    expect(Object.isFrozen(result.model.items[0])).toBe(true); expect(Object.isFrozen(result.model.items[0]?.reasonLabels)).toBe(true);
     expect(isSerializableEvidenceReviewQueueViewModel(result.model)).toBe(true);
     expect(JSON.parse(JSON.stringify(result.model))).toEqual(result.model);
   });
@@ -93,6 +109,8 @@ describe("evidence review queue view model boundary", () => {
     expect(isAuthenticEvidenceReviewQueueSet(vm)).toBe(false); expect(isAuthenticEvidenceReviewItem(vm.items[0])).toBe(false); expect(isAuthenticRoutingEvaluation(vm)).toBe(false);
     expect(projectRoutingResultToEvidenceReviewItem(decision, vm)).toBeNull();
     expect(sealEvidenceReviewQueueSet(decision, vm).status).toBe("INVALID");
+    for (const guard of [isAuthenticEventIssuerMappingAuthority, isAuthenticEventAssetMentionBinding, isAuthenticMappedNonAuthoritativeEventClaim, isAuthenticEventSourceOrigin, isAuthenticEventClaimEvidence, isAuthenticEventAuthorityEligibilityResult]) expect(guard(vm)).toBe(false);
+    expect(rejectMappedClaimAsEventAuthority(vm)).toBeNull(); expect(rejectEligibilityAsEventAuthorityOrPersistence(vm)).toBeNull();
   });
   it("roundtripped view models remain presentational and serializable but never gain trust", () => {
     const result = view(); expect(result.status).toBe("PROJECTED"); if (result.status !== "PROJECTED") return;
@@ -101,6 +119,19 @@ describe("evidence review queue view model boundary", () => {
     expect(isAuthenticEvidenceReviewQueueViewModelContract(JSON.parse(JSON.stringify(getEvidenceReviewQueueViewModelContract())))).toBe(false);
     expect(isAuthenticEvidenceReviewQueueSet(roundtrip)).toBe(false);
     expect(isAuthenticEvidenceReviewItem(roundtrip.items[0])).toBe(false);
+  });
+  it("validates the exact presentation schema and rejects tampered safe enums, status precedence, and extra fields", () => {
+    const result = view(); expect(result.status).toBe("PROJECTED"); if (result.status !== "PROJECTED") return;
+    const extra = { ...result.model, debug: "credential sentinel" };
+    expect(isSerializableEvidenceReviewQueueViewModel(extra)).toBe(false);
+    const item = result.model.items[0]!;
+    const tampered = { ...result.model, items: [{ ...item, status: "RETRACTED", statusLabel: "Retracted; not active" }] };
+    expect(isSerializableEvidenceReviewQueueViewModel(tampered)).toBe(false);
+    const title = { ...result.model, items: [{ ...item, title: "Verified purchase" }] };
+    expect(isSerializableEvidenceReviewQueueViewModel(title)).toBe(false);
+    let called = false; const unsafe = { ...result.model } as Record<string, unknown>;
+    Object.defineProperty(unsafe, "items", { enumerable: true, get() { called = true; return result.model.items; } });
+    expect(isSerializableEvidenceReviewQueueViewModel(unsafe)).toBe(false); expect(called).toBe(false);
   });
   it("rejects proxy, inherited, accessor, symbol, sparse, and noncanonical presentation input at contract parsing boundaries", () => {
     const contract = getEvidenceReviewQueueViewModelContract();
@@ -128,6 +159,17 @@ describe("evidence review queue view model boundary", () => {
   it("includes only safe labels, enum values, UTC strings, counts, booleans, and no confidence/authority field", () => {
     const result = view([{ eventHint: "RETRACTION_WITHDRAWAL", retracted: true }]); expect(result.status).toBe("PROJECTED"); if (result.status !== "PROJECTED") return;
     expect(result.model.items[0]).toMatchObject({ retracted: true, statusLabel: "Retracted; not active", evaluatedAsOf: "2026-10-03T00:00:00.000Z" });
+    expect(result.model.items[0]?.historical).toBe(true);
     expect(result.model).not.toHaveProperty("confidence"); expect(result.model).not.toHaveProperty("signal"); expect(result.model).not.toHaveProperty("recommendation");
+  });
+  it("counts only unresolved correction snapshots as requiring review", () => {
+    const unresolved = view([{ eventHint: "CORRECTION_AMENDMENT", seenFamilies: ["FILING_AUTHORITY"], availableFamilies: ["ISSUER_ATTRIBUTED_RELEASE"], correctionPresent: true, correctionResolved: false, correctionFieldHints: ["AMOUNT"], correctionAvailableAt: "2026-10-02T00:00:00.000Z" }]);
+    const resolved = view([{ eventHint: "CORRECTION_AMENDMENT", seenFamilies: ["FILING_AUTHORITY"], availableFamilies: ["ISSUER_ATTRIBUTED_RELEASE"], correctionPresent: true, correctionResolved: true, correctionFieldHints: ["AMOUNT"], correctionAvailableAt: "2026-10-02T00:00:00.000Z" }]);
+    expect(unresolved.status).toBe("PROJECTED"); expect(resolved.status).toBe("PROJECTED");
+    if (unresolved.status === "PROJECTED" && resolved.status === "PROJECTED") {
+      expect(unresolved.model.summary.correctionsRequiringReview).toBe(1);
+      expect(resolved.model.summary.correctionsRequiringReview).toBe(0);
+      expect(resolved.model.items[0]).toMatchObject({ status: "RESOLVED_NON_AUTHORITATIVE", correctionPresent: true, historical: true });
+    }
   });
 });

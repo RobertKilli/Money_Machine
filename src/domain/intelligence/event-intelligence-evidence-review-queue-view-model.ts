@@ -114,6 +114,21 @@ const ACTION_LABELS: Readonly<Record<string, string>> = Object.freeze({
   STOP_UNSUPPORTED_CORROBORATION: "Stop; no supported corroboration source exists",
   RETAIN_NON_AUTHORITATIVE_SNAPSHOT: "Retain as a non-authoritative snapshot",
 });
+const ITEM_ACTIONS: Readonly<Record<ReviewItemType, readonly string[]>> = Object.freeze({
+  PRIMARY_SOURCE_RETRIEVAL_REVIEW: Object.freeze(["RETRIEVE_PRIMARY_SOURCE"]),
+  ISSUER_MAPPING_REVIEW: Object.freeze(["RESOLVE_ISSUER_MAPPING"]),
+  ASSET_MAPPING_REVIEW: Object.freeze(["RESOLVE_ASSET_MAPPING"]),
+  CORRECTION_LINEAGE_REVIEW: Object.freeze(["REVIEW_CORRECTION_LINEAGE"]),
+  RETRACTION_REVIEW: Object.freeze(["REVIEW_RETRACTION"]),
+  SOURCE_CONFLICT_REVIEW: Object.freeze(["REVIEW_SOURCE_CONFLICT", "REVIEW_CORRECTION_LINEAGE", "RESOLVE_JURISDICTION_SCOPE", "REVIEW_LIFECYCLE", "REVIEW_ORIGIN_BINDING"]),
+  ORIGIN_GROUP_REVIEW: Object.freeze(["REVIEW_ORIGIN_BINDING"]),
+  RIGHTS_APPROVAL_REVIEW: Object.freeze(["OBTAIN_RIGHTS_APPROVAL"]),
+  JURISDICTION_REVIEW: Object.freeze(["RESOLVE_JURISDICTION_SCOPE"]),
+  LIFECYCLE_REVIEW: Object.freeze(["REVIEW_LIFECYCLE", "RETRIEVE_PRIMARY_SOURCE", "RETAIN_NON_AUTHORITATIVE_SNAPSHOT"]),
+  DUPLICATE_NO_ACTION: Object.freeze(["NO_ACTION_DUPLICATE"]),
+  BLOCKED_UNSUPPORTED_CORROBORATION: Object.freeze(["STOP_UNSUPPORTED_CORROBORATION"]),
+  NON_AUTHORITATIVE_REVIEW_COMPLETE: Object.freeze(["RETAIN_NON_AUTHORITATIVE_SNAPSHOT"]),
+});
 const FORBIDDEN_LABELS: Readonly<Record<string, string>> = Object.freeze({
   ISSUER_NOT_CONFIRMED: "Issuer identity is not confirmed",
   ASSET_NOT_CONFIRMED: "Asset identity is not confirmed",
@@ -159,7 +174,10 @@ const CONTRACT_MATERIAL = Object.freeze({
   itemTypes: REVIEW_ITEM_TYPES,
   statuses: REVIEW_QUEUE_STATUSES,
   priorities: REVIEW_PRIORITIES,
+  precedencePolicy: Object.freeze(["RETRACTION", "CORRECTION_OR_LINEAGE", "CONFLICT", "RIGHTS", "JURISDICTION", "MAPPING", "PRIMARY_SOURCE", "UNSUPPORTED_CORROBORATION", "DUPLICATE", "ROUTINE", "NON_AUTHORITATIVE_COMPLETE", "PRESERVE_DOMAIN_CLASSIFICATION_WITHOUT_REEVALUATION"]),
   labels: Object.freeze({ ITEM_LABELS, STATUS_LABELS, PRIORITY_LABELS, TITLE_TEMPLATES, REASON_LABELS, ACTION_LABELS, FORBIDDEN_LABELS, SOURCE_FAMILY_LABELS, SOURCE_STRENGTH_LABELS, JURISDICTION_LABELS }),
+  nextActionsByItemType: ITEM_ACTIONS,
+  bounds: Object.freeze({ maxItems: MAX_ITEMS, maxOrigins: MAX_ORIGINS, maxSyndicatedCopies: MAX_SYNDICATED, maxLabelsPerReasonList: 64, maxSerializedStringLength: 256, maxNestingDepth: 12 }),
   publicKeyPolicy: "SHA256_DOMAIN_SEPARATED_SECONDARY_DIGEST_OF_PRIVATE_REVIEW_ITEM_ID_PREFIXED_EVIQV1_NO_REVERSAL_OR_DOMAIN_AUTHORITY",
   timePolicy: "CANONICAL_UTC_ISO_NO_LOCAL_OR_RELATIVE_TIME_GENERATION_CUTOFF_FROM_SEALED_SET",
   summaryPolicy: "DERIVED_EXACTLY_FROM_ALL_CANONICALLY_ORDERED_ITEMS_NO_CONFIDENCE_OR_AGGREGATED_AMOUNT",
@@ -230,10 +248,10 @@ function projectItem(item: EvidenceReviewItem): EvidenceReviewQueueViewModelItem
   const sourceFamilies = uniqueAllowlisted(item.sourceFamilies, SOURCE_FAMILY_LABELS);
   if (!reasonLabels || !forbiddenConclusionLabels || !sourceFamilies || !validEnumMap(item.itemType, ITEM_LABELS) || !validEnumMap(item.status, STATUS_LABELS) || !validEnumMap(item.priority, PRIORITY_LABELS)) return null;
   const publicKey = `${PUBLIC_KEY_PREFIX}${hash(`event-intelligence-evidence-review-queue-view-model/public-key/v1\0${item.itemId}`)}`;
-  return freeze({ publicKey, reviewType: item.itemType, typeLabel: ITEM_LABELS[item.itemType], status: item.status, statusLabel: STATUS_LABELS[item.status], operationalPriority: item.priority, priorityLabel: PRIORITY_LABELS[item.priority], title: TITLE_TEMPLATES[item.itemType], reasonLabels, nextActionLabel: ACTION_LABELS[item.requiredNextAction]!, forbiddenConclusionLabels, sourceFamilies, sourceStrengthLabel: SOURCE_STRENGTH_LABELS[item.sourceStrength]!, jurisdictionLabel: JURISDICTION_LABELS[item.jurisdiction]!, originGroupCount: item.originGroupCount, syndicatedCopyCount: item.syndicatedCopyCount, primarySourcePresent: item.primarySourcePresent, correctionPresent: item.correctionPresent, retracted: item.retracted, publicationAt: item.publicationAt, discoveredAt: item.discoveredAt, receivedAt: item.receivedAt, evaluatedAsOf: item.evaluationAsOf, historical: item.status === "SUPERSEDED", superseded: item.status === "SUPERSEDED" });
+  return freeze({ publicKey, reviewType: item.itemType, typeLabel: ITEM_LABELS[item.itemType], status: item.status, statusLabel: STATUS_LABELS[item.status], operationalPriority: item.priority, priorityLabel: PRIORITY_LABELS[item.priority], title: TITLE_TEMPLATES[item.itemType], reasonLabels, nextActionLabel: ACTION_LABELS[item.requiredNextAction]!, forbiddenConclusionLabels, sourceFamilies, sourceStrengthLabel: SOURCE_STRENGTH_LABELS[item.sourceStrength]!, jurisdictionLabel: JURISDICTION_LABELS[item.jurisdiction]!, originGroupCount: item.originGroupCount, syndicatedCopyCount: item.syndicatedCopyCount, primarySourcePresent: item.primarySourcePresent, correctionPresent: item.correctionPresent, retracted: item.retracted, publicationAt: item.publicationAt, discoveredAt: item.discoveredAt, receivedAt: item.receivedAt, evaluatedAsOf: item.evaluationAsOf, historical: true, superseded: item.status === "SUPERSEDED" });
 }
 function summarize(items: readonly EvidenceReviewQueueViewModelItem[]): EvidenceReviewQueueViewModel["summary"] {
-  const summary = { totalItems: items.length, open: items.filter(i => i.status === "OPEN").length, blocked: items.filter(i => i.status === "BLOCKED").length, noAction: items.filter(i => i.status === "NO_ACTION").length, resolvedNonAuthoritative: items.filter(i => i.status === "RESOLVED_NON_AUTHORITATIVE").length, superseded: items.filter(i => i.status === "SUPERSEDED").length, retracted: items.filter(i => i.status === "RETRACTED").length, correctionsRequiringReview: items.filter(i => i.reviewType === "CORRECTION_LINEAGE_REVIEW" && i.correctionPresent && !i.retracted).length, conflicts: items.filter(i => i.reviewType === "SOURCE_CONFLICT_REVIEW").length, mappingReviews: items.filter(i => i.reviewType === "ISSUER_MAPPING_REVIEW" || i.reviewType === "ASSET_MAPPING_REVIEW").length, primarySourceReviews: items.filter(i => i.reviewType === "PRIMARY_SOURCE_RETRIEVAL_REVIEW").length };
+  const summary = { totalItems: items.length, open: items.filter(i => i.status === "OPEN").length, blocked: items.filter(i => i.status === "BLOCKED").length, noAction: items.filter(i => i.status === "NO_ACTION").length, resolvedNonAuthoritative: items.filter(i => i.status === "RESOLVED_NON_AUTHORITATIVE").length, superseded: items.filter(i => i.status === "SUPERSEDED").length, retracted: items.filter(i => i.status === "RETRACTED").length, correctionsRequiringReview: items.filter(i => i.reviewType === "CORRECTION_LINEAGE_REVIEW" && i.correctionPresent && !i.retracted && (i.status === "OPEN" || i.status === "BLOCKED")).length, conflicts: items.filter(i => i.reviewType === "SOURCE_CONFLICT_REVIEW").length, mappingReviews: items.filter(i => i.reviewType === "ISSUER_MAPPING_REVIEW" || i.reviewType === "ASSET_MAPPING_REVIEW").length, primarySourceReviews: items.filter(i => i.reviewType === "PRIMARY_SOURCE_RETRIEVAL_REVIEW").length };
   if (summary.totalItems !== summary.open + summary.blocked + summary.noAction + summary.resolvedNonAuthoritative + summary.superseded + summary.retracted) throw new Error("INVALID");
   return Object.freeze(summary);
 }
@@ -270,7 +288,8 @@ export function isSerializableEvidenceReviewQueueViewModel(value: unknown): valu
   const seen = new Set<object>();
   const visit = (v: unknown, depth = 0): boolean => {
     if (depth > 12) return false;
-    if (v === null || typeof v === "string" || typeof v === "boolean") return true;
+    if (v === null || typeof v === "boolean") return true;
+    if (typeof v === "string") return v.length <= 256 && !/[\p{Cc}\p{Cf}]/u.test(v);
     if (typeof v === "number") return Number.isSafeInteger(v);
     if (typeof v !== "object" || types.isProxy(v) || seen.has(v)) return false;
     seen.add(v);
@@ -285,7 +304,66 @@ export function isSerializableEvidenceReviewQueueViewModel(value: unknown): valu
     for (const key of Reflect.ownKeys(v)) { if (typeof key !== "string") return false; const d = Object.getOwnPropertyDescriptor(v, key); if (!d || !("value" in d) || !d.enumerable || !visit(d.value, depth + 1)) return false; }
     return true;
   };
-  return visit(value);
+  if (!visit(value) || !value || typeof value !== "object" || Array.isArray(value)) return false;
+  const exactKeys = (input: object, keys: readonly string[]): boolean => {
+    const own = Reflect.ownKeys(input);
+    return own.length === keys.length && own.every(key => typeof key === "string" && keys.includes(key));
+  };
+  const root = value as Record<string, unknown>;
+  if (!exactKeys(root, CONTRACT_MATERIAL.queueFields) || root.version !== EVIDENCE_REVIEW_QUEUE_VIEW_MODEL_VERSION || typeof root.state !== "string" || !["BLOCKED", "EMPTY", "HAS_REVIEW_ITEMS"].includes(root.state) || !Array.isArray(root.items) || root.items.length > MAX_ITEMS || !Array.isArray(root.blockedReasons)) return false;
+  if (root.generatedForAsOf !== null && !validUtc(root.generatedForAsOf)) return false;
+  const publicKeys = new Set<string>();
+  for (const item of root.items) {
+    if (!item || typeof item !== "object" || Array.isArray(item) || !exactKeys(item, CONTRACT_MATERIAL.itemFields)) return false;
+    const x = item as Record<string, unknown>;
+    if (typeof x.publicKey !== "string" || !/^eviqv1_[a-f0-9]{64}$/.test(x.publicKey) || publicKeys.has(x.publicKey)) return false;
+    publicKeys.add(x.publicKey);
+    if (typeof x.reviewType !== "string" || !validType(x.reviewType) || x.typeLabel !== ITEM_LABELS[x.reviewType] || x.title !== TITLE_TEMPLATES[x.reviewType]) return false;
+    if (typeof x.status !== "string" || !validStatus(x.status) || x.statusLabel !== STATUS_LABELS[x.status]) return false;
+    if (typeof x.operationalPriority !== "string" || !validPriority(x.operationalPriority) || x.priorityLabel !== PRIORITY_LABELS[x.operationalPriority]) return false;
+    if (!Array.isArray(x.reasonLabels) || x.reasonLabels.length > 64 || x.reasonLabels.some(label => typeof label !== "string" || !Object.values(REASON_LABELS).includes(label)) || new Set(x.reasonLabels).size !== x.reasonLabels.length || stable(x.reasonLabels) !== stable([...x.reasonLabels].sort(cmp))) return false;
+    if (typeof x.nextActionLabel !== "string" || !Object.values(ACTION_LABELS).includes(x.nextActionLabel)) return false;
+    if (!ITEM_ACTIONS[x.reviewType].some(action => ACTION_LABELS[action] === x.nextActionLabel)) return false;
+    if (!Array.isArray(x.forbiddenConclusionLabels) || stable(x.forbiddenConclusionLabels) !== stable(Object.values(FORBIDDEN_LABELS).sort(cmp))) return false;
+    if (!Array.isArray(x.sourceFamilies) || x.sourceFamilies.length < 1 || x.sourceFamilies.length > 8 || x.sourceFamilies.some(label => typeof label !== "string" || !Object.values(SOURCE_FAMILY_LABELS).includes(label)) || new Set(x.sourceFamilies).size !== x.sourceFamilies.length || stable(x.sourceFamilies) !== stable([...x.sourceFamilies].sort(cmp))) return false;
+    if (typeof x.sourceStrengthLabel !== "string" || !Object.values(SOURCE_STRENGTH_LABELS).includes(x.sourceStrengthLabel) || typeof x.jurisdictionLabel !== "string" || !Object.values(JURISDICTION_LABELS).includes(x.jurisdictionLabel)) return false;
+    if (!["primarySourcePresent", "correctionPresent", "retracted", "historical", "superseded"].every(key => typeof x[key] === "boolean") || x.historical !== true || x.superseded !== (x.status === "SUPERSEDED") || x.retracted !== (x.status === "RETRACTED") || x.retracted !== (x.reviewType === "RETRACTION_REVIEW")) return false;
+    for (const key of ["originGroupCount", "syndicatedCopyCount"]) if (!Number.isSafeInteger(x[key]) || (x[key] as number) < 0 || (x[key] as number) > MAX_SYNDICATED) return false;
+    if ((x.syndicatedCopyCount as number) > 0 && (x.originGroupCount as number) === 0) return false;
+    if (!["publicationAt", "discoveredAt", "receivedAt", "evaluatedAsOf"].every(key => validUtc(x[key])) || !((x.publicationAt as string) <= (x.discoveredAt as string) && (x.discoveredAt as string) <= (x.receivedAt as string) && (x.receivedAt as string) <= (x.evaluatedAsOf as string)) || x.evaluatedAsOf !== root.generatedForAsOf) return false;
+    if (x.retracted && (x.reviewType !== "RETRACTION_REVIEW" || x.operationalPriority !== "URGENT_RETRACTION_REVIEW")) return false;
+    if (x.reviewType === "RETRACTION_REVIEW" && !x.retracted) return false;
+    if (x.reviewType === "DUPLICATE_NO_ACTION" && (x.status !== "NO_ACTION" || x.operationalPriority !== "NO_ACTION_DUPLICATE")) return false;
+    if (x.status === "NO_ACTION" && x.reviewType !== "DUPLICATE_NO_ACTION") return false;
+    if (x.reviewType === "CORRECTION_LINEAGE_REVIEW" && x.operationalPriority !== "URGENT_CORRECTION_REVIEW") return false;
+    if (x.operationalPriority === "URGENT_CORRECTION_REVIEW" && x.reviewType !== "CORRECTION_LINEAGE_REVIEW") return false;
+    if (x.reviewType === "SOURCE_CONFLICT_REVIEW" && (x.status !== "BLOCKED" || x.operationalPriority !== "CONFLICT_REVIEW")) return false;
+    if (x.reviewType === "RIGHTS_APPROVAL_REVIEW" && (x.status !== "BLOCKED" || x.operationalPriority !== "BLOCKED_RIGHTS")) return false;
+    if (x.reviewType === "JURISDICTION_REVIEW" && (x.status !== "BLOCKED" || x.operationalPriority !== "JURISDICTION_UNKNOWN")) return false;
+    if ((x.reviewType === "ISSUER_MAPPING_REVIEW" || x.reviewType === "ASSET_MAPPING_REVIEW") && x.operationalPriority !== "MAPPING_REQUIRED") return false;
+    if (x.reviewType === "BLOCKED_UNSUPPORTED_CORROBORATION" && x.status !== "BLOCKED") return false;
+    if (x.reviewType === "NON_AUTHORITATIVE_REVIEW_COMPLETE" && x.status !== "RESOLVED_NON_AUTHORITATIVE" && x.status !== "BLOCKED") return false;
+    if (x.status === "RESOLVED_NON_AUTHORITATIVE" && x.reviewType !== "CORRECTION_LINEAGE_REVIEW" && x.reviewType !== "NON_AUTHORITATIVE_REVIEW_COMPLETE") return false;
+    if (x.operationalPriority === "CONFLICT_REVIEW" && x.reviewType !== "SOURCE_CONFLICT_REVIEW") return false;
+    if (x.operationalPriority === "BLOCKED_RIGHTS" && x.reviewType !== "RIGHTS_APPROVAL_REVIEW") return false;
+    if (x.operationalPriority === "JURISDICTION_UNKNOWN" && x.reviewType !== "JURISDICTION_REVIEW") return false;
+    if (x.operationalPriority === "MAPPING_REQUIRED" && x.reviewType !== "ISSUER_MAPPING_REVIEW" && x.reviewType !== "ASSET_MAPPING_REVIEW") return false;
+    if (x.operationalPriority === "NO_ACTION_DUPLICATE" && x.reviewType !== "DUPLICATE_NO_ACTION") return false;
+    const familyLabels = x.sourceFamilies as string[];
+    const expectedPrimary = familyLabels.some(label => label !== SOURCE_FAMILY_LABELS.DISCOVERY_AGGREGATOR);
+    if (x.primarySourcePresent !== expectedPrimary) return false;
+    const expectedStrength = familyLabels.includes(SOURCE_FAMILY_LABELS.FILING_AUTHORITY) ? SOURCE_STRENGTH_LABELS.FILING_PUBLICATION : familyLabels.includes(SOURCE_FAMILY_LABELS.REGULATORY_OR_EXCHANGE_DISCLOSURE) ? SOURCE_STRENGTH_LABELS.REGULATORY_PUBLICATION : familyLabels.includes(SOURCE_FAMILY_LABELS.ISSUER_ATTRIBUTED_RELEASE) ? SOURCE_STRENGTH_LABELS.ISSUER_ATTRIBUTED : familyLabels.every(label => label === SOURCE_FAMILY_LABELS.DISCOVERY_AGGREGATOR) ? SOURCE_STRENGTH_LABELS.DISCOVERY_ONLY : SOURCE_STRENGTH_LABELS.INDEPENDENT_FACTUAL_VERIFICATION_UNSUPPORTED;
+    if (x.sourceStrengthLabel !== expectedStrength) return false;
+  }
+  if (!root.summary || typeof root.summary !== "object" || Array.isArray(root.summary) || !exactKeys(root.summary, CONTRACT_MATERIAL.summaryFields)) return false;
+  const summary = root.summary as EvidenceReviewQueueViewModel["summary"];
+  if (stable(summary) !== stable(summarize(root.items as EvidenceReviewQueueViewModelItem[]))) return false;
+  if (root.state === "BLOCKED") {
+    return root.generatedForAsOf === null && root.items.length === 0 && root.emptyState === "Evidence review is unavailable because queue projection is blocked." && stable(root.blockedReasons) === stable(["Queue projection is blocked in production.", "No provider stack or persisted queue is available."]);
+  }
+  if (!Array.isArray(root.blockedReasons) || root.blockedReasons.length !== 0) return false;
+  if (root.state === "EMPTY") return root.generatedForAsOf !== null && root.items.length === 0 && root.emptyState === "No evidence-review items exist for this historical cutoff.";
+  return root.generatedForAsOf !== null && root.items.length > 0 && root.emptyState === null;
 }
 
 export const EVIDENCE_REVIEW_QUEUE_VIEW_MODEL_PRODUCTION_STATE = createBlockedEvidenceReviewQueueViewModel();
