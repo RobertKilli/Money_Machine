@@ -12,8 +12,10 @@ export const EVIDENCE_REVIEW_QUEUE_SNAPSHOT_CODEC_LIMITS = Object.freeze({
   maxBytes: 1_048_576,
   maxItems: 512,
   maxArrayLength: 512,
+  maxObjectProperties: 64,
   maxStringLength: 256,
   maxDepth: 16,
+  maxNodes: 32_000,
 });
 
 export type EvidenceReviewQueueSnapshotEnvelope = Readonly<{
@@ -39,7 +41,7 @@ export type SnapshotCodecErrorCode =
   | "JSON_INVALID"
   | "NON_CANONICAL_BYTES";
 export type SnapshotCodecResult<T> = Readonly<{ status: "VALID"; value: T }> | Readonly<{ status: "INVALID"; code: SnapshotCodecErrorCode }>;
-export type EncodedSnapshot = Readonly<{ envelope: EvidenceReviewQueueSnapshotEnvelope; canonicalBytes: Uint8Array; sha256: string }>;
+export type EncodedSnapshot = Readonly<{ classification: "SYNTACTICALLY_VALID_NON_AUTHORITATIVE"; envelope: EvidenceReviewQueueSnapshotEnvelope; canonicalBytes: Uint8Array; sha256: string }>;
 export type DecodedSnapshot = Readonly<{ envelope: EvidenceReviewQueueSnapshotEnvelope; sha256: string; status: "SYNTACTICALLY_VALID_NON_AUTHORITATIVE" }>;
 
 const INVALID = (code: SnapshotCodecErrorCode) => Object.freeze({ status: "INVALID" as const, code });
@@ -75,15 +77,15 @@ function descriptorValue(value: object, key: string): unknown {
   return descriptor && "value" in descriptor && descriptor.enumerable ? descriptor.value : INVALID("ENVELOPE_INVALID");
 }
 function safeDataTree(input: unknown): SnapshotCodecErrorCode | null {
-  const seen = new WeakSet<object>();
+  const active = new WeakSet<object>();
   let nodes = 0;
   const visit = (value: unknown, depth: number): SnapshotCodecErrorCode | null => {
-    if (++nodes > 20_000 || depth > EVIDENCE_REVIEW_QUEUE_SNAPSHOT_CODEC_LIMITS.maxDepth) return "STRUCTURE_LIMIT_EXCEEDED";
+    if (++nodes > EVIDENCE_REVIEW_QUEUE_SNAPSHOT_CODEC_LIMITS.maxNodes || depth > EVIDENCE_REVIEW_QUEUE_SNAPSHOT_CODEC_LIMITS.maxDepth) return "STRUCTURE_LIMIT_EXCEEDED";
     if (value === null || typeof value === "boolean") return null;
     if (typeof value === "string") return validCanonicalString(value);
     if (typeof value === "number") return Number.isSafeInteger(value) && !Object.is(value, -0) ? null : "CANONICAL_VALUE_UNSUPPORTED";
-    if (typeof value !== "object" || types.isProxy(value) || seen.has(value)) return "CANONICAL_VALUE_UNSUPPORTED";
-    seen.add(value);
+    if (typeof value !== "object" || types.isProxy(value) || active.has(value)) return "CANONICAL_VALUE_UNSUPPORTED";
+    active.add(value);
     if (Array.isArray(value)) {
       if (Object.getPrototypeOf(value) !== Array.prototype) return "CANONICAL_VALUE_UNSUPPORTED";
       const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
@@ -95,10 +97,13 @@ function safeDataTree(input: unknown): SnapshotCodecErrorCode | null {
         const error = visit(d.value, depth + 1);
         if (error) return error;
       }
+      active.delete(value);
       return null;
     }
     if (Object.getPrototypeOf(value) !== Object.prototype) return "CANONICAL_VALUE_UNSUPPORTED";
-    for (const key of Reflect.ownKeys(value)) {
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > EVIDENCE_REVIEW_QUEUE_SNAPSHOT_CODEC_LIMITS.maxObjectProperties) return "STRUCTURE_LIMIT_EXCEEDED";
+    for (const key of keys) {
       if (typeof key !== "string") return "CANONICAL_VALUE_UNSUPPORTED";
       const keyError = validCanonicalString(key);
       if (keyError) return keyError;
@@ -107,6 +112,7 @@ function safeDataTree(input: unknown): SnapshotCodecErrorCode | null {
       const error = visit(d.value, depth + 1);
       if (error) return error;
     }
+    active.delete(value);
     return null;
   };
   return visit(input, 0);
@@ -159,7 +165,7 @@ export function encodeEvidenceReviewQueueSnapshot(input: unknown): SnapshotCodec
   try { text = canonicalJson(validated.value); } catch { return INVALID("CANONICAL_VALUE_UNSUPPORTED"); }
   const bytes = encoder.encode(text);
   if (bytes.byteLength > EVIDENCE_REVIEW_QUEUE_SNAPSHOT_CODEC_LIMITS.maxBytes) return INVALID("BYTE_LIMIT_EXCEEDED");
-  return Object.freeze({ status: "VALID" as const, value: Object.freeze({ envelope: validated.value, canonicalBytes: new Uint8Array(bytes), sha256: digest(bytes) }) });
+  return Object.freeze({ status: "VALID" as const, value: Object.freeze({ classification: "SYNTACTICALLY_VALID_NON_AUTHORITATIVE" as const, envelope: validated.value, canonicalBytes: new Uint8Array(bytes), sha256: digest(bytes) }) });
 }
 
 export function decodeEvidenceReviewQueueSnapshot(input: unknown, expectedSha256: unknown): SnapshotCodecResult<DecodedSnapshot> {
@@ -168,6 +174,9 @@ export function decodeEvidenceReviewQueueSnapshot(input: unknown, expectedSha256
   try { byteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "byteLength")!.get!.call(input) as number; } catch { return INVALID("BYTE_INPUT_INVALID"); }
   if (!Number.isSafeInteger(byteLength) || byteLength < 0) return INVALID("BYTE_INPUT_INVALID");
   if (byteLength > EVIDENCE_REVIEW_QUEUE_SNAPSHOT_CODEC_LIMITS.maxBytes) return INVALID("BYTE_LIMIT_EXCEEDED");
+  let backingBuffer: ArrayBufferLike;
+  try { backingBuffer = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "buffer")!.get!.call(input) as ArrayBufferLike; } catch { return INVALID("BYTE_INPUT_INVALID"); }
+  if (types.isSharedArrayBuffer(backingBuffer)) return INVALID("BYTE_INPUT_INVALID");
   let bytes: Uint8Array;
   try { bytes = new Uint8Array(input as Uint8Array); } catch { return INVALID("BYTE_INPUT_INVALID"); }
   if (typeof expectedSha256 !== "string" || !SHA256.test(expectedSha256)) return INVALID("DIGEST_INVALID");
