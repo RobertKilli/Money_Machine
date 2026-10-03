@@ -17,7 +17,7 @@ export type EvidenceQueueScopeProvenanceDecision = Readonly<{
   fingerprint: string;
   status: "DECISION_ONLY_BLOCKED_UPSTREAM";
   selectedScopeModel: "EXPLICIT_VERSIONED_REVIEW_UNIVERSE";
-  scopePolicy: Readonly<{ identityFields: readonly string[]; excludedFields: readonly string[]; identityEncoding: string; changeRules: readonly Readonly<{ change: string; effect: string }>[]; currentSelection: string }>;
+  scopePolicy: Readonly<{ identityFields: readonly string[]; excludedFields: readonly string[]; identityEncoding: string; canonicalRules: readonly string[]; changeRules: readonly Readonly<{ change: string; effect: string }>[]; currentSelection: string }>;
   scopeAlternatives: readonly Readonly<{ model: string; disposition: string; rationale: string }>[];
   provenanceFamilies: readonly Readonly<{ family: typeof EVIDENCE_QUEUE_PROVENANCE_FAMILIES[number]; authorityStatus: string; referenceSchema: readonly string[]; identityBinding: string; storage: string; blocker: string }>[];
   appliedParentCatalog: readonly Readonly<{ family: string; table: string; key: readonly string[]; scope: string; immutable: string; futureForeignKey: string; migration: string }>[];
@@ -31,6 +31,10 @@ export type EvidenceQueueScopeProvenanceDecision = Readonly<{
   recordedAt: string;
 }>;
 
+/** Syntactic reference only. A VALID result is not proof of parent existence, applied status, or authority. */
+export type EvidenceQueueProvenanceReference = Readonly<Record<string, unknown>>;
+export type EvidenceQueueProvenanceReferenceParse = Readonly<{ status: "VALID_SYNTAX_ONLY"; reference: EvidenceQueueProvenanceReference }> | Readonly<{ status: "INVALID"; reason: "PROVENANCE_REFERENCE_INVALID" }>;
+
 const BODY = Object.freeze({
   contractVersion: EVIDENCE_QUEUE_SCOPE_PROVENANCE_DECISION_VERSION,
   status: "DECISION_ONLY_BLOCKED_UPSTREAM" as const,
@@ -39,6 +43,7 @@ const BODY = Object.freeze({
     identityFields: Object.freeze(["scopeContractVersion", "reviewPurpose", "canonicalJurisdictionUniverse", "canonicalEventCategoryUniverse", "canonicalAssetRepresentationUniverse", "issuerListingEligibilityPolicy", "sourcePortfolioDecisionVersionAndMaterial", "routingDecisionVersionAndMaterial", "queueContractVersion", "accessClassification"]),
     excludedFields: Object.freeze(["evaluationAsOf", "storedAt", "receiptTime", "databaseTransactionTime", "uiStatusFilter", "uiPriorityFilter", "uiItemTypeFilter", "freeTextSearch", "visibleHistoricalSubset", "presentationSort", "expandedState", "itemCounts", "snapshotCorrectionRetractionMaterial"]),
     identityEncoding: "Logical scope key is eviqs1_ plus lowercase SHA-256 over UTF-8 canonical scope material, prefixed with event-intelligence-evidence-review-queue-snapshot-scope/v1 NUL domain separation. Canonical object keys use UTF-16 code-unit order; set-like arrays are validated unique and sorted by that order. The key is not candidate, snapshot, payload, row, source, or authority identity; equal key with differing canonical scope is a conflict.",
+    canonicalRules: Object.freeze(["Every identity field is required and exact-shape; no implicit trim, lowercase, locale collation, Unicode normalization, or empty-string defaulting.", "Policy references bind immutable contract version plus canonical material identity/fingerprint; mutable display names are insufficient.", "Set-valued jurisdiction, event-category, asset-representation, and issuer/listing policy members are canonical identifiers, unique, bounded, and sorted with UTF-16 code-unit ordering; duplicates reject.", "Unknown values reject except explicit canonical UNKNOWN/UNLISTED policy members where that dimension allows them; arbitrary caller labels cannot stand in for unknown.", "Scope purpose and access classification use separately versioned closed policy enums; access/tenant authority is not inferred or invented here.", "Scope identity is a logical design rule only in this slice; no scope hash resolver or authority is implemented."]),
     changeRules: Object.freeze([
       Object.freeze({ change: "SOURCE_PORTFOLIO_OR_ROUTING_POLICY_REVISION", effect: "NEW_SCOPE_IDENTITY" }),
       Object.freeze({ change: "JURISDICTION_EVENT_ASSET_OR_LISTING_UNIVERSE_CHANGE", effect: "NEW_SCOPE_IDENTITY" }),
@@ -56,9 +61,9 @@ const BODY = Object.freeze({
   ]),
   provenanceFamilies: Object.freeze([
     Object.freeze({ family: "SEC_EVENT_DOCUMENT", authorityStatus: "APPLIED_PERSISTED_AUTHORITY_WITHIN_SEC_CONTRACT", referenceSchema: Object.freeze(["profile_id", "profile_fingerprint", "filing_identity_id", "artifact_or_package_or_lineage_exact_key"]), identityBinding: "Bind filing/document/package/lineage identity; acquisition receipt is availability evidence, never document identity.", storage: "REFERENCE_ONLY; source bytes stay under separate SEC content/storage contract.", blocker: "Queue snapshot contract, scope, rights and runtime remain unapproved." }),
-    Object.freeze({ family: "ISSUER_EVIDENCE", authorityStatus: "VERSIONED_DOMAIN_NO_APPROVED_EVENT_PERSISTENCE", referenceSchema: Object.freeze(["issuer_evidence_contract_version", "issuer_evidence_material_identity", "source_origin_binding"]), identityBinding: "Exact source-origin and evidence-member material under its own issuer contract; no generic referenceId.", storage: "REFERENCE_ONLY_IF_SEPARATELY_APPROVED.", blocker: "No applied event issuer-evidence parent authority." }),
+    Object.freeze({ family: "ISSUER_EVIDENCE", authorityStatus: "UNSUPPORTED_UNIMPLEMENTED_EVENT_EVIDENCE_AUTHORITY", referenceSchema: Object.freeze(["issuer_evidence_contract_version", "issuer_evidence_material_identity", "source_origin_binding"]), identityBinding: "Proposed version-pinned reference syntax for exact source-origin and evidence-member material; it is not an applied issuer evidence contract and accepts no authority by itself.", storage: "REFERENCE_ONLY_IF_SEPARATELY_APPROVED.", blocker: "No applied event issuer-evidence parent authority or merged issuer-source checkpoint." }),
     Object.freeze({ family: "ASSET_MAPPING_REVISION", authorityStatus: "APPLIED_PERSISTED_M5_MAPPING_AUTHORITY_SCOPED_TO_M5", referenceSchema: Object.freeze(["mapping_revision_id", "source_lineage_id", "provider_id", "dataset_id", "dataset_version", "canonical_asset_id", "canonical_identifier", "asset_class"]), identityBinding: "Exact applied eight-column M5 mapping identity; asset representations remain distinct.", storage: "REFERENCE_ONLY; does not imply event-asset mapping approval or snapshot storage rights.", blocker: "No approved event-intelligence mapping bridge or queue persistence." }),
-    Object.freeze({ family: "DISCOVERY_SOURCE_RECORD", authorityStatus: "UNSUPPORTED_UNIMPLEMENTED_PERSISTENCE", referenceSchema: Object.freeze(["source_type", "local_candidate_identity", "material_variant_identity", "receipt_metadata_separate"]), identityBinding: "Local source-specific candidate and material variant; receipt is separate from identity.", storage: "SYNTHETIC_OR_REFERENCE_ONLY_PENDING_RIGHTS.", blocker: "No applied NewsAPI/GDELT/issuer-release/exchange source-record parent." }),
+    Object.freeze({ family: "DISCOVERY_SOURCE_RECORD", authorityStatus: "UNSUPPORTED_UNIMPLEMENTED_PERSISTENCE", referenceSchema: Object.freeze(["source_type", "local_candidate_identity", "material_variant_identity", "receipt_metadata_separate"]), identityBinding: "Local source-specific candidate and material variant define reference identity; receiptIdentity is carried as separate receipt metadata and is excluded from material candidate identity.", storage: "SYNTHETIC_OR_REFERENCE_ONLY_PENDING_RIGHTS.", blocker: "No applied NewsAPI/GDELT/issuer-release/exchange source-record parent." }),
     Object.freeze({ family: "CORRECTION_LINEAGE", authorityStatus: "VERSIONED_DOMAIN_NO_APPLIED_EVENT_PERSISTENCE", referenceSchema: Object.freeze(["lineage_contract_version", "root_claim_identity", "ordered_member_identities", "selected_terminal_identity", "evaluationAsOf"]), identityBinding: "Complete authenticated append-only lineage and exact current claim at cutoff; free text cannot establish edge.", storage: "REFERENCE_ONLY_IF_SEPARATELY_APPROVED.", blocker: "No applied normalized event claim/correction parent." }),
     Object.freeze({ family: "DERIVED_COMPOSITION", authorityStatus: "DERIVED_NON_AUTHORITATIVE", referenceSchema: Object.freeze(["composition_contract_version", "composition_material_identity"]), identityBinding: "Exact composition inputs and cutoff actually consumed.", storage: "Derived manifest reference only." , blocker: "No queue snapshot persistence approval." }),
     Object.freeze({ family: "DERIVED_QUEUE_SET", authorityStatus: "DERIVED_NON_AUTHORITATIVE", referenceSchema: Object.freeze(["queue_contract_version", "queue_set_material_identity", "sealed_member_set_identity"]), identityBinding: "Exact sealed canonical member set and shared cutoff.", storage: "Derived manifest reference only.", blocker: "No queue snapshot persistence approval." }),
@@ -86,9 +91,9 @@ const BODY = Object.freeze({
   ]),
   memberPolicy: Object.freeze({
     parent: "A future snapshot provenance parent binds exact scope identity, evaluationAsOf, composition/routing/queue/view-model versions and material identities, candidate-set identity, and the typed manifest. Scope and provenance are separate; candidate source artifact IDs never enter scope identity.",
-    memberFields: Object.freeze(["memberOrdinal", "candidateMaterialIdentity", "sourceFamilyTag", "familySpecificReference", "materialVariantIdentity", "receiptOrAvailabilityReferenceSeparate", "compositionBinding", "queueSetBinding", "viewModelBinding"]),
+    memberFields: Object.freeze(["snapshotIdentity", "memberOrdinal", "candidateMaterialIdentity", "sourceFamilyTag", "familySpecificReference", "materialVariantIdentity", "receiptOrAvailabilityReferenceSeparate", "compositionBinding", "queueSetBinding", "viewModelBinding"]),
     ordering: "Canonical UTF-16 code-unit ordering by closed family tag then canonical family reference identity; exact count, unique members and contiguous ordinals. Input source type controls eligible families; caller seenFamilies cannot widen it.",
-    sealing: "If normalized members are later selected, parent-before-members, exact count/digest and deferred commit-time contiguous ordinal/set seal are mandatory; any missing/extra/duplicate or family-material collision rejects the complete snapshot.",
+    sealing: "Every member is parent-bound to exact snapshotIdentity and exact scope; parent-before-members, exact count/digest and deferred commit-time contiguous ordinal/set seal are mandatory. Seal verifies membership completeness, order and digest only; it does not establish source identity, authority, truth or independence. Orphans, cross-snapshot/scope members, payload-binding mismatch, missing/extra/duplicate members or family-material collision reject the complete snapshot.",
     origin: "Provenance is not corroboration. Same bound issuer release across wire/IR/exchange/aggregator, SEC alternate delivery paths, and correction members do not create additional independent origins; mapping or persisted snapshot is never an origin.",
   }),
   correctionPolicy: "Append-only snapshot provenance selects the exact authenticated current claim/lineage available at evaluationAsOf. Future corrections are excluded; correction/retraction produces a new snapshot, never a new scope; original provenance remains; retraction is terminal for that cutoff's current view; correction does not add independent origin.",
@@ -153,10 +158,85 @@ export function getEvidenceQueueScopeProvenanceDecision(recordedAt: string): Evi
   if (parsed.status!=="VALID") throw new Error("SCOPE_PROVENANCE_DECISION_INVALID"); return parsed.decision;
 }
 
+const REFERENCE_SCHEMAS: Readonly<Record<string, Readonly<{ schemaVersion: string; fields: Readonly<Record<string, string>> }>>> = Object.freeze({
+  SEC_EVENT_DOCUMENT: Object.freeze({schemaVersion:"sec-event-document-reference/v1",fields:Object.freeze({family:"enum:family",schemaVersion:"string",targetKind:"enum:sec-target",key:"nested:sec-key"}) as never}),
+  ISSUER_EVIDENCE: Object.freeze({schemaVersion:"issuer-evidence-reference/v1",fields:Object.freeze({family:"enum:family",schemaVersion:"string",issuerEvidenceContractVersion:"enum:version:event-intelligence-issuer-evidence/v1",evidenceMaterialIdentity:"sha256",sourceOriginBinding:"sha256"}) as never}),
+  ASSET_MAPPING_REVISION: Object.freeze({schemaVersion:"m5-asset-mapping-reference/v1",fields:Object.freeze({family:"enum:family",schemaVersion:"string",mapping_revision_id:"string",source_lineage_id:"string",provider_id:"string",dataset_id:"string",dataset_version:"string",canonical_asset_id:"string",canonical_identifier:"string",asset_class:"string"}) as never}),
+  DISCOVERY_SOURCE_RECORD: Object.freeze({schemaVersion:"discovery-source-record-reference/v1",fields:Object.freeze({family:"enum:family",schemaVersion:"string",sourceType:"enum:discovery-source",localCandidateIdentity:"sha256",materialVariantIdentity:"sha256",receiptIdentity:"sha256"}) as never}),
+  CORRECTION_LINEAGE: Object.freeze({schemaVersion:"correction-lineage-reference/v1",fields:Object.freeze({family:"enum:family",schemaVersion:"string",lineageContractVersion:"enum:version:event-intelligence-correction-lineage/v1",rootClaimIdentity:"sha256",orderedMemberIdentities:"array:sha256",selectedTerminalIdentity:"sha256",evaluationAsOf:"timestamp"}) as never}),
+  DERIVED_COMPOSITION: Object.freeze({schemaVersion:"derived-composition-reference/v1",fields:Object.freeze({family:"enum:family",schemaVersion:"string",compositionContractVersion:"enum:version:event-intelligence-evidence-review-queue-composition/v1",compositionMaterialIdentity:"sha256"}) as never}),
+  DERIVED_QUEUE_SET: Object.freeze({schemaVersion:"derived-queue-set-reference/v1",fields:Object.freeze({family:"enum:family",schemaVersion:"string",queueContractVersion:"enum:version:event-intelligence-evidence-review-queue-contract/v1",queueSetMaterialIdentity:"sha256",sealedMemberSetIdentity:"sha256"}) as never}),
+  DERIVED_VIEW_MODEL: Object.freeze({schemaVersion:"derived-view-model-reference/v1",fields:Object.freeze({family:"enum:family",schemaVersion:"string",viewModelContractVersion:"enum:version:event-intelligence-evidence-review-queue-view-model/v1",safePayloadDigest:"sha256",payloadLength:"ordinal"}) as never}),
+});
+const SEC_KEYS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  PROFILE:Object.freeze(["profile_id","fingerprint"]),
+  FILING_IDENTITY:Object.freeze(["filing_identity_id","profile_id","profile_fingerprint","cik","accession_number","form"]),
+  DOCUMENT_ARTIFACT:Object.freeze(["artifact_id","fingerprint"]),
+  FILING_PACKAGE:Object.freeze(["package_id","fingerprint","filing_identity_id"]),
+  PACKAGE_MEMBER:Object.freeze(["package_id","package_fingerprint","member_ordinal"]),
+  ACQUISITION_RECEIPT:Object.freeze(["receipt_id","package_id","package_fingerprint"]),
+  SOURCE_LINEAGE:Object.freeze(["lineage_id","fingerprint"]),
+  LINEAGE_MEMBER:Object.freeze(["lineage_id","member_ordinal"]),
+});
+const REFERENCE_INVALID = Object.freeze({status:"INVALID" as const,reason:"PROVENANCE_REFERENCE_INVALID" as const});
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v) && !types.isProxy(v) && Object.getPrototypeOf(v) === Object.prototype;
+function exactDataObject(v: unknown, keys: readonly string[]): v is Record<string, unknown> {
+  if (!isRecord(v)) return false;
+  const own=Reflect.ownKeys(v);
+  if (own.length!==keys.length || own.some(k=>typeof k!=="string" || !keys.includes(k))) return false;
+  return keys.every(k=>{const d=Object.getOwnPropertyDescriptor(v,k);return !!d && "value" in d && d.enumerable;});
+}
+const canonicalToken=(v: unknown, max=192): v is string => typeof v==="string" && v.length>0 && v.length<=max && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(v) && !/(?:https?:|www\.|api.?key|secret|bearer|credential|token)/i.test(v);
+const digestToken=(v: unknown): v is string => typeof v==="string" && /^[0-9a-f]{64}$/.test(v);
+function validSecKey(kind: unknown,key: unknown): boolean {
+  if (typeof kind!=="string" || !Object.hasOwn(SEC_KEYS,kind)) return false;
+  const keys=SEC_KEYS[kind]; if (!keys || !exactDataObject(key,keys)) return false;
+  for (const name of keys) {
+    const value=key[name];
+    if (name==="member_ordinal") { if (!Number.isSafeInteger(value) || (value as number)<0 || (value as number)>32) return false; }
+    else if (name==="fingerprint" || name==="profile_fingerprint" || name==="package_fingerprint") { if (!digestToken(value)) return false; }
+    else if (name==="form") { if (value!=="8-K" && value!=="8-K/A") return false; }
+    else if (!canonicalToken(value, name==="accession_number"?24:192)) return false;
+  }
+  return true;
+}
+/** Validates a closed family-tagged reference shape only; it never resolves parents or grants trust. */
+export function parseEvidenceQueueProvenanceReference(input: unknown): EvidenceQueueProvenanceReferenceParse {
+  try {
+    if (!isRecord(input) || !Object.hasOwn(input,"family")) return REFERENCE_INVALID;
+    const familyDescriptor=Object.getOwnPropertyDescriptor(input,"family");
+    if (!familyDescriptor || !("value" in familyDescriptor) || typeof familyDescriptor.value!=="string") return REFERENCE_INVALID;
+    const family=familyDescriptor.value, schema=REFERENCE_SCHEMAS[family];
+    if (!schema) return REFERENCE_INVALID;
+    if (family==="SEC_EVENT_DOCUMENT") {
+      if (!exactDataObject(input,["family","schemaVersion","targetKind","key"]) || input.schemaVersion!==schema.schemaVersion || typeof input.targetKind!=="string" || !validSecKey(input.targetKind,input.key)) return REFERENCE_INVALID;
+      const result=freeze({family,schemaVersion:schema.schemaVersion,targetKind:input.targetKind,key:clone(input.key)}) as EvidenceQueueProvenanceReference;
+      return Object.freeze({status:"VALID_SYNTAX_ONLY",reference:result});
+    }
+    const fields=Object.keys(schema.fields), expected=fields;
+    if (!exactDataObject(input,expected) || input.schemaVersion!==schema.schemaVersion || input.family!==family) return REFERENCE_INVALID;
+    for (const [field,rule] of Object.entries(schema.fields)) {
+      const value=input[field];
+      if (rule==="enum:family") { if (value!==family) return REFERENCE_INVALID; }
+      else if (rule.startsWith("enum:version:")) { if (value!==rule.slice("enum:version:".length)) return REFERENCE_INVALID; }
+      else if (rule==="string") { if (!canonicalToken(value)) return REFERENCE_INVALID; }
+      else if (rule==="sha256") { if (!digestToken(value)) return REFERENCE_INVALID; }
+      else if (rule==="ordinal") { if (!Number.isSafeInteger(value) || (value as number)<1 || (value as number)>1_048_576) return REFERENCE_INVALID; }
+      else if (rule==="enum:discovery-source") { if (typeof value!=="string" || !["NEWSAPI","GDELT","ISSUER_IR","ISSUER_WIRE","EXCHANGE_DISCLOSURE"].includes(value)) return REFERENCE_INVALID; }
+      else if (rule==="array:sha256") {
+        if (!Array.isArray(value) || types.isProxy(value) || Object.getPrototypeOf(value)!==Array.prototype || value.length<1 || value.length>64 || Reflect.ownKeys(value).length!==value.length+1) return REFERENCE_INVALID;
+        const seen=new Set<string>();
+        for (let i=0;i<value.length;i++) { const d=Object.getOwnPropertyDescriptor(value,String(i)); if (!d || !("value" in d) || !d.enumerable || !digestToken(d.value) || seen.has(d.value)) return REFERENCE_INVALID; seen.add(d.value); }
+      } else if (rule==="timestamp") { if (typeof value!=="string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString()!==value) return REFERENCE_INVALID; }
+    }
+    return Object.freeze({status:"VALID_SYNTAX_ONLY",reference:freeze(clone(input)) as EvidenceQueueProvenanceReference});
+  } catch { return REFERENCE_INVALID; }
+}
+
 export const EVIDENCE_QUEUE_SCOPE_PROVENANCE_PRODUCTION_CONFIG = freeze({
   contractVersion:EVIDENCE_QUEUE_SCOPE_PROVENANCE_CONFIG_VERSION, status:"BLOCKED", selectedScopeModel:null, selectedScopeAuthority:null,
   activeScopeRegistry:[], selectedProvenanceFamilies:[], appliedSupportedFamilies:["SEC_EVENT_DOCUMENT","ASSET_MAPPING_REVISION"],
-  designOnlyFamilies:["ISSUER_EVIDENCE","CORRECTION_LINEAGE"], unsupportedFamilies:["DISCOVERY_SOURCE_RECORD"], derivedFamilies:["DERIVED_COMPOSITION","DERIVED_QUEUE_SET","DERIVED_VIEW_MODEL"],
+  designOnlyFamilies:["CORRECTION_LINEAGE"], unsupportedFamilies:["ISSUER_EVIDENCE","DISCOVERY_SOURCE_RECORD"], derivedFamilies:["DERIVED_COMPOSITION","DERIVED_QUEUE_SET","DERIVED_VIEW_MODEL"],
   snapshotScopeReadiness:"BLOCKED", provenanceReadiness:"BLOCKED", persistence:"BLOCKED", readPath:"BLOCKED", currentSelection:"BLOCKED", authorityUpgrade:"UNSUPPORTED", signal:"BLOCKED", trading:"BLOCKED",
   approvals:{sourceAcquisition:"NOT_APPROVED",processing:"NOT_APPROVED",sourceReferenceStorage:"NOT_APPROVED",derivedMetadataStorage:"NOT_APPROVED",queueSnapshotStorage:"NOT_APPROVED",retention:"NOT_APPROVED",deletion:"NOT_APPROVED",redistribution:"NOT_APPROVED",commercialUse:"NOT_APPROVED"},
   blockers:BODY.productionBlockers,
