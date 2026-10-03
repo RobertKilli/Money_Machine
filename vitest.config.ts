@@ -1,9 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import { secRuntimePrivateLoader } from "./tests/helpers/sec-runtime-private-loader";
+import { coinbaseNodePrivateLoader } from "./tests/helpers/coinbase-node-private-loader";
 
 export default defineConfig({
-  plugins:[secRuntimePrivateLoader()],
+  plugins:[secRuntimePrivateLoader(), coinbaseNodePrivateLoader()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

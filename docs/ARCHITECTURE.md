@@ -912,6 +912,15 @@ The [independent final review](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_FINAL_R
 The separate [Coinbase smoke boundary](M5_COINBASE_ETH_USD_LIVE_SMOKE_BOUNDARY.md)
 adds strict request planning, same-runtime descriptive authorization, lossless
 synthetic response observations and a bounded fake-port-tested HTTP boundary.
+The [native Node composition](M5_COINBASE_NODE_SMOKE_TRANSPORT.md) adds bounded
+A/AAAA resolution, deterministic public-address selection, pinned lookup and
+fixed TLS/SNI/Host using a dedicated internal HTTPS agent. Identity-only JSON
+streaming, a local per-execution lease and one monotonic five-second deadline
+cover the three sequential profiles. Node options/events are verified with
+private compiler-injected fakes; live DNS/TLS/Coinbase have not been verified.
+The application imports the native adapter only after the private authority gate;
+CLI execute references are resolved through the blocked composition, with no
+fallback authority. Dry-run creates no operational resources.
 Both authorization registries are empty; execute has zero network side effects
 and remains BLOCKED_BACKEND_UNAPPROVED. No credentials, persistence, ETH/WETH
 mapping, source qualification or production readiness is added. CoinGecko Demo
