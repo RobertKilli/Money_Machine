@@ -184,3 +184,6 @@ this policy can evaluate authentic inputs. Production remains blocked.
 # Persistence boundary
 
 The follow-on schema/UoW proposal is design-only in [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). Eligibility remains a pre-write derived result; only a separately approved `ISSUER_DISCLOSURE` authority could be persisted. `EXTERNALLY_VERIFIED_EVENT_FACT` remains unsupported. No migration or persistence is enabled. The decision stores no eligibility row: the authority identity pins the exact policy/evaluation material, and the future transaction must recompute eligibility from locked claims, correction lineage, mappings, and origin members before authority insertion. External parent fingerprints remain on their immutable source rows and are not copied into event children.
+## GDELT discovery is not corroboration
+
+GDELT DOC results are discovery metadata, not independent authority origins. Repeated search results, identical URLs, domains, similar titles or multiple GDELT query profiles do not establish independent reporting. The GDELT synthetic source-material identity only deduplicates identical normalized provider material; it does not create a sealed corroboration origin or count. See [GDELT DOC qualification](EVENT_INTELLIGENCE_GDELT_DOC_SOURCE_QUALIFICATION.md).

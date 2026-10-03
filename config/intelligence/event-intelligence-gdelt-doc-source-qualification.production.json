@@ -1,0 +1,42 @@
+{
+  "contractVersion": "event-intelligence-gdelt-doc-source-qualification-production/v1",
+  "status": "BLOCKED_BACKEND_UNAPPROVED",
+  "candidateStatus": "PARTIAL_DISCOVERY_ONLY",
+  "selectedSource": null,
+  "operations": {
+    "acquisition": "BLOCKED",
+    "metadataProcessing": "BLOCKED",
+    "rawContentStorage": "BLOCKED",
+    "metadataPersistence": "BLOCKED",
+    "normalizedDiscoveryPersistence": "BLOCKED",
+    "issuerMapping": "BLOCKED",
+    "assetMapping": "BLOCKED",
+    "corroboration": "BLOCKED",
+    "eventAuthority": "BLOCKED",
+    "scheduler": "BLOCKED",
+    "signal": "BLOCKED",
+    "trading": "BLOCKED"
+  },
+  "usages": {
+    "rawAcquisition": "NOT_APPROVED",
+    "metadataProcessing": "NOT_APPROVED",
+    "metadataStorage": "NOT_APPROVED",
+    "normalizedStorage": "NOT_APPROVED",
+    "authorityPersistence": "NOT_APPROVED",
+    "redistribution": "NOT_APPROVED",
+    "commercialUse": "NOT_APPROVED"
+  },
+  "retention": "NOT_APPROVED",
+  "redistribution": "NOT_APPROVED",
+  "commercialUse": "NOT_APPROVED",
+  "credentialReferences": [],
+  "environmentReferences": [],
+  "blockers": [
+    "DOC_JSON_NATIVE_FIELD_SCHEMA_NOT_PINNED",
+    "LIVE_COVERAGE_COMPLETENESS_NOT_PROVEN",
+    "CURRENT_FRESHNESS_AND_LATENCY_NOT_PINNED",
+    "CORRECTION_AND_RETRACTION_LINEAGE_NOT_PROVIDED",
+    "ARTICLE_CONTENT_RIGHTS_NOT_ESTABLISHED_BY_GDELT_METADATA_TERMS",
+    "ACQUISITION_AND_ALL_STORAGE_APPROVALS_NOT_APPROVED"
+  ]
+}

@@ -933,3 +933,8 @@ empty provider/source stacks and all operations/usage approvals blocked. No
 transport, credentials, persistence, migration or scheduler is added. The
 baseline braces security audit prevents READY_FOR_REVIEW; a preserved Git
 checkpoint does not waive that gate.
+## GDELT DOC qualification boundary
+
+`event-intelligence-gdelt-doc-source-qualification/v1` records GDELT DOC 2.0 as `PARTIAL_DISCOVERY_ONLY`. The source qualification and production block are documented in [the GDELT DOC qualification](EVENT_INTELLIGENCE_GDELT_DOC_SOURCE_QUALIFICATION.md). This slice adds only a strict synthetic-normalized response parser, six pinned recall query profiles and a module-local synthetic projection guard. It adds no network, DNS, credential, persistence, scheduler, authority, signal or trading path. Production config keeps the source unselected and operations blocked.
+
+GDELT output can only enter the chain as discovery metadata and `NON_AUTHORITATIVE_DISCOVERY_CANDIDATE`; the native DOC JSON field mapping, freshness, completeness, correction lineage and linked article rights remain unqualified. Receipt and provider-seen times are separate from derived source-material identity.

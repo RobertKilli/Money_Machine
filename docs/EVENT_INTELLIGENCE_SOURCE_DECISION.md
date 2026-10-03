@@ -136,3 +136,6 @@ and local approvals. No terms, subscription or API key is accepted or used.
 Discovery origin groups do not add independent authorities, and no headline
 or intention is converted to a completed event. Existing qualification,
 approval and readiness decisions are unchanged.
+## GDELT DOC 2.0 source qualification
+
+The separate [GDELT DOC qualification](EVENT_INTELLIGENCE_GDELT_DOC_SOURCE_QUALIFICATION.md) sets a maximum of `PARTIAL_DISCOVERY_ONLY`; the existing provider decision remains `DISCOVERY_ONLY`. The source is not selected, and no production registry is changed. The implementation only validates synthetic normalized records, not a claimed native DOC JSON response. Current response schema, completeness/freshness, pagination, correction support and linked publisher-content rights remain unqualified. Production operations and all usage/storage/retention/redistribution/commercial approvals stay blocked or unapproved.

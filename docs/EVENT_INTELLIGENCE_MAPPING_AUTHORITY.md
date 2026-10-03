@@ -168,3 +168,6 @@ IDs. Existing mapping constructors reject discovery results through their
 private SEC source/claim and mapping trust gates. A future discovery workflow
 must retrieve legitimate source evidence and use these existing mappings;
 there is no discovery-specific issuer merge or asset registry.
+## GDELT mention boundary
+
+GDELT DOC titles and source metadata do not create issuer or asset mappings. Ticker-like strings (including BTC/ETH), company names, parent/subsidiary mentions and publisher domains remain unresolved candidates until they pass the existing mapping authorities. A GDELT source-material key or shared URL is not mapping authority. See [GDELT DOC qualification](EVENT_INTELLIGENCE_GDELT_DOC_SOURCE_QUALIFICATION.md).
