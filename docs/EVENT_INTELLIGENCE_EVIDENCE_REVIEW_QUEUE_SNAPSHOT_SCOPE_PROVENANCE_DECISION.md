@@ -1,7 +1,8 @@
 # Evidence review queue snapshot scope and provenance decision
 
-Decision contract: `event-intelligence-evidence-review-queue-snapshot-scope-decision/v1`  
-Production config: `event-intelligence-evidence-review-queue-snapshot-scope-production/v1`  
+Decision contract: `event-intelligence-evidence-review-queue-snapshot-scope-decision/v1`
+
+Production config: `event-intelligence-evidence-review-queue-snapshot-scope-production/v1`
 Stacked parent: `200b9e5cd1546de8c9cb8b720cc92dc80c61edff` on `feat/event-intelligence-evidence-review-queue-read-model-decision`.
 
 ## Decision
