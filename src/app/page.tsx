@@ -11,6 +11,7 @@ export default function HomePage() {
       <div className="flex gap-3">
         <Link className="rounded-lg bg-[var(--accent)] px-5 py-3 font-semibold text-[#07120f]" href="/login">Sign in</Link>
         <Link className="rounded-lg border border-[var(--border)] px-5 py-3 text-[var(--muted)]" href="/dashboard">Dashboard</Link>
+        <Link className="rounded-lg border border-[var(--border)] px-5 py-3 text-[var(--muted)]" href="/intelligence/events">Event Intelligence</Link>
       </div>
     </main>
   );

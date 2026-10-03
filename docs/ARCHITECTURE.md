@@ -933,3 +933,17 @@ empty provider/source stacks and all operations/usage approvals blocked. No
 transport, credentials, persistence, migration or scheduler is added. The
 baseline braces security audit prevents READY_FOR_REVIEW; a preserved Git
 checkpoint does not waive that gate.
+
+### Event intelligence discovery inbox presentation
+
+The read-only `/intelligence/events` workspace projects discovery candidates
+through a serializable, allowlisted `DiscoveryInboxViewModel`; UI components do
+not receive trusted domain objects. Its server-only production loader currently
+returns an empty blocked state and imports no provider, persistence, database,
+or fixture path. Client filters only narrow that view model. Origin groups remain
+discovery-only and corrections/retractions remain visible as lifecycle history.
+The route cannot create mapping, corroboration, event authority, signals, or
+trading inputs. See [the inbox UI boundary](EVENT_INTELLIGENCE_DISCOVERY_INBOX_UI.md).
+This stacked branch depends on the news discovery contract and must be integrated
+above its later reviewed and merged revision; neither branch is mergeable while
+the inherited braces audit blocker remains unresolved.
