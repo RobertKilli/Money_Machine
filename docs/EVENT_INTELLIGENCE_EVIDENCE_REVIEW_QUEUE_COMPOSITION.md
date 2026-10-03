@@ -25,3 +25,6 @@ The service accepts 1–64 candidates, at most nine routing evaluations per cand
 No live provider data, rights, coverage, qualification, or production behavior is demonstrated. The baseline audit remains blocked by `GHSA-vfj7-8cjw-p6xm` (`braces@3.0.3`, five high findings through `eslint-config-next`). No final-SHA production build is run while that gate is red.
 
 The follow-on read-model decision recommends immutable derived snapshots only after separately approved source-family provenance and rights. Composition results remain in-memory; no database trust restoration, durable snapshot, or production loader is added.
+# Snapshot scope follow-up
+
+Composition material may later be referenced by a derived snapshot only under an explicit versioned review-universe scope and a family-tagged provenance manifest. Neither composition nor provenance creates authority or production persistence. See [scope/provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md).

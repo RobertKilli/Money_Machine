@@ -949,3 +949,6 @@ The evidence review composition is a server-only, in-memory synthetic applicatio
 ## Evidence queue read model decision
 
 The stacked `event-intelligence-evidence-review-queue-read-model-decision/v1` selects immutable derived snapshots as a future read strategy, but records `DECISION_ONLY_BLOCKED_UPSTREAM`. Routing, queue sets, and view models remain derived and non-authoritative; storage cannot restore runtime trust. No snapshot schema or read path is implemented, and the review route remains empty/blocked until provenance parents, scope, rights, retention, and runtime are separately approved.
+# Evidence review snapshot scope
+
+The evidence review queue's proposed persistence boundary uses an explicit versioned review-universe scope and closed source-family provenance. This remains a blocked design decision: no snapshot schema/runtime, issuer/discovery parent authority, storage rights, retention, or current-selection authority is approved. See [snapshot scope and provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md). The production queue remains empty and blocked.

@@ -115,3 +115,6 @@ All are `NOT_APPROVED`: source-content and source-metadata storage, derived-cand
 Exact blockers before SQL/runtime: upstream issuer/source/claim persistence is unapproved; issuer mapping and event claim/correction parents are not applied; no approved event-intelligence access scope key exists; source-family-specific provenance FKs are incomplete; runtime/role/access model is unapproved; and source/derived storage, retention, deletion, backup, redistribution, and commercial-use approvals are absent. The M5 `source_lineage_id` mapping-key question is resolved by tracked migration history and is not a remaining blocker.
 
 No SQL, migration, Docker, Supabase/PostgreSQL connection, database/Storage operation, live source call, credential, persistence runtime, scheduler, notification, signal, or trading operation was used. No final-SHA build is run while the baseline audit is blocked.
+# Snapshot scope and provenance child decision
+
+The follow-on decision recommends an explicit versioned review-universe as logical scope and defines family-specific snapshot provenance references. It does not select a production scope authority, add applied parent keys, or unblock persistence. See [scope/provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md).

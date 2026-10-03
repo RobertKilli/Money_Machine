@@ -178,3 +178,6 @@ The downstream queue view model preserves these as separate safe labels and does
 # Composition integration note
 
 The synthetic evidence-review composition consumes only the routing contract's simulated mapping flags and never creates an issuer or asset mapping authority. A composed or non-authoritative-review-complete item remains unusable as mapping input. Production mapping approval and registry state are unchanged.
+# Queue snapshot reference boundary
+
+Applied M5 asset-mapping revision identity may be referenced only by its exact eight-column family-specific key and only within M5 mapping scope. It does not establish event asset mapping authority or queue snapshot storage approval. See [scope/provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md).

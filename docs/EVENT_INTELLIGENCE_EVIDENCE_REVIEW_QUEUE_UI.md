@@ -30,3 +30,6 @@ Real records require a separately reviewed read-model loader and approved acquis
 The in-memory composition checkpoint is not a production data source. The `/intelligence/events/review` server page remains connected exclusively to the blocked production loader and receives only the safe view model. Synthetic composition-to-component rendering is tested without adding a route switch, demo path, or client import of domain modules.
 
 The read-model decision recommends, but does not implement, immutable safe-view snapshots as a later source for this page. The route stays empty and blocked; stored rows must be validated and degraded again and may not carry domain trust into the client.
+# Scope and provenance boundary
+
+UI filters remain presentation-only and cannot select or authorize a persisted snapshot. Any future read model must bind an exact scope and separate typed provenance; the current production page remains empty and blocked. See [scope/provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md).

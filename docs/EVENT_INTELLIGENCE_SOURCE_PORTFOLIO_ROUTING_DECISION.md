@@ -76,3 +76,6 @@ The child read-model decision recommends immutable derived snapshots only after 
 # Composition integration note
 
 The composition checkpoint (stacked on UI parent `4724b9de8a29f6ce6b2f1e3d1cfb691fabd44663`) calls the existing routing evaluator from `DISCOVERED` and follows its trusted transition results only. Synthetic route facts are test scenarios, not source retrieval, rights approval, mappings, corroboration, event authority, or production qualification. The production loader and source portfolio remain blocked.
+# Snapshot scope and source provenance
+
+Routing source precedence does not define snapshot scope. A future read model must pin an explicit review-universe and keep each source-family provenance branch typed and separate; route selection, source records, and derived queue snapshots do not establish cross-family authority. See [snapshot scope/provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md).

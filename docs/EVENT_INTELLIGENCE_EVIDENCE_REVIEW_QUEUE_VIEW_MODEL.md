@@ -35,3 +35,6 @@ The separate child UI checkpoint at `feat/event-intelligence-evidence-review-que
 The synthetic composition checkpoint passes only the sealed queue set through this adapter, then returns the resulting serializable view model. No composition result includes domain objects, queue IDs, fingerprints, canonical source material, or trust. Production remains disconnected and uses the deterministic blocked/empty model.
 
 The read-model decision names this safe view-model as the only queue payload that could be durably snapshotted later. Persisted bytes must be exact-schema validated and do not regain domain trust. No write or read integration is present; production stays blocked.
+# Persisted view-model scope
+
+A serialized view-model snapshot would be bound to an explicit review-universe scope plus typed per-snapshot provenance; neither creates domain trust. UI filters do not change scope or snapshot identity. Persistence remains blocked. See [scope/provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md).
