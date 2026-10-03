@@ -939,4 +939,6 @@ checkpoint does not waive that gate.
 
 The downstream queue view-model contract performs a one-way, allowlisted, JSON-safe degradation of authentic sealed queue snapshots. It does not expose raw queue items or internal fingerprints and cannot feed domain trust back into routing or authority boundaries. It adds no UI route, loader, or operational port; production remains empty and blocked.
 
+The stacked evidence review queue UI at `/intelligence/events/review` consumes only that degraded view model. A server-only loader returns its fixed blocked/empty production model; the client component receives serializable presentation data only and applies local display filters. There are no source, persistence, credential, scheduler, notification, event-authority, signal, or trading ports. See `EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_UI.md`.
+
 Event-intelligence evidence review is a separate, read-only in-memory projection over an authentic routing result. Its status and categorical priority cannot create authority, persistence, scheduling, notifications, or trading decisions; see EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_CONTRACT.md.
