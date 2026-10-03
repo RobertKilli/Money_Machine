@@ -167,6 +167,20 @@ without those inputs are not affected. Version 16.3.8 is above that patched
 version. The official September 2026 security release separately says 16.3.8
 addresses the delayed critical and high-severity fixes for that release.
 Sources: [Next.js advisory, “Remote Code Execution in next/og ImageResponse”](https://github.com/vercel/next.js/security/advisories/GHSA-vcvr-r3jv-pc5j), checked 2026-10-01; [Next.js, “September 2026 Security Release”](https://nextjs.org/blog/september-2026-security-release), checked 2026-10-01.
+
+## Discovery-origin sets are not corroboration inputs
+
+The separate [news discovery contract](EVENT_INTELLIGENCE_NEWS_DISCOVERY_CONTRACT.md)
+seals explicit upstream article declarations in
+`event-intelligence-discovery-origin-set/v1`. An issuer original, wire copy
+and aggregator reference can form one discovery group, with zero independent
+authority origins. Similar headlines/times do not establish a common event
+or independent reporting. These groups are not `EventSourceOrigin` or
+`EventClaimEvidence` objects; existing constructors reject their lack of
+mapping/SEC runtime trust. Corrections and retractions remain append-only
+discovery hints and must be reconciled against authoritative sources before
+this policy can evaluate authentic inputs. Production remains blocked.
+
 # Persistence boundary
 
 The follow-on schema/UoW proposal is design-only in [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). Eligibility remains a pre-write derived result; only a separately approved `ISSUER_DISCLOSURE` authority could be persisted. `EXTERNALLY_VERIFIED_EVENT_FACT` remains unsupported. No migration or persistence is enabled. The decision stores no eligibility row: the authority identity pins the exact policy/evaluation material, and the future transaction must recompute eligibility from locked claims, correction lineage, mappings, and origin members before authority insertion. External parent fingerprints remain on their immutable source rows and are not copied into event children.

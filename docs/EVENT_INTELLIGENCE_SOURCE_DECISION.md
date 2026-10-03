@@ -123,3 +123,16 @@ externally verified event fact. Discovery copies and syndicated issuer
 releases do not add independent authority. Eligibility remains a candidate
 only; the result cannot be persisted or treated as an authoritative event.
 See [EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY](EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md).
+
+## Fixture news discovery boundary
+
+The separate [news discovery contract](EVENT_INTELLIGENCE_NEWS_DISCOVERY_CONTRACT.md)
+reuses these source IDs without enabling a selected stack. NewsAPI and GDELT
+remain `DISCOVERY_ONLY`. Issuer IR, issuer-attributed newswire and
+exchange/regulator feed candidates require later source-specific review;
+their fixture results are also discovery-only. The official reference register
+distinguishes published plans/dataset permissions from unknown article rights
+and local approvals. No terms, subscription or API key is accepted or used.
+Discovery origin groups do not add independent authorities, and no headline
+or intention is converted to a completed event. Existing qualification,
+approval and readiness decisions are unchanged.

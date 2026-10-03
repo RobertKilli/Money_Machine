@@ -916,3 +916,20 @@ Both authorization registries are empty; execute has zero network side effects
 and remains BLOCKED_BACKEND_UNAPPROVED. No credentials, persistence, ETH/WETH
 mapping, source qualification or production readiness is added. CoinGecko Demo
 smoke and approval policies are unchanged.
+
+## Event intelligence news discovery
+
+[News discovery](EVENT_INTELLIGENCE_NEWS_DISCOVERY_CONTRACT.md) adds a separate
+server-only `event-intelligence-news-discovery/v1` fixture boundary. Results are
+`NON_AUTHORITATIVE_DISCOVERY_CANDIDATE`, never SEC document, issuer, asset or
+event authorities. Source descriptor, provider replay and receipt identities
+are separated. A sealed discovery-origin set groups explicitly declared
+syndication while contributing zero independent corroboration origins.
+Correction/retraction links retain immutable originals. Mentioned issuers,
+tickers and native/wrapped/bridged assets require the existing mapping
+boundaries before authoritative retrieval and lifecycle/corroboration review.
+Discovery cannot skip those stages or create signals/trades. Production has
+empty provider/source stacks and all operations/usage approvals blocked. No
+transport, credentials, persistence, migration or scheduler is added. The
+baseline braces security audit prevents READY_FOR_REVIEW; a preserved Git
+checkpoint does not waive that gate.

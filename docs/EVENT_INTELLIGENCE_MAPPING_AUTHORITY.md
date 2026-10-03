@@ -157,3 +157,14 @@ Cryptoasset mapping remains exclusively on the existing
 scope. That lineage cannot stand in for SEC event-source provenance. See
 [`SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md`](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md).
 The SEC decision keeps its filing/document/package/receipt/lineage scope separate from this asset-mapping authority. It does not select a byte-storage backend, and artifact persistence/readback remains blocked.
+
+## News discovery mentions
+
+[News discovery](EVENT_INTELLIGENCE_NEWS_DISCOVERY_CONTRACT.md) creates only
+synthetic mentioned-entity/asset candidates. Attributed issuers, parent or
+subsidiary names and tickers cannot mint these mapping authorities. ETH/WETH
+and native/wrapped/bridged mentions are separate candidates, without canonical
+IDs. Existing mapping constructors reject discovery results through their
+private SEC source/claim and mapping trust gates. A future discovery workflow
+must retrieve legitimate source evidence and use these existing mappings;
+there is no discovery-specific issuer merge or asset registry.
