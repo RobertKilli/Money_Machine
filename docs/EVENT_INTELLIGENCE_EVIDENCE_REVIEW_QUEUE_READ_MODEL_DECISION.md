@@ -1,7 +1,7 @@
 # Evidence review queue read-model decision
 
-Decision contract: `event-intelligence-evidence-review-queue-read-model-decision/v1`  
-Parent: `feat/event-intelligence-evidence-review-queue-composition` at `2b8878bf343a90db12be0b0d167e01a79cfab58a`.  
+Decision contract: `event-intelligence-evidence-review-queue-read-model-decision/v1`
+Parent: `feat/event-intelligence-evidence-review-queue-composition` at `2b8878bf343a90db12be0b0d167e01a79cfab58a`.
 Status: `DECISION_ONLY_BLOCKED_UPSTREAM`. This is an architecture decision only; it adds no migration, repository, UoW, database configuration, or production wiring. The baseline audit remains blocked by `GHSA-vfj7-8cjw-p6xm`.
 
 ## Decision
