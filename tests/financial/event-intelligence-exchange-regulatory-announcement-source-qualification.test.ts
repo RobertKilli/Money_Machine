@@ -31,6 +31,13 @@ describe("exchange/regulatory announcement source qualification", () => {
     expect(rows.map(x => x.qualificationStatus)).toEqual(["PARTIAL_REGULATORY_DISCLOSURE_CANDIDATE", "PARTIAL_EXCHANGE_DISCLOSURE_CANDIDATE", "OUT_OF_SCOPE", "OUT_OF_SCOPE", "PARTIAL_DISCOVERY_ONLY"]);
     expect(rows.every(isAuthenticExchangeAnnouncementQualification)).toBe(true); rows.forEach(frozenDeep);
   });
+  it("fingerprints disabled request profiles and an empty native response-field allowlist", () => {
+    const q = resolveExchangeAnnouncementQualification("lse-rns")!;
+    expect(q.requestAllowlist).toEqual(["NO_AUTOMATED_REQUESTS", "REFERENCE_PROFILES_ONLY"]);
+    expect(q.responseFieldAllowlist).toEqual([]);
+    expect(parseExchangeAnnouncementQualification({ ...q, requestAllowlist: ["GET"] }).status).toBe("INVALID");
+    expect(parseExchangeAnnouncementQualification({ ...q, responseFieldAllowlist: ["headline"] }).status).toBe("INVALID");
+  });
   it("projects an LSE/RNS purchase-intent candidate, not event truth", () => {
     const c = candidate({ headline: "Issuer considers a Bitcoin purchase", categoryHint: "PURCHASE_INTENT", amountText: "250.00000000", currencyText: "BTC" })!;
     expect(c.status).toBe("NON_AUTHORITATIVE_DISCOVERY_CANDIDATE"); expect(c.categoryHint).toBe("PURCHASE_INTENT"); expect(c.eventAuthorityEligible).toBe(false); expect(c.amountText).toBe("250.00000000"); frozenDeep(c);
@@ -170,6 +177,8 @@ describe("exchange/regulatory announcement source qualification", () => {
     expect(sealExchangeAnnouncementOriginSet({ contractVersion: EXCHANGE_ANNOUNCEMENT_ORIGIN_SET_VERSION, members: [c], declaredMemberCount: 2, evaluatedAsOf: EXCHANGE_REVIEW_AS_OF, recordedAt: EXCHANGE_REVIEW_AS_OF })).toBeNull();
     const future = candidate({ publishedAt: "2026-10-04T09:00:00.000Z", discoveredAt: "2026-10-04T09:00:01.000Z", receivedAt: "2026-10-04T09:00:02.000Z", evaluatedAsOf: "2026-10-04T09:00:03.000Z" });
     expect(sealExchangeAnnouncementOriginSet({ contractVersion: EXCHANGE_ANNOUNCEMENT_ORIGIN_SET_VERSION, members: [future], declaredMemberCount: 1, evaluatedAsOf: EXCHANGE_REVIEW_AS_OF, recordedAt: EXCHANGE_REVIEW_AS_OF })).toBeNull();
+    const laterEvaluated = candidate({ evaluatedAsOf: "2026-10-04T10:00:00.000Z" });
+    expect(sealExchangeAnnouncementOriginSet({ contractVersion: EXCHANGE_ANNOUNCEMENT_ORIGIN_SET_VERSION, members: [laterEvaluated], declaredMemberCount: 1, evaluatedAsOf: EXCHANGE_REVIEW_AS_OF, recordedAt: EXCHANGE_REVIEW_AS_OF })).toBeNull();
   });
   it("keeps BTC, ETH, WETH and representations as mention candidates", () => {
     const c = candidate({ assetMentions: ["BTC", "ETH", "WETH", "Wrapped Ether", "native ETH", "bridged ETH"] })!;
