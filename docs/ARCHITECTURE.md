@@ -1,5 +1,9 @@
 # Architecture
 
+## Issuer-attributed release qualification (stacked, non-operative)
+
+Issuer IR/newsroom and issuer-attributed wire releases are represented by the separate versioned source-role contract in [the issuer release qualification](EVENT_INTELLIGENCE_ISSUER_ATTRIBUTED_RELEASE_SOURCE_QUALIFICATION.md). It has an empty production selection and emits, in synthetic tests only, `NON_AUTHORITATIVE_DISCOVERY_CANDIDATE`. A wire distribution is not independent corroboration of the issuer-origin release. No network retrieval, credentials, persistence, mappings, authority, signal or trading path is added. SEC filings remain a separate authority family.
+
 M5 scoped daily-close source qualification is an additive, versioned domain
 boundary. The Coinbase Exchange ETH-USD candidate is PARTIAL and Kraken Spot
 ETH/USD is BLOCKED; neither is selected, mapped, approved, or enabled. Their

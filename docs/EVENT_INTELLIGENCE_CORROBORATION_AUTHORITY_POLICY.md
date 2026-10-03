@@ -1,5 +1,7 @@
 # Event Intelligence Corroboration and Authority Eligibility Policy
 
+An issuer IR release and its Business Wire/GlobeNewswire distributions remain one issuer-origin when an exact release binding supports that relationship. The new [issuer-attributed release qualification](EVENT_INTELLIGENCE_ISSUER_ATTRIBUTED_RELEASE_SOURCE_QUALIFICATION.md) reports origin groups with zero independent corroboration; a wire is not an independent confirmation of the issuer's assertion.
+
 ## Boundary and authority subject
 
 This is a versioned evaluation boundary, not an event writer. It accepts

@@ -8,6 +8,8 @@ Status: implemented as synthetic-fixture domain boundaries only. Production
 registries are empty; assembly, persistence, event authority, and signals are
 blocked. No live identities or mappings are included.
 
+Issuer-attributed release candidates do not resolve issuer identity. A displayed issuer name, wire attribution, ticker, URL hostname, or publisher label is only a candidate input; the release qualification emits no mapping authority. See [the issuer release qualification](EVENT_INTELLIGENCE_ISSUER_ATTRIBUTED_RELEASE_SOURCE_QUALIFICATION.md).
+
 ## Architecture decision
 
 Event intelligence is its own upstream context. Issuer identity is legal-entity

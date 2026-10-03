@@ -1,0 +1,34 @@
+{
+  "contractVersion": "event-intelligence-issuer-release-production/v1",
+  "selectedSource": null,
+  "credentialReference": null,
+  "registry": [],
+  "status": "BLOCKED_BACKEND_UNAPPROVED",
+  "operations": {
+    "acquisition": "BLOCKED",
+    "persistence": "BLOCKED",
+    "mapping": "BLOCKED",
+    "corroboration": "BLOCKED",
+    "issuerDisclosureAuthority": "BLOCKED",
+    "externalEventAuthority": "BLOCKED",
+    "scheduler": "BLOCKED",
+    "signal": "BLOCKED",
+    "trading": "BLOCKED"
+  },
+  "usageApprovals": [
+    { "usage": "acquisition", "status": "NOT_APPROVED" },
+    { "usage": "metadataProcessing", "status": "NOT_APPROVED" },
+    { "usage": "metadataStorage", "status": "NOT_APPROVED" },
+    { "usage": "articleContentStorage", "status": "NOT_APPROVED" },
+    { "usage": "normalizedStorage", "status": "NOT_APPROVED" },
+    { "usage": "authorityPersistence", "status": "NOT_APPROVED" },
+    { "usage": "commercialUse", "status": "NOT_APPROVED" }
+  ],
+  "rawContentStorage": "NOT_APPROVED",
+  "metadataStorage": "NOT_APPROVED",
+  "normalizedStorage": "NOT_APPROVED",
+  "retention": "NOT_APPROVED",
+  "redistribution": "NOT_APPROVED",
+  "commercialUse": "NOT_APPROVED",
+  "articleImageStorage": "NOT_APPROVED"
+}

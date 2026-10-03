@@ -2,6 +2,8 @@
 
 Version: `event-intelligence-news-discovery/v1`. Baseline: `0672e9af2e31d019e198b4a000c11eea71f2fd52`.
 
+Issuer-attributed IR and wire-release role qualification is specified separately in [EVENT_INTELLIGENCE_ISSUER_ATTRIBUTED_RELEASE_SOURCE_QUALIFICATION.md](EVENT_INTELLIGENCE_ISSUER_ATTRIBUTED_RELEASE_SOURCE_QUALIFICATION.md). An IR/wire match is one issuer-origin only when release identity is explicitly bound; it is not independent corroboration. The synthetic fixture normal form does not parse or retrieve native publisher payloads.
+
 ## Scope and authority
 
 This server-only, fixture-first boundary creates **NON_AUTHORITATIVE_DISCOVERY_CANDIDATE** results with `DISCOVERY_ONLY` authority status. Every material input is explicitly `SYNTHETIC`; v1 accepts only reserved `.test` source URLs. It neither consumes observed articles nor implements acquisition. Classification is a candidate label supplied by the synthetic fixture, never an inference of a completed transaction or an externally verified fact. An intention, plan, expected closing or headline does not prove completion.
