@@ -187,3 +187,5 @@ The follow-on schema/UoW proposal is design-only in [EVENT_INTELLIGENCE_PERSISTE
 # Portfolio routing relationship
 
 The source portfolio decision does not perform corroboration. Its `INDEPENDENT_FACTUAL_CORROBORATION` family is unsupported in v1; a transition into `CORROBORATION_REVIEW_REQUIRED` is only a review checkpoint. Duplicate/syndicated delivery copies and correction variants do not increase independent-origin counts. This routing decision cannot construct the trusted origins or eligibility results required by this policy.
+
+Evidence-review snapshots keep unsupported independent factual corroboration as an explicit blocker; source count, syndication, or queue completion cannot satisfy corroboration policy.

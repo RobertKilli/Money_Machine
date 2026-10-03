@@ -13,6 +13,8 @@ export const DEGRADATION_REASONS = Object.freeze(["PRIMARY_SOURCE_UNAVAILABLE", 
 export type DegradationReason = typeof DEGRADATION_REASONS[number];
 export const EVENT_HINTS = Object.freeze(["PURCHASE_INTENT", "BOARD_AUTHORIZATION", "TREASURY_POLICY", "BINDING_AGREEMENT", "EXPECTED_CLOSING", "COMPLETED_PURCHASE", "CANCELLATION_TERMINATION", "CORRECTION_AMENDMENT", "RETRACTION_WITHDRAWAL", "UNRELATED_CORPORATE_ACTION", "UNKNOWN"] as const);
 export type EventHint = typeof EVENT_HINTS[number];
+export const CORRECTION_FIELD_HINTS = Object.freeze(["AMOUNT", "ASSET", "PUBLICATION_TIME", "LIFECYCLE", "ISSUER", "OTHER"] as const);
+export type CorrectionFieldHint = typeof CORRECTION_FIELD_HINTS[number];
 
 const cmp = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const hash = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
@@ -124,19 +126,19 @@ export type SyntheticRoutingMaterial = Readonly<{
   provenance: "SYNTHETIC"; candidateId: string; jurisdiction: string; listingScopes: readonly string[]; eventHint: EventHint;
   seenFamilies: readonly SourceFamily[]; availableFamilies: readonly SourceFamily[];
   issuerMapped: boolean; assetMapped: boolean; duplicate: boolean; rightsApproved: boolean; credentialAvailable: boolean; completionMaterialPresent: boolean;
-  primaryAvailable: boolean; qualificationComplete: boolean; correctionPresent: boolean; correctionResolved: boolean;
+  primaryAvailable: boolean; qualificationComplete: boolean; correctionPresent: boolean; correctionResolved: boolean; correctionFieldHints: readonly CorrectionFieldHint[];
   retracted: boolean; conflicts: readonly string[]; stale: boolean; originBindings: readonly Readonly<{ sourceRecordId: string; retrievalArtifactId: string; publicationId: string; issuerOriginId: string | null; distributionCopyOf: string | null }>[];
   publicationAt: string; discoveredAt: string; receivedAt: string; correctionAvailableAt: string | null; evaluationAsOf: string;
 }>;
-export type RoutingEvaluation = Readonly<{ status: "NON_AUTHORITATIVE_ROUTING_RESULT"; candidateId: string; currentState: RoutingState; nextState: RoutingState; evaluationAsOf: string; sourceStrength: string; operationalPriority: PortfolioReviewPriority; nextSourceFamily: SourceFamily | null; publicationOriginGroupCount: number; independentFactualOriginGroups: 0; degradationReasons: readonly DegradationReason[]; conflictReasons: readonly string[]; independentFactualCorroboration: "UNSUPPORTED"; authorityIssued: false; persistenceAllowed: false; signalEligible: false; tradingEligible: false }>;
+export type RoutingEvaluation = Readonly<{ status: "NON_AUTHORITATIVE_ROUTING_RESULT"; candidateId: string; currentState: RoutingState; nextState: RoutingState; stageHistory: readonly RoutingState[]; routingResultId: string; evaluationAsOf: string; publicationAt: string; discoveredAt: string; receivedAt: string; correctionAvailableAt: string | null; jurisdiction: string; listingScopes: readonly string[]; eventHint: EventHint; seenFamilies: readonly SourceFamily[]; sourceStrength: string; operationalPriority: PortfolioReviewPriority; nextSourceFamily: SourceFamily | null; issuerMapped: boolean; assetMapped: boolean; primaryAvailable: boolean; duplicate: boolean; rightsApproved: boolean; correctionPresent: boolean; correctionResolved: boolean; correctionFieldHints: readonly CorrectionFieldHint[]; retracted: boolean; publicationOriginGroupCount: number; syndicatedCopyCount: number; independentFactualOriginGroups: 0; degradationReasons: readonly DegradationReason[]; conflictReasons: readonly string[]; independentFactualCorroboration: "UNSUPPORTED"; authorityIssued: false; persistenceAllowed: false; signalEligible: false; tradingEligible: false }>;
 export type SyntheticRoutingParse = Readonly<{ status: "VALID"; material: SyntheticRoutingMaterial }> | Readonly<{ status: "INVALID"; code: "ROUTING_INPUT_INVALID" }>;
 const INVALID_ROUTING: SyntheticRoutingParse = Object.freeze({ status: "INVALID", code: "ROUTING_INPUT_INVALID" });
 const ROUTING_EVALUATION_TRUST = new WeakSet<object>();
-const ROUTING_EVALUATION_BINDING = new WeakMap<object, Readonly<{ decisionFingerprint: string; candidateBinding: string }>>();
+const ROUTING_EVALUATION_BINDING = new WeakMap<object, Readonly<{ decisionFingerprint: string; candidateBinding: string; stageHistory: readonly RoutingState[]; canonicalResult: string }>>();
 const ORIGIN_KEYS = ["sourceRecordId", "retrievalArtifactId", "publicationId", "issuerOriginId", "distributionCopyOf"] as const;
 export function parseSyntheticRoutingMaterial(input: unknown): SyntheticRoutingParse {
   try {
-    const v = exact(input, ["provenance", "candidateId", "jurisdiction", "listingScopes", "eventHint", "seenFamilies", "availableFamilies", "issuerMapped", "assetMapped", "duplicate", "rightsApproved", "credentialAvailable", "completionMaterialPresent", "primaryAvailable", "qualificationComplete", "correctionPresent", "correctionResolved", "retracted", "conflicts", "stale", "originBindings", "publicationAt", "discoveredAt", "receivedAt", "correctionAvailableAt", "evaluationAsOf"]);
+    const v = exact(input, ["provenance", "candidateId", "jurisdiction", "listingScopes", "eventHint", "seenFamilies", "availableFamilies", "issuerMapped", "assetMapped", "duplicate", "rightsApproved", "credentialAvailable", "completionMaterialPresent", "primaryAvailable", "qualificationComplete", "correctionPresent", "correctionResolved", "correctionFieldHints", "retracted", "conflicts", "stale", "originBindings", "publicationAt", "discoveredAt", "receivedAt", "correctionAvailableAt", "evaluationAsOf"]);
     if (v.provenance !== "SYNTHETIC") return INVALID_ROUTING;
     const boolKeys = ["issuerMapped", "assetMapped", "duplicate", "rightsApproved", "credentialAvailable", "completionMaterialPresent", "primaryAvailable", "qualificationComplete", "correctionPresent", "correctionResolved", "retracted", "stale"] as const;
     if (boolKeys.some(k => typeof v[k] !== "boolean")) return INVALID_ROUTING;
@@ -145,6 +147,8 @@ export function parseSyntheticRoutingMaterial(input: unknown): SyntheticRoutingP
     if ((juris === "US_SEC" && (scopes.length !== 1 || scopes[0] !== "listing:us-sec")) || (juris === "GB_LSE" && (scopes.length !== 1 || scopes[0] !== "listing:lse")) || (juris === "AU_ASX" && (scopes.length !== 1 || scopes[0] !== "listing:asx")) || (juris === "UNLISTED" && scopes.length !== 0) || (juris === "UNKNOWN" && scopes.length !== 0) || (juris === "DUAL_LISTED" && scopes.length < 2)) return INVALID_ROUTING;
     const families = (raw: unknown) => { const a = list(raw, SOURCE_FAMILIES.length).map(x => enumValue(x, SOURCE_FAMILIES)); if (new Set(a).size !== a.length || a.includes("INDEPENDENT_FACTUAL_CORROBORATION")) return fail(); return a.sort(cmp) as SourceFamily[]; };
     const conflicts = list(v.conflicts, CONFLICTS.length).map(x => enumValue(x, CONFLICTS)); if (new Set(conflicts).size !== conflicts.length) return INVALID_ROUTING;
+    const correctionFieldHints = list(v.correctionFieldHints, CORRECTION_FIELD_HINTS.length).map(x => enumValue(x, CORRECTION_FIELD_HINTS));
+    if (new Set(correctionFieldHints).size !== correctionFieldHints.length || (v.correctionPresent && correctionFieldHints.length === 0) || (!v.correctionPresent && correctionFieldHints.length > 0)) return INVALID_ROUTING;
     const bindings = list(v.originBindings, 128).map(raw => { const o = exact(raw, ORIGIN_KEYS); return { sourceRecordId: safeId(o.sourceRecordId), retrievalArtifactId: safeId(o.retrievalArtifactId), publicationId: safeId(o.publicationId), issuerOriginId: o.issuerOriginId === null ? null : safeId(o.issuerOriginId), distributionCopyOf: o.distributionCopyOf === null ? null : safeId(o.distributionCopyOf) }; });
     const recordIds = bindings.map(x => x.sourceRecordId); if (new Set(recordIds).size !== recordIds.length) return INVALID_ROUTING;
     const byRecord = new Map(bindings.map(x => [x.sourceRecordId, x])); const publicationOrigins = new Map<string, string | null>();
@@ -155,25 +159,28 @@ export function parseSyntheticRoutingMaterial(input: unknown): SyntheticRoutingP
     if (seenFamilies.some(f => availableFamilies.includes(f))) return INVALID_ROUTING;
     const evaluationAsOf = iso(v.evaluationAsOf); const publicationAt = iso(v.publicationAt); const discoveredAt = iso(v.discoveredAt); const receivedAt = iso(v.receivedAt);
     if (!(publicationAt <= discoveredAt && discoveredAt <= receivedAt && receivedAt <= evaluationAsOf) || (correctionAvailableAt !== null && (correctionAvailableAt < publicationAt || correctionAvailableAt > evaluationAsOf || !v.correctionPresent))) return INVALID_ROUTING;
-    const out: SyntheticRoutingMaterial = { provenance: "SYNTHETIC", candidateId: safeId(v.candidateId), jurisdiction: juris, listingScopes: scopes, eventHint: enumValue(v.eventHint, EVENT_HINTS), seenFamilies, availableFamilies, issuerMapped: v.issuerMapped as boolean, assetMapped: v.assetMapped as boolean, duplicate: v.duplicate as boolean, rightsApproved: v.rightsApproved as boolean, credentialAvailable: v.credentialAvailable as boolean, completionMaterialPresent: v.completionMaterialPresent as boolean, primaryAvailable: v.primaryAvailable as boolean, qualificationComplete: v.qualificationComplete as boolean, correctionPresent: v.correctionPresent as boolean, correctionResolved: v.correctionResolved as boolean, retracted: v.retracted as boolean, conflicts: conflicts.sort(cmp), stale: v.stale as boolean, originBindings: bindings, publicationAt, discoveredAt, receivedAt, correctionAvailableAt, evaluationAsOf };
+    const out: SyntheticRoutingMaterial = { provenance: "SYNTHETIC", candidateId: safeId(v.candidateId), jurisdiction: juris, listingScopes: scopes, eventHint: enumValue(v.eventHint, EVENT_HINTS), seenFamilies, availableFamilies, issuerMapped: v.issuerMapped as boolean, assetMapped: v.assetMapped as boolean, duplicate: v.duplicate as boolean, rightsApproved: v.rightsApproved as boolean, credentialAvailable: v.credentialAvailable as boolean, completionMaterialPresent: v.completionMaterialPresent as boolean, primaryAvailable: v.primaryAvailable as boolean, qualificationComplete: v.qualificationComplete as boolean, correctionPresent: v.correctionPresent as boolean, correctionResolved: v.correctionResolved as boolean, correctionFieldHints: correctionFieldHints.sort(cmp), retracted: v.retracted as boolean, conflicts: conflicts.sort(cmp), stale: v.stale as boolean, originBindings: bindings, publicationAt, discoveredAt, receivedAt, correctionAvailableAt, evaluationAsOf };
     return Object.freeze({ status: "VALID", material: deepFreeze(out) });
   } catch { return INVALID_ROUTING; }
 }
 function routeOrder(jurisdiction: string): readonly SourceFamily[] { return JURISDICTIONS.find(x => x.jurisdiction === jurisdiction)?.order as readonly SourceFamily[] ?? ["DISCOVERY_AGGREGATOR"]; }
 function nextFamily(input: SyntheticRoutingMaterial): SourceFamily | null { return routeOrder(input.jurisdiction).find(f => !input.seenFamilies.includes(f) && input.availableFamilies.includes(f)) ?? null; }
 function explicitNext(state: RoutingState): RoutingState { const t = ALLOWED_TRANSITIONS.find(x => x.from === state && x.to !== "STOPPED_BLOCKED"); return (t?.to as RoutingState | undefined) ?? "STOPPED_BLOCKED"; }
-function candidateBinding(m: SyntheticRoutingMaterial): string { return stable({ candidateId: m.candidateId, jurisdiction: m.jurisdiction, listingScopes: m.listingScopes, eventHint: m.eventHint, originBindings: m.originBindings, publicationAt: m.publicationAt, discoveredAt: m.discoveredAt, receivedAt: m.receivedAt, correctionAvailableAt: m.correctionAvailableAt, evaluationAsOf: m.evaluationAsOf }); }
+function candidateBinding(m: SyntheticRoutingMaterial): string { return stable({ candidateId: m.candidateId, jurisdiction: m.jurisdiction, listingScopes: m.listingScopes, eventHint: m.eventHint, originBindings: m.originBindings, publicationAt: m.publicationAt, discoveredAt: m.discoveredAt, receivedAt: m.receivedAt, correctionAvailableAt: m.correctionAvailableAt, correctionFieldHints: m.correctionFieldHints, evaluationAsOf: m.evaluationAsOf }); }
 export function evaluateSourcePortfolioRouting(decision: unknown, input: unknown, previousResult?: unknown): RoutingEvaluation | null {
   if (!isAuthenticSourcePortfolioDecision(decision)) return null;
   const parsed = parseSyntheticRoutingMaterial(input); if (parsed.status !== "VALID") return null;
   const m = parsed.material;
   let currentState: RoutingState = "DISCOVERED";
+  let priorHistory: readonly RoutingState[] = ["DISCOVERED"];
   if (previousResult !== undefined) {
     if (!previousResult || typeof previousResult !== "object" || !ROUTING_EVALUATION_TRUST.has(previousResult)) return null;
     const binding = ROUTING_EVALUATION_BINDING.get(previousResult);
     if (!binding || binding.decisionFingerprint !== trustedDecision.fingerprint || binding.candidateBinding !== candidateBinding(m)) return null;
     const prior = previousResult as RoutingEvaluation;
     if (prior.nextState === "STOPPED_BLOCKED" || prior.nextState === "NON_AUTHORITATIVE_REVIEW_COMPLETE") return null;
+    if (binding.stageHistory.at(-1) !== prior.nextState) return null;
+    priorHistory = binding.stageHistory;
     currentState = prior.nextState;
   }
   const conflicts = [...m.conflicts].sort(cmp); const degraded = new Set<DegradationReason>(["ACQUISITION_DISABLED"]);
@@ -218,10 +225,25 @@ export function evaluateSourcePortfolioRouting(decision: unknown, input: unknown
   if (m.jurisdiction === "UNKNOWN") degraded.add("UNSUPPORTED_JURISDICTION");
   if (nextState === "CORROBORATION_REVIEW_REQUIRED" || nextState === "ELIGIBILITY_REVIEW_REQUIRED" || nextState === "NON_AUTHORITATIVE_REVIEW_COMPLETE") degraded.add("INDEPENDENT_CORROBORATION_UNAVAILABLE");
   const publicationGroups = new Set(m.originBindings.filter(x => x.issuerOriginId !== null).map(x => x.issuerOriginId!));
-  const result = deepFreeze({ status: "NON_AUTHORITATIVE_ROUTING_RESULT" as const, candidateId: m.candidateId, currentState, nextState, evaluationAsOf: m.evaluationAsOf, sourceStrength: strength, operationalPriority: priority, nextSourceFamily: nextFamily(m), publicationOriginGroupCount: publicationGroups.size, independentFactualOriginGroups: 0 as const, degradationReasons: [...degraded].sort(cmp), conflictReasons: conflicts, independentFactualCorroboration: "UNSUPPORTED" as const, authorityIssued: false as const, persistenceAllowed: false as const, signalEligible: false as const, tradingEligible: false as const });
+  const stageHistory = deepFreeze([...priorHistory, nextState]);
+  const canonicalResult = stable({ decisionFingerprint: trustedDecision.fingerprint, material: m, currentState, nextState, stageHistory });
+  const result = deepFreeze({ status: "NON_AUTHORITATIVE_ROUTING_RESULT" as const, candidateId: m.candidateId, currentState, nextState, stageHistory, routingResultId: hash(canonicalResult), evaluationAsOf: m.evaluationAsOf, publicationAt: m.publicationAt, discoveredAt: m.discoveredAt, receivedAt: m.receivedAt, correctionAvailableAt: m.correctionAvailableAt, jurisdiction: m.jurisdiction, listingScopes: m.listingScopes, eventHint: m.eventHint, seenFamilies: m.seenFamilies, sourceStrength: strength, operationalPriority: priority, nextSourceFamily: nextFamily(m), issuerMapped: m.issuerMapped, assetMapped: m.assetMapped, primaryAvailable: m.primaryAvailable, duplicate: m.duplicate, rightsApproved: m.rightsApproved, correctionPresent: m.correctionPresent, correctionResolved: m.correctionResolved, correctionFieldHints: m.correctionFieldHints, retracted: m.retracted, publicationOriginGroupCount: publicationGroups.size, syndicatedCopyCount: m.originBindings.filter(x => x.distributionCopyOf !== null).length, independentFactualOriginGroups: 0 as const, degradationReasons: [...degraded].sort(cmp), conflictReasons: conflicts, independentFactualCorroboration: "UNSUPPORTED" as const, authorityIssued: false as const, persistenceAllowed: false as const, signalEligible: false as const, tradingEligible: false as const });
   ROUTING_EVALUATION_TRUST.add(result);
-  ROUTING_EVALUATION_BINDING.set(result, Object.freeze({ decisionFingerprint: trustedDecision.fingerprint, candidateBinding: candidateBinding(m) }));
+  ROUTING_EVALUATION_BINDING.set(result, Object.freeze({ decisionFingerprint: trustedDecision.fingerprint, candidateBinding: candidateBinding(m), stageHistory, canonicalResult }));
   return result;
+}
+/** Runtime authenticity check only; it cannot mint or restore trust. */
+export function isAuthenticRoutingEvaluation(value: unknown): value is RoutingEvaluation {
+  if (!value || typeof value !== "object" || types.isProxy(value) || !ROUTING_EVALUATION_TRUST.has(value)) return false;
+  const binding = ROUTING_EVALUATION_BINDING.get(value);
+  return !!binding && binding.decisionFingerprint === trustedDecision.fingerprint && Object.isFrozen(value) && hash(binding.canonicalResult) === (value as RoutingEvaluation).routingResultId && stable(binding.stageHistory) === stable((value as RoutingEvaluation).stageHistory);
+}
+
+/** Predicate-only binding check for consumers that must bind an evaluated result to its decision. */
+export function isRoutingEvaluationForDecision(decision: unknown, value: unknown): value is RoutingEvaluation {
+  if (!isAuthenticSourcePortfolioDecision(decision) || !isAuthenticRoutingEvaluation(value)) return false;
+  const binding = ROUTING_EVALUATION_BINDING.get(value);
+  return binding?.decisionFingerprint === (decision as SourcePortfolioDecision).fingerprint;
 }
 
 export const SOURCE_PORTFOLIO_PRODUCTION_CONFIG = deepFreeze({ contractVersion: "event-intelligence-source-portfolio-routing-production/v1", selectedSourcePortfolio: null, activeRoutes: [], credentialReferences: [], scheduler: "BLOCKED", acquisition: "BLOCKED", sourceRetrieval: "BLOCKED", rawStorage: "BLOCKED", normalizedStorage: "BLOCKED", persistence: "BLOCKED", mapping: "BLOCKED", correctionResolution: "BLOCKED", corroboration: "BLOCKED", eventAuthority: "BLOCKED", signal: "BLOCKED", trading: "BLOCKED", approvals: Object.fromEntries(APPROVALS.map(x => [x, "NOT_APPROVED"])) });

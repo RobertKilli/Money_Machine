@@ -1,0 +1,29 @@
+{
+  "contractVersion": "event-intelligence-evidence-review-queue-production/v1",
+  "selectedPortfolio": null,
+  "activeQueuePolicies": [],
+  "credentialReferences": [],
+  "persistenceTargets": [],
+  "notificationTargets": [],
+  "reviewerIdentities": [],
+  "queueProjection": "BLOCKED",
+  "queuePersistence": "BLOCKED",
+  "queueScheduler": "BLOCKED",
+  "notifications": "BLOCKED",
+  "reviewerAssignment": "BLOCKED",
+  "sourceAcquisition": "BLOCKED",
+  "eventAuthority": "BLOCKED",
+  "signal": "BLOCKED",
+  "trading": "BLOCKED",
+  "approvals": {
+    "ACQUISITION": "NOT_APPROVED",
+    "PROCESSING": "NOT_APPROVED",
+    "RAW_STORAGE": "NOT_APPROVED",
+    "METADATA_STORAGE": "NOT_APPROVED",
+    "NORMALIZED_STORAGE": "NOT_APPROVED",
+    "PERSISTENCE": "NOT_APPROVED",
+    "RETENTION": "NOT_APPROVED",
+    "REDISTRIBUTION": "NOT_APPROVED",
+    "COMMERCIAL_USE": "NOT_APPROVED"
+  }
+}

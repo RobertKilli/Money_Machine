@@ -936,3 +936,5 @@ checkpoint does not waive that gate.
 # Event intelligence source routing boundary
 
 `event-intelligence-source-portfolio-routing-decision/v1` defines a side-effect-free routing policy over source families. It does not integrate the sibling source qualification checkpoints. Routing ends at `NON_AUTHORITATIVE_REVIEW_COMPLETE` or `STOPPED_BLOCKED`; it has no event-authority, signal, trade, network, credential, or persistence port. Production routes and source registries remain empty, with every approval blocked. See `EVENT_INTELLIGENCE_SOURCE_PORTFOLIO_ROUTING_DECISION.md`.
+
+Event-intelligence evidence review is a separate, read-only in-memory projection over an authentic routing result. Its status and categorical priority cannot create authority, persistence, scheduling, notifications, or trading decisions; see EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_CONTRACT.md.
