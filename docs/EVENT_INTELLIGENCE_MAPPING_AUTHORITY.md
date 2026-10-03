@@ -158,6 +158,13 @@ scope. That lineage cannot stand in for SEC event-source provenance. See
 [`SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md`](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md).
 The SEC decision keeps its filing/document/package/receipt/lineage scope separate from this asset-mapping authority. It does not select a byte-storage backend, and artifact persistence/readback remains blocked.
 
+Exchange and regulatory announcement candidates also do not create issuer or
+asset mappings. Exchange tickers, listing identifiers, ISIN/LEI candidates,
+issuer names, and document hostnames remain unresolved mentions until a later
+runtime-authentic mapping authority is supplied. Dual listings, subsidiaries,
+depositary receipts, and ETH/WETH remain distinct. See the
+[exchange source qualification](EVENT_INTELLIGENCE_EXCHANGE_REGULATORY_ANNOUNCEMENT_SOURCE_QUALIFICATION.md).
+
 ## News discovery mentions
 
 [News discovery](EVENT_INTELLIGENCE_NEWS_DISCOVERY_CONTRACT.md) creates only

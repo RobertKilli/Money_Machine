@@ -170,6 +170,14 @@ Sources: [Next.js advisory, “Remote Code Execution in next/og ImageResponse”
 
 ## Discovery-origin sets are not corroboration inputs
 
+Exchange announcement provenance is separately described in the
+[exchange qualification](EVENT_INTELLIGENCE_EXCHANGE_REGULATORY_ANNOUNCEMENT_SOURCE_QUALIFICATION.md).
+An exchange page and its document, issuer IR copy, wire distribution,
+aggregator hit, or replacement notice may describe one disclosure origin.
+Exchange publication can support channel provenance but is not independent
+verification of the issuer's underlying claim; these synthetic candidates
+cannot enter corroboration as authoritative origins.
+
 The separate [news discovery contract](EVENT_INTELLIGENCE_NEWS_DISCOVERY_CONTRACT.md)
 seals explicit upstream article declarations in
 `event-intelligence-discovery-origin-set/v1`. An issuer original, wire copy

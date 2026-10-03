@@ -21,6 +21,13 @@ news discovery
 
 Discovery cannot skip any step. It cannot issue issuer disclosure, externally verified event fact, mapped event authority, persistence authority, recommendation, order or trade. Existing SEC fixture, mapping and corroboration constructors reject these results through their own module-local trust checks. The explicit `rejectNewsDiscoveryAsAuthority` guard returns no authority for every named downstream boundary. There is no event-intelligence signal/trading handoff in the current repository to wire; future consumers must preserve this rejection. No parallel event authority or canonical asset registry is introduced.
 
+The sibling [exchange announcement qualification](EVENT_INTELLIGENCE_EXCHANGE_REGULATORY_ANNOUNCEMENT_SOURCE_QUALIFICATION.md)
+adds only synthetic source candidates for channel provenance. An exchange
+publication and its PDF, issuer copy, wire copy, or aggregator reference do not
+become independent origins merely by appearing at different URLs. Native
+retrieval and rights remain blocked, and exchange material cannot bypass issuer
+and asset mapping, lifecycle review, corroboration, or authority gates.
+
 ## Record contract and safety limits
 
 The strict input has a version, provider ID, source type, provider record ID, canonical source URL, publisher ID/name, nullable attributed issuer candidate, original publisher versus distributor, bounded headline and nullable summary, publication/discovery/receipt/update/recorded times, language, jurisdiction, entity/asset mentions, candidate categories, source locator, correction/retraction hint and classified confidence.

@@ -45,6 +45,14 @@ SEC Latest Filings/Search and RSS can be filtered by company/CIK/form and provid
 
 ### Issuer, exchange, wires, and discovery sources
 
+Exchange announcement sources have a separate, jurisdiction-scoped review in
+[the exchange qualification](EVENT_INTELLIGENCE_EXCHANGE_REGULATORY_ANNOUNCEMENT_SOURCE_QUALIFICATION.md).
+RNS and ASX can be candidates for evidence that material was published through
+their respective channels; this does not verify the issuer's underlying claim.
+NYSE Corporate Actions is limited to its documented corporate-action scope.
+Nasdaq-owned GlobeNewswire distribution is not Nasdaq exchange authority.
+No source is selected, and native retrieval, rights and storage remain blocked.
+
 - Issuer IR is primary only for material demonstrably published by the issuer-controlled origin. Preserve canonical URL, publisher identity, publication/update time and document fingerprint. RSS/Atom item IDs and feed retention/correction behavior are source-specific; no generic guarantee is assumed.
 - NYSE describes material-news and corporate-action notification processes and offers market-data corporate-action products; some specific information products are subscription-based. This supports a per-exchange authority candidate only for that documented product and jurisdiction scope; it does not establish general coverage for crypto treasury announcements or all acquisitions. Nasdaq subscription/RSS offerings likewise need product-specific qualification. [DOCUMENTED: NYSE Regulation, “Corporate Actions, Market Watch & Proxy Compliance”, https://www.nyse.com/regulation/corporate-actions-market-watch-proxy-compliance; NYSE Market Data, “Corporate Actions”, https://www.nyse.com/market-data/corporate-actions; Nasdaq Nordic, “IT – Subscription Services”, https://attachment.news.eu.nasdaq.com/a5a737ce4b33116ec3d313b482ede9ab4; checked 2026-09-30 06:38 UTC.]
 - GlobeNewswire describes distribution of corporate press releases and financial disclosures. Business Wire publishes a NewsML profile describing one news release per document. These facts establish a distribution role only; a story distributed by a wire must be tied to the issuer's own release/document and is not a second independent source. Pricing, automated feed completeness, latency, revision history, retention and redistribution for our use are **UNKNOWN**. [DOCUMENTED: GlobeNewswire, “SEO press release writing tips and distribution service”, https://www.globenewswire.com/en/Home/Learning-Support/Knowledge-Base/SEO-press-release-writing-tips-and-distribution-service.pdf; Business Wire, “Business Wire Profile of NewsML v1.18”, https://www.businesswire.com/schema/newsml/Business_Wire_Profile_of_NewsML_v1.18.pdf; checked 2026-09-30 06:38 UTC.]

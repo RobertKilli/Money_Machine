@@ -933,3 +933,14 @@ empty provider/source stacks and all operations/usage approvals blocked. No
 transport, credentials, persistence, migration or scheduler is added. The
 baseline braces security audit prevents READY_FOR_REVIEW; a preserved Git
 checkpoint does not waive that gate.
+
+## Exchange announcement qualification
+
+The sibling [exchange and regulatory announcement qualification](EVENT_INTELLIGENCE_EXCHANGE_REGULATORY_ANNOUNCEMENT_SOURCE_QUALIFICATION.md)
+models LSE/RNS and ASX issuer announcements as source-specific disclosure
+candidates, while NYSE Corporate Actions and Nasdaq discovery indexes retain
+narrow or out-of-scope roles. A publication can establish channel provenance,
+not the truth or completion of an issuer claim. Synthetic projections remain
+`NON_AUTHORITATIVE_DISCOVERY_CANDIDATE`; mapping, lifecycle review,
+corroboration, authority, persistence, signals and trading stay blocked. No
+transport, credentials or native document parser is introduced.
