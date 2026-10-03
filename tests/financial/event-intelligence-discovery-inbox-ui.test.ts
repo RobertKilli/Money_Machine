@@ -1,7 +1,8 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { adaptDiscoveryInbox, emptyInbox, filterInbox, inboxFiltersAreValid, type InboxFilters } from "../../src/application/intelligence/discovery-inbox-view-model";
+import { adaptDiscoveryInbox } from "../../src/application/intelligence/adapt-discovery-inbox.server";
+import { emptyInbox, filterInbox, inboxFiltersAreValid, type InboxFilters } from "../../src/application/intelligence/discovery-inbox-view-model";
 import { DiscoveryInbox } from "../../src/components/intelligence/discovery-inbox";
 import { loadDiscoveryInbox } from "../../src/application/intelligence/load-discovery-inbox";
 import { createSyntheticNewsDiscoveryCandidate, NEWS_DISCOVERY_CATEGORIES, type NewsDiscoveryRecord } from "../../src/domain/intelligence/event-intelligence-news-discovery";
@@ -33,7 +34,9 @@ describe("event intelligence discovery inbox view", () => {
     expect(model.items).toHaveLength(3);
     expect(model.items.map(item => item.originGroupCount)).toEqual([1, 1, 1]);
     expect(model.items.map(item => item.originGroupMemberCount)).toEqual([3, 3, 3]);
-    expect(model.items.map(item => item.sourceRelationship)).toEqual(["Issuer IR publication · discovery only", "Newswire distribution", "Aggregator reference · origin independence unverified"]);
+    expect(model.items.find(item => item.sourceType === "ISSUER_IR")?.sourceRelationship).toBe("Issuer IR publication · discovery only");
+    expect(model.items.find(item => item.sourceType === "NEWSWIRE")?.sourceRelationship).toBe("Newswire distribution");
+    expect(model.items.find(item => item.sourceType === "NEWS_AGGREGATOR")?.sourceRelationship).toBe("Aggregator reference · origin independence unverified");
     expect(model.items.every(item => item.corroborationStatus === "NEEDS_CORROBORATION" && item.authorityStatus === "DISCOVERY_ONLY")).toBe(true);
   });
 
@@ -42,7 +45,7 @@ describe("event intelligence discovery inbox view", () => {
     const model = adaptDiscoveryInbox([candidate(first), candidate(second)], EVALUATED);
     expect(model.items.map(item => item.originGroupMemberCount)).toEqual([1, 1]);
     expect(model.items.map(item => item.lifecycle)).toEqual(["ACTIVE", "ACTIVE"]);
-    expect(model.items[1]?.sourceRelationship).toContain("independence unverified");
+    expect(model.items.find(item => item.sourceType === "NEWS_AGGREGATOR")?.sourceRelationship).toContain("independence unverified");
   });
 
   it("retains correction history and marks retractions terminal without hiding them by default", () => {
@@ -51,12 +54,14 @@ describe("event intelligence discovery inbox view", () => {
     const retractedOriginal = candidate({ ...syntheticNewsRecord(), providerRecordId: "retracted-original" });
     const retraction = candidate(lifecycleRecord("RETRACTION", retractedOriginal.candidateId));
     const model = adaptDiscoveryInbox([original, corrected, retractedOriginal, retraction], EVALUATED);
-    expect(model.items.map(item => item.lifecycle)).toEqual(["ACTIVE", "CORRECTED", "ACTIVE", "RETRACTED"]);
-    expect(model.items[1]?.correctionParentHeadline).toBe(original.record.headline);
-    expect(model.items[3]?.correctionParentHeadline).toBe(retractedOriginal.record.headline);
+    const correctedItem = model.items.find(item => item.lifecycle === "CORRECTED");
+    const retractedItem = model.items.find(item => item.lifecycle === "RETRACTED");
+    expect(model.items.filter(item => item.lifecycle === "ACTIVE")).toHaveLength(2);
+    expect(correctedItem?.correctionParentHeadline).toBe(original.record.headline);
+    expect(retractedItem?.correctionParentHeadline).toBe(retractedOriginal.record.headline);
     expect(filterInbox(model.items, filters)).toHaveLength(4);
     expect(filterInbox(model.items, { ...filters, lifecycle: "ACTIVE" })).toHaveLength(2);
-    expect(model.items[3]?.authorityStatus).toBe("DISCOVERY_ONLY");
+    expect(retractedItem?.authorityStatus).toBe("DISCOVERY_ONLY");
   });
 
   it("keeps ambiguous ticker and parent/subsidiary mentions unresolved", () => {
@@ -99,6 +104,35 @@ describe("event intelligence discovery inbox view", () => {
     }
   });
 
+  it("rejects accessors, proxies, inherited objects, symbols and sparse arrays without invoking traps", () => {
+    const source = candidate(syntheticNewsRecord());
+    let getterCalls = 0; let proxyTrapCalls = 0;
+    const accessorRecord = { ...source.record };
+    Object.defineProperty(accessorRecord, "headline", { enumerable: true, get() { getterCalls++; throw new Error("DO_NOT_READ_GETTER"); } });
+    const accessorCandidate = { ...source, record: accessorRecord };
+    const proxy = new Proxy([source], { get() { proxyTrapCalls++; throw new Error("DO_NOT_RUN_PROXY_TRAP"); }, ownKeys() { proxyTrapCalls++; throw new Error("DO_NOT_RUN_PROXY_TRAP"); } });
+    const inherited = Object.assign(Object.create({ inherited: "unsafe" }), source);
+    const symbolic = { ...source, [Symbol("extra")]: "unsafe" };
+    const sparse = new Array(1) as unknown[];
+    expect(adaptDiscoveryInbox([accessorCandidate], EVALUATED).items).toHaveLength(0);
+    expect(adaptDiscoveryInbox(proxy, EVALUATED).state).toBe("SANITIZED_ERROR");
+    expect(adaptDiscoveryInbox([inherited, symbolic, sparse], EVALUATED).items).toHaveLength(0);
+    expect(getterCalls).toBe(0);
+    expect(proxyTrapCalls).toBe(0);
+  });
+
+  it("sorts deterministically, assigns unique stable presentation keys and labels completion as a candidate claim", () => {
+    const base = syntheticNewsRecord();
+    const completed: NewsDiscoveryRecord = { ...base, providerRecordId: "ui-completion-candidate", eventCategories: ["COMPLETED_CRYPTO_PURCHASE"] };
+    const same = candidate(base); const later = candidate(completed);
+    const forward = adaptDiscoveryInbox([later, same, same], EVALUATED);
+    const reverse = adaptDiscoveryInbox([same, later, same], EVALUATED);
+    expect(forward.items.map(item => item.headline)).toEqual(reverse.items.map(item => item.headline));
+    expect(new Set(forward.items.map(item => item.id)).size).toBe(forward.items.length);
+    const html = renderToStaticMarkup(React.createElement(DiscoveryInbox, { model: forward }));
+    expect(html).toContain("Completed crypto purchase · candidate claim");
+  });
+
   it("renders production empty/blocked state and safe pipeline labels", () => {
     const model = emptyInbox();
     const html = renderToStaticMarkup(React.createElement(DiscoveryInbox, { model }));
@@ -128,5 +162,25 @@ describe("event intelligence discovery inbox view", () => {
     expect(html).toContain("CORRECTED"); expect(html).toContain("RETRACTED"); expect(html).toContain("Retained prior record");
     expect(html).toContain("Needs mapping"); expect(html).toContain("Needs corroboration"); expect(html).toContain("DISCOVERY_ONLY");
     expect(html).not.toMatch(/BUY NOW|SELL NOW|Place order|TRADE NOW/i);
+  });
+
+  it("renders responsive candidate anchors with unique DOM IDs", () => {
+    const html = renderToStaticMarkup(React.createElement(DiscoveryInbox, { model: adaptDiscoveryInbox([candidate(syntheticNewsRecord())], EVALUATED) }));
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
+    expect(ids.length).toBe(new Set(ids).size);
+    expect(html).toContain('href="#candidate-');
+  });
+
+  it("escapes display text and degrades unsafe source links", () => {
+    const record: NewsDiscoveryRecord = { ...syntheticNewsRecord(), headline: "<img src=x onerror=alert(1)>" };
+    const safeModel = adaptDiscoveryInbox([candidate(record)], EVALUATED);
+    const safeHtml = renderToStaticMarkup(React.createElement(DiscoveryInbox, { model: safeModel }));
+    expect(safeHtml).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(safeHtml).not.toContain("<img src=x");
+    expect(safeHtml).toContain('rel="noopener noreferrer"');
+    const unsafeModel = { ...safeModel, items: safeModel.items.map(item => ({ ...item, sourceUrl: "javascript:alert(1)" })) } as typeof safeModel;
+    const unsafeHtml = renderToStaticMarkup(React.createElement(DiscoveryInbox, { model: unsafeModel }));
+    expect(unsafeHtml).not.toContain("href=\"javascript:");
+    expect(unsafeHtml).toContain("Source link unavailable.");
   });
 });

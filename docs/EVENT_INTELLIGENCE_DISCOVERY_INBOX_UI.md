@@ -43,7 +43,10 @@ recommendation, order, or trade. It is not a signal or trading dashboard.
 ## Components and view-model fields
 
 - `loadDiscoveryInbox`: server-only, production empty/blocked loader.
-- `adaptDiscoveryInbox`: allowlisted display projection and safe fallback.
+- `adaptDiscoveryInbox.server.ts`: server-only allowlisted display projection
+  and safe fallback. It rejects native Proxies before reflection and copies
+  only own data descriptors, so accessors are not invoked. It sorts using
+  explicit ordinal string comparison and makes duplicate display keys unique.
 - `DiscoveryInbox`: client-only local filters and accessible record details.
 - The route owns page metadata, explanatory status and verification-pipeline
   heading. Native `<details>/<summary>` provides keyboard-operable disclosure;
@@ -57,7 +60,8 @@ roles, canonical source locator, publication/source-updated/discovery/receipt/
 evaluation timestamps, declared origin-group display, lifecycle status,
 correction parent headline, mapping/retrieval/corroboration statuses, and
 hardcoded discovery-only capability labels. No material identity fingerprint
-is rendered.
+is rendered. External source links are HTTPS-only, show the parsed hostname,
+and use `noopener noreferrer`; unsafe link values degrade to no link.
 
 Filters run only against the view model: category, source type, discovery status,
 mapping status, lifecycle, issuer mention, asset mention and publication date
