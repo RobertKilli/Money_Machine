@@ -180,6 +180,8 @@ describe("server-only evidence review queue composition", () => {
     const copied = { ...value };
     expect(composeEventIntelligenceEvidenceReviewQueue(input([copied as never]))).toMatchObject({ status: "BLOCKED", code: "COMPOSITION_CANDIDATE_UNTRUSTED" });
     expect(composeEventIntelligenceEvidenceReviewQueue(input([value], [{ candidateId: "candidate:other" }]))).toMatchObject({ status: "BLOCKED", code: "COMPOSITION_INPUT_INVALID" });
+    const aggregator = candidate(syntheticAggregatorRecord());
+    expect(composeEventIntelligenceEvidenceReviewQueue(input([aggregator], [{ seenFamilies: ["DISCOVERY_AGGREGATOR", "FILING_AUTHORITY"] }]))).toMatchObject({ status: "BLOCKED", code: "COMPOSITION_INPUT_INVALID" });
     expect(composeEventIntelligenceEvidenceReviewQueue(input([value], [], "2026-10-04T00:00:00.000Z"))).toMatchObject({ status: "BLOCKED", code: "COMPOSITION_CUTOFF_MISMATCH" });
     const badMember = input([value]);
     badMember.candidates.push({ candidate: copied as never, routingMaterial: routeFor(value) });
