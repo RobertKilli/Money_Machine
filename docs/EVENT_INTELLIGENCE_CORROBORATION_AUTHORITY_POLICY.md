@@ -184,3 +184,6 @@ this policy can evaluate authentic inputs. Production remains blocked.
 # Persistence boundary
 
 The follow-on schema/UoW proposal is design-only in [EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md](EVENT_INTELLIGENCE_PERSISTENCE_SCHEMA_UOW_DECISION.md). Eligibility remains a pre-write derived result; only a separately approved `ISSUER_DISCLOSURE` authority could be persisted. `EXTERNALLY_VERIFIED_EVENT_FACT` remains unsupported. No migration or persistence is enabled. The decision stores no eligibility row: the authority identity pins the exact policy/evaluation material, and the future transaction must recompute eligibility from locked claims, correction lineage, mappings, and origin members before authority insertion. External parent fingerprints remain on their immutable source rows and are not copied into event children.
+# Portfolio routing relationship
+
+The source portfolio decision does not perform corroboration. Its `INDEPENDENT_FACTUAL_CORROBORATION` family is unsupported in v1; a transition into `CORROBORATION_REVIEW_REQUIRED` is only a review checkpoint. Duplicate/syndicated delivery copies and correction variants do not increase independent-origin counts. This routing decision cannot construct the trusted origins or eligibility results required by this policy.

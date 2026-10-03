@@ -168,3 +168,6 @@ IDs. Existing mapping constructors reject discovery results through their
 private SEC source/claim and mapping trust gates. A future discovery workflow
 must retrieve legitimate source evidence and use these existing mappings;
 there is no discovery-specific issuer merge or asset registry.
+# Portfolio routing boundary
+
+Source routing treats missing issuer and asset mapping as explicit queue blockers. Tickers, listing labels, parent/subsidiary names, and ETH/WETH mentions do not create or bypass the runtime-authentic mapping authorities described here. No mapping is selected or persisted by the routing decision.

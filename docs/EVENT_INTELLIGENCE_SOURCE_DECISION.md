@@ -136,3 +136,6 @@ and local approvals. No terms, subscription or API key is accepted or used.
 Discovery origin groups do not add independent authorities, and no headline
 or intention is converted to a completed event. Existing qualification,
 approval and readiness decisions are unchanged.
+# Source portfolio routing decision
+
+The sibling decision `event-intelligence-source-portfolio-routing-decision/v1` groups sources by discovery, issuer-attributed release, jurisdictional regulatory/exchange publication, filing publication, and unsupported independent factual corroboration. It specifies jurisdiction/event routing and origin deduplication only; it does not enable sources or change any qualification/approval registry. Independent factual corroboration remains unsupported. Production requests, storage, persistence, authority, signal, and trading remain blocked. See `EVENT_INTELLIGENCE_SOURCE_PORTFOLIO_ROUTING_DECISION.md`.
