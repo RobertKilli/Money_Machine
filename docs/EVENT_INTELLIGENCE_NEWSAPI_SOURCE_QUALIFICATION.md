@@ -1,8 +1,8 @@
 # NewsAPI Everything discovery source qualification
 
-Contract: `event-intelligence-newsapi-everything-source-qualification/v1`  
-Status: **PARTIAL_DISCOVERY_ONLY**; production acquisition and all persistence remain blocked.  
-Reviewed: **2026-10-03 08:30 UTC**.  
+Contract: `event-intelligence-newsapi-everything-source-qualification/v1`
+Status: **PARTIAL_DISCOVERY_ONLY**; production acquisition and all persistence remain blocked.
+Reviewed: **2026-10-03 08:30 UTC**.
 Parent: `feat/event-intelligence-news-discovery-contract` at `afa7ce136d27343a4d659b2984a1d2dda427d2f7`.
 
 ## Decision
