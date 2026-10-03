@@ -20,20 +20,24 @@ Item type is derived from trusted routing state and reason flags. Caller input c
 | `ASSET_MAPPING_REVIEW` | Asset map absent or asset mapping state; resolve exact representation separately |
 | `CORRECTION_LINEAGE_REVIEW` | Correction is present or correction review is active; inspect append-only lineage |
 | `RETRACTION_REVIEW` | Retraction/withdrawal hint or flag; status is `RETRACTED`, never active |
-| `SOURCE_CONFLICT_REVIEW` | Any routing conflict; preserve both materials and stop selection |
+| `SOURCE_CONFLICT_REVIEW` | Any routing conflict; preserve both materials and stop selection. The blocker retains the exact conflict code (issuer, listing, asset, amount, lifecycle, publication time, correction lineage, source material, authority tier, or origin group). |
 | `ORIGIN_GROUP_REVIEW` | More than one bound publication origin or a syndicated-copy binding needs review |
 | `RIGHTS_APPROVAL_REVIEW` | Source-use approval missing |
 | `JURISDICTION_REVIEW` | Jurisdiction/listing scope unresolved |
 | `LIFECYCLE_REVIEW` | Other blocked or routine lifecycle work |
-| `DUPLICATE_NO_ACTION` | Identical candidate replay without a higher-precedence correction, retraction, or conflict |
+| `DUPLICATE_NO_ACTION` | Identical candidate replay only after retraction, correction, conflicts, rights, jurisdiction, issuer/asset mapping, primary-source, and applicable corroboration checks do not require a higher-precedence item |
 | `BLOCKED_UNSUPPORTED_CORROBORATION` | Corroboration stage reached but no supported independent factual source family exists |
 | `NON_AUTHORITATIVE_REVIEW_COMPLETE` | Routing reached its non-authoritative endpoint; status remains `BLOCKED` when corroboration is unsupported |
 
 Statuses are snapshots: `OPEN`, `BLOCKED`, `NO_ACTION`, `RESOLVED_NON_AUTHORITATIVE`, `SUPERSEDED`, `RETRACTED`. There is no queue status transition API. Retraction precedes duplicate classification; unresolved correction and conflict also cannot be hidden by duplicate handling. Unsupported corroboration remains a blocker. Non-authoritative completion never means authority was granted.
 
-Priorities are categorical and ordered by the contract: `URGENT_RETRACTION_REVIEW`, `URGENT_CORRECTION_REVIEW`, `CONFLICT_REVIEW`, `BLOCKED_RIGHTS`, `JURISDICTION_UNKNOWN`, `PRIMARY_SOURCE_MISSING`, `MAPPING_REQUIRED`, `ROUTINE_DISCOVERY_REVIEW`, `NO_ACTION_DUPLICATE`. There is no numeric rank in output. Amount, asset, record count, provider count, or source count cannot raise priority. Ordering is only for an eventual manual review queue, never an investment score.
+The total item precedence is: retraction; unresolved correction/lineage conflict; any other source/lifecycle/identity conflict; rights blocker; jurisdiction blocker; missing issuer mapping; missing asset mapping; missing primary source; unsupported corroboration at its review stage; duplicate/no-action; routine review; non-authoritative review complete. Higher-precedence blockers remain visible and cannot be hidden by a duplicate. A completed-purchase claim without separate completion material remains a blocked lifecycle/primary-source review.
 
-Each blocker has its own canonical reason code, safe label, next action, permitted source-family set where applicable, and forbidden conclusion. Examples remain distinct: issuer mapping missing, asset mapping missing, unresolved jurisdiction, missing primary source, unresolved correction lineage, rights missing, unsupported corroboration, and acquisition disabled.
+Priorities are categorical and ordered by the contract: `URGENT_RETRACTION_REVIEW`, `URGENT_CORRECTION_REVIEW`, `CONFLICT_REVIEW`, `BLOCKED_RIGHTS`, `JURISDICTION_UNKNOWN`, `MAPPING_REQUIRED`, `PRIMARY_SOURCE_MISSING`, `ROUTINE_DISCOVERY_REVIEW`, `NO_ACTION_DUPLICATE`. There is no numeric rank in output. Amount, asset, record count, provider count, or source count cannot raise priority. Ordering is only for an eventual manual review queue, never an investment score.
+
+Each blocker has its own canonical reason code, safe label, next action, permitted source-family set where applicable, and forbidden conclusion. Conflict blockers preserve their precise parent reason (issuer identity, listing/jurisdiction, asset representation, amount/currency, lifecycle, publication time, correction lineage, source material, authority tier, or origin group). Examples remain distinct: issuer mapping missing, asset mapping missing, unresolved jurisdiction, missing primary source, unresolved correction lineage, rights missing, unsupported corroboration, and acquisition disabled.
+
+Items carry fixed forbidden-conclusion codes: issuer and asset identity are unconfirmed; amount is unverified; purchase completion is unconfirmed; issuer disclosure is not factual verification; independent factual verification is unavailable; the item is not a recommendation or confidence probability; no event authority, signal, trading eligibility, or trade decision is granted. Callers cannot remove these conclusions.
 
 ## Trust, identity, and historical snapshots
 
@@ -49,7 +53,7 @@ Items expose only categorical source families/strength, jurisdiction/listing, pu
 
 ## Queue-set sealing and sorting
 
-`sealEvidenceReviewQueueSet` accepts only a plain dense array of runtime-authentic routing results for the authentic decision. It derives items, requires one historical cutoff, rejects repeated members and identity collisions after canonical-material comparison, sorts by versioned categorical priority then UTC publication time then lexical stable item identity, and assigns contiguous zero-based ordinals. The immutable set binds decision, decision fingerprint, cutoff, count, ordering, ordinals, member identities and set fingerprint. Serialized/copied sets and items lose trust. The set asserts neither event authority nor persistence authority.
+`sealEvidenceReviewQueueSet` accepts only a plain dense array of runtime-authentic routing results for the authentic decision. It derives items, requires one historical cutoff and one snapshot per candidate, rejects repeated members and identity collisions after canonical-material comparison, sorts by versioned categorical priority then UTC publication time then lexical stable item identity, and assigns contiguous zero-based ordinals. The immutable set binds decision, decision fingerprint, cutoff, count, ordering, ordinals, member identities and set fingerprint. Serialized/copied sets and items lose trust. The set asserts neither event authority nor persistence authority.
 
 The optional UI view-model adapter is deliberately deferred. A safe stable public key cannot yet be provided without exposing internal identity material. No fingerprints, raw candidate text/payload, credentials, URLs, WeakSet state, or internal authority object are prepared for UI serialization in this slice.
 

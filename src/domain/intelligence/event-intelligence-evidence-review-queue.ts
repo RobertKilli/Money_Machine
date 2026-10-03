@@ -15,9 +15,9 @@ export const REVIEW_ITEM_TYPES = Object.freeze(["PRIMARY_SOURCE_RETRIEVAL_REVIEW
 export type ReviewItemType = typeof REVIEW_ITEM_TYPES[number];
 export const REVIEW_QUEUE_STATUSES = Object.freeze(["OPEN", "BLOCKED", "NO_ACTION", "RESOLVED_NON_AUTHORITATIVE", "SUPERSEDED", "RETRACTED"] as const);
 export type ReviewQueueStatus = typeof REVIEW_QUEUE_STATUSES[number];
-export const REVIEW_PRIORITIES = Object.freeze(["URGENT_RETRACTION_REVIEW", "URGENT_CORRECTION_REVIEW", "CONFLICT_REVIEW", "BLOCKED_RIGHTS", "JURISDICTION_UNKNOWN", "PRIMARY_SOURCE_MISSING", "MAPPING_REQUIRED", "ROUTINE_DISCOVERY_REVIEW", "NO_ACTION_DUPLICATE"] as const);
+export const REVIEW_PRIORITIES = Object.freeze(["URGENT_RETRACTION_REVIEW", "URGENT_CORRECTION_REVIEW", "CONFLICT_REVIEW", "BLOCKED_RIGHTS", "JURISDICTION_UNKNOWN", "MAPPING_REQUIRED", "PRIMARY_SOURCE_MISSING", "ROUTINE_DISCOVERY_REVIEW", "NO_ACTION_DUPLICATE"] as const);
 export type ReviewPriority = typeof REVIEW_PRIORITIES[number];
-export const REVIEW_BLOCKER_CODES = Object.freeze(["ISSUER_MAPPING_MISSING", "ASSET_MAPPING_MISSING", "JURISDICTION_SCOPE_UNRESOLVED", "PRIMARY_SOURCE_MISSING", "CORRECTION_LINEAGE_UNRESOLVED", "RETRACTION_PRESENT", "RIGHTS_APPROVAL_MISSING", "SOURCE_QUALIFICATION_INCOMPLETE", "CREDENTIAL_MISSING", "SOURCE_CONFLICT", "STALE_EVIDENCE", "INDEPENDENT_CORROBORATION_UNSUPPORTED", "ACQUISITION_DISABLED", "DUPLICATE_CANDIDATE"] as const);
+export const REVIEW_BLOCKER_CODES = Object.freeze(["ISSUER_MAPPING_MISSING", "ASSET_MAPPING_MISSING", "JURISDICTION_SCOPE_UNRESOLVED", "PRIMARY_SOURCE_MISSING", "CORRECTION_LINEAGE_UNRESOLVED", "RETRACTION_PRESENT", "RIGHTS_APPROVAL_MISSING", "SOURCE_QUALIFICATION_INCOMPLETE", "CREDENTIAL_MISSING", "ISSUER_IDENTITY_CONFLICT", "LISTING_JURISDICTION_CONFLICT", "ASSET_REPRESENTATION_CONFLICT", "AMOUNT_CURRENCY_CONFLICT", "LIFECYCLE_CONFLICT", "PUBLICATION_TIME_CONFLICT", "CORRECTION_LINEAGE_CONFLICT", "SOURCE_MATERIAL_CONFLICT", "AUTHORITY_TIER_CONFLICT", "ORIGIN_GROUP_CONFLICT", "SOURCE_CONFLICT", "STALE_EVIDENCE", "INDEPENDENT_CORROBORATION_UNSUPPORTED", "ACQUISITION_DISABLED", "DUPLICATE_CANDIDATE"] as const);
 export type ReviewBlockerCode = typeof REVIEW_BLOCKER_CODES[number];
 
 const cmp = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
@@ -33,16 +33,17 @@ const CONTRACT_MATERIAL = Object.freeze({
   routingMappings: Object.freeze([
     "RETRACTION_REVIEW=RETRACTED_OR_RETRACTION_HINT;PRECEDENCE=1",
     "CORRECTION_LINEAGE_REVIEW=UNRESOLVED_CORRECTION;PRECEDENCE=2",
-    "SOURCE_CONFLICT_REVIEW=ANY_CONFLICT;PRECEDENCE=3",
+    "SOURCE_CONFLICT_REVIEW=ANY_CONFLICT;CONFLICT_CODES=ISSUER_IDENTITY_CONFLICT,LISTING_JURISDICTION_CONFLICT,ASSET_REPRESENTATION_CONFLICT,AMOUNT_CURRENCY_CONFLICT,LIFECYCLE_CONFLICT,PUBLICATION_TIME_CONFLICT,CORRECTION_LINEAGE_CONFLICT,SOURCE_MATERIAL_CONFLICT,AUTHORITY_TIER_CONFLICT,ORIGIN_GROUP_CONFLICT;PRECEDENCE=3",
     "RIGHTS_APPROVAL_REVIEW=RIGHTS_MISSING;PRECEDENCE=4",
     "JURISDICTION_REVIEW=UNKNOWN_OR_DUAL_LISTED;PRECEDENCE=5",
-    "DUPLICATE_NO_ACTION=DUPLICATE_WITHOUT_HIGHER_PRECEDENCE_BLOCKER;PRECEDENCE=6",
-    "ISSUER_MAPPING_REVIEW=ISSUER_MAPPING_REQUIRED_OR_MISSING",
-    "ASSET_MAPPING_REVIEW=ASSET_MAPPING_REQUIRED_OR_MISSING",
-    "PRIMARY_SOURCE_RETRIEVAL_REVIEW=SOURCE_OR_DISCLOSURE_RETRIEVAL_REQUIRED",
+    "ISSUER_MAPPING_REVIEW=ISSUER_MAPPING_MISSING;PRECEDENCE=6",
+    "ASSET_MAPPING_REVIEW=ASSET_MAPPING_MISSING;PRECEDENCE=7",
+    "PRIMARY_SOURCE_RETRIEVAL_REVIEW=SOURCE_OR_DISCLOSURE_RETRIEVAL_REQUIRED;PRECEDENCE=8",
+    "BLOCKED_UNSUPPORTED_CORROBORATION=CORROBORATION_OR_ELIGIBILITY_STAGE_WITH_UNSUPPORTED_CORROBORATION;PRECEDENCE=9",
+    "DUPLICATE_NO_ACTION=DUPLICATE_WITHOUT_HIGHER_PRECEDENCE_BLOCKER;PRECEDENCE=10",
+    "NON_AUTHORITATIVE_REVIEW_COMPLETE=NON_AUTHORITATIVE_TERMINAL;PRECEDENCE=12",
+    "ROUTINE_REVIEW=OTHER_NONTERMINAL_LIFECYCLE;PRECEDENCE=11",
     "CORRECTION_LINEAGE_REVIEW=CORRECTION_PRESENT_OR_REVIEW_STAGE",
-    "BLOCKED_UNSUPPORTED_CORROBORATION=CORROBORATION_OR_ELIGIBILITY_STAGE_WITH_UNSUPPORTED_CORROBORATION",
-    "NON_AUTHORITATIVE_REVIEW_COMPLETE=NON_AUTHORITATIVE_TERMINAL;STATUS_BLOCKED_IF_CORROBORATION_UNSUPPORTED",
     "ORIGIN_GROUP_REVIEW=MULTIPLE_BOUND_ORIGINS_OR_SYNDICATED_COPY",
     "LIFECYCLE_REVIEW=OTHER_ROUTING_LIFECYCLE",
     "CALLER_CANNOT_SELECT_ITEM_TYPE_STATUS_OR_PRIORITY",
@@ -57,15 +58,26 @@ const CONTRACT_MATERIAL = Object.freeze({
     "RIGHTS_APPROVAL_MISSING|OBTAIN_RIGHTS_APPROVAL|NO_EVENT_AUTHORITY",
     "SOURCE_QUALIFICATION_INCOMPLETE|RETRIEVE_PRIMARY_SOURCE|NO_EVENT_AUTHORITY",
     "CREDENTIAL_MISSING|RETRIEVE_PRIMARY_SOURCE|NO_EVENT_AUTHORITY",
+    "ISSUER_IDENTITY_CONFLICT|REVIEW_SOURCE_CONFLICT|ISSUER_NOT_CONFIRMED",
+    "LISTING_JURISDICTION_CONFLICT|RESOLVE_JURISDICTION_SCOPE|ISSUER_NOT_CONFIRMED",
+    "ASSET_REPRESENTATION_CONFLICT|REVIEW_SOURCE_CONFLICT|ASSET_NOT_CONFIRMED",
+    "AMOUNT_CURRENCY_CONFLICT|REVIEW_SOURCE_CONFLICT|PURCHASE_NOT_CONFIRMED_COMPLETE",
+    "LIFECYCLE_CONFLICT|REVIEW_LIFECYCLE|PURCHASE_NOT_CONFIRMED_COMPLETE",
+    "PUBLICATION_TIME_CONFLICT|REVIEW_SOURCE_CONFLICT|PURCHASE_NOT_CONFIRMED_COMPLETE",
+    "CORRECTION_LINEAGE_CONFLICT|REVIEW_CORRECTION_LINEAGE|PURCHASE_NOT_CONFIRMED_COMPLETE",
+    "SOURCE_MATERIAL_CONFLICT|REVIEW_SOURCE_CONFLICT|PURCHASE_NOT_CONFIRMED_COMPLETE",
+    "AUTHORITY_TIER_CONFLICT|REVIEW_SOURCE_CONFLICT|NO_EVENT_AUTHORITY",
+    "ORIGIN_GROUP_CONFLICT|REVIEW_ORIGIN_BINDING|NO_INDEPENDENT_FACTUAL_VERIFICATION",
     "SOURCE_CONFLICT|REVIEW_SOURCE_CONFLICT|PURCHASE_NOT_CONFIRMED_COMPLETE",
     "STALE_EVIDENCE|RETRIEVE_PRIMARY_SOURCE|PURCHASE_NOT_CONFIRMED_COMPLETE",
     "INDEPENDENT_CORROBORATION_UNSUPPORTED|STOP_UNSUPPORTED_CORROBORATION|NO_INDEPENDENT_FACTUAL_VERIFICATION",
     "ACQUISITION_DISABLED|RETAIN_NON_AUTHORITATIVE_SNAPSHOT|NO_EVENT_AUTHORITY",
     "DUPLICATE_CANDIDATE|NO_ACTION_DUPLICATE|NO_SIGNAL",
   ]),
-  priorityMapping: Object.freeze(["URGENT_RETRACTION_REVIEW", "URGENT_CORRECTION_REVIEW", "CONFLICT_REVIEW", "BLOCKED_RIGHTS", "JURISDICTION_UNKNOWN", "PRIMARY_SOURCE_MISSING", "MAPPING_REQUIRED", "ROUTINE_DISCOVERY_REVIEW", "NO_ACTION_DUPLICATE"]),
+  conflictActionOrder: Object.freeze(["CORRECTION_LINEAGE_CONFLICT=REVIEW_CORRECTION_LINEAGE", "ISSUER_IDENTITY_CONFLICT=REVIEW_SOURCE_CONFLICT", "LISTING_JURISDICTION_CONFLICT=RESOLVE_JURISDICTION_SCOPE", "ASSET_REPRESENTATION_CONFLICT=REVIEW_SOURCE_CONFLICT", "AMOUNT_CURRENCY_CONFLICT=REVIEW_SOURCE_CONFLICT", "LIFECYCLE_CONFLICT=REVIEW_LIFECYCLE", "PUBLICATION_TIME_CONFLICT=REVIEW_SOURCE_CONFLICT", "SOURCE_MATERIAL_CONFLICT=REVIEW_SOURCE_CONFLICT", "AUTHORITY_TIER_CONFLICT=REVIEW_SOURCE_CONFLICT", "ORIGIN_GROUP_CONFLICT=REVIEW_ORIGIN_BINDING"]),
+  priorityMapping: Object.freeze(["URGENT_RETRACTION_REVIEW", "URGENT_CORRECTION_REVIEW", "CONFLICT_REVIEW", "BLOCKED_RIGHTS", "JURISDICTION_UNKNOWN", "MAPPING_REQUIRED", "PRIMARY_SOURCE_MISSING", "ROUTINE_DISCOVERY_REVIEW", "NO_ACTION_DUPLICATE"]),
   nextActions: Object.freeze(["RETRIEVE_PRIMARY_SOURCE", "RESOLVE_ISSUER_MAPPING", "RESOLVE_ASSET_MAPPING", "REVIEW_CORRECTION_LINEAGE", "REVIEW_RETRACTION", "REVIEW_SOURCE_CONFLICT", "REVIEW_ORIGIN_BINDING", "OBTAIN_RIGHTS_APPROVAL", "RESOLVE_JURISDICTION_SCOPE", "REVIEW_LIFECYCLE", "NO_ACTION_DUPLICATE", "STOP_UNSUPPORTED_CORROBORATION", "RETAIN_NON_AUTHORITATIVE_SNAPSHOT"]),
-  forbiddenConclusions: Object.freeze(["ISSUER_NOT_CONFIRMED", "ASSET_NOT_CONFIRMED", "PURCHASE_NOT_CONFIRMED_COMPLETE", "NO_INDEPENDENT_FACTUAL_VERIFICATION", "NO_EVENT_AUTHORITY", "NO_SIGNAL", "NO_TRADE_DECISION"]),
+  forbiddenConclusions: Object.freeze(["ISSUER_NOT_CONFIRMED", "ASSET_NOT_CONFIRMED", "AMOUNT_NOT_VERIFIED", "PURCHASE_NOT_CONFIRMED_COMPLETE", "ISSUER_DISCLOSURE_NOT_FACTUAL_VERIFICATION", "NO_INDEPENDENT_FACTUAL_VERIFICATION", "NOT_RECOMMENDATION", "NOT_CONFIDENCE_PROBABILITY", "NO_EVENT_AUTHORITY", "NO_SIGNAL", "NOT_TRADING_ELIGIBILITY", "NO_TRADE_DECISION"]),
   historicalPolicy: "PUBLICATION_DISCOVERY_RECEIPT_EVALUATION_ORDERED_SINGLE_CUTOFF_NO_FUTURE_EVIDENCE",
   correctionPolicy: "APPEND_ONLY_HINTS_LINEAGE_REQUIRES_SEPARATE_AUTHORITY_RETRACTION_NEVER_ACTIVE",
   identityPolicy: "CANONICAL_MATERIAL_PLUS_ROUTING_RESULT_CUTOFF_AND_CONTEXT",
@@ -84,7 +96,8 @@ export function isAuthenticEvidenceReviewQueueContract(value: unknown): value is
 
 function safePlainSnapshot(value: unknown, depth = 0): unknown {
   if (depth > 12) throw new Error("INVALID");
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") { if (value.length > 4096) throw new Error("INVALID"); return value; }
   if (typeof value === "number") { if (!Number.isSafeInteger(value)) throw new Error("INVALID"); return value; }
   if (typeof value !== "object" || types.isProxy(value)) throw new Error("INVALID");
   if (Array.isArray(value)) {
@@ -97,7 +110,7 @@ function safePlainSnapshot(value: unknown, depth = 0): unknown {
   }
   if (Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(Object.prototype).some(k => typeof k !== "string" || !OBJECT_INTRINSICS.has(k))) throw new Error("INVALID");
   const result: Record<string, unknown> = Object.create(null);
-  for (const key of Reflect.ownKeys(value)) { if (typeof key !== "string") throw new Error("INVALID"); const descriptor = Object.getOwnPropertyDescriptor(value, key); if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) throw new Error("INVALID"); result[key] = safePlainSnapshot(descriptor.value, depth + 1); }
+  for (const key of Reflect.ownKeys(value)) { if (typeof key !== "string" || key.length > 128) throw new Error("INVALID"); const descriptor = Object.getOwnPropertyDescriptor(value, key); if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) throw new Error("INVALID"); result[key] = safePlainSnapshot(descriptor.value, depth + 1); }
   return result;
 }
 function exact(value: unknown, keys: readonly string[]): Record<string, unknown> {
@@ -147,6 +160,16 @@ const BLOCKER_DETAILS: Readonly<Record<ReviewBlockerCode, Omit<ReviewBlocker, "c
   RIGHTS_APPROVAL_MISSING: { label: "Required source-use approval is missing", nextAction: "OBTAIN_RIGHTS_APPROVAL", allowedSourceFamilies: null, forbiddenConclusion: "NO_EVENT_AUTHORITY" },
   SOURCE_QUALIFICATION_INCOMPLETE: { label: "Source qualification is incomplete", nextAction: "RETRIEVE_PRIMARY_SOURCE", allowedSourceFamilies: null, forbiddenConclusion: "NO_EVENT_AUTHORITY" },
   CREDENTIAL_MISSING: { label: "A required credential is unavailable", nextAction: "RETRIEVE_PRIMARY_SOURCE", allowedSourceFamilies: null, forbiddenConclusion: "NO_EVENT_AUTHORITY" },
+  ISSUER_IDENTITY_CONFLICT: { label: "Issuer identity evidence conflicts", nextAction: "REVIEW_SOURCE_CONFLICT", allowedSourceFamilies: null, forbiddenConclusion: "ISSUER_NOT_CONFIRMED" },
+  LISTING_JURISDICTION_CONFLICT: { label: "Listing or jurisdiction evidence conflicts", nextAction: "RESOLVE_JURISDICTION_SCOPE", allowedSourceFamilies: null, forbiddenConclusion: "ISSUER_NOT_CONFIRMED" },
+  ASSET_REPRESENTATION_CONFLICT: { label: "Asset representation evidence conflicts", nextAction: "REVIEW_SOURCE_CONFLICT", allowedSourceFamilies: null, forbiddenConclusion: "ASSET_NOT_CONFIRMED" },
+  AMOUNT_CURRENCY_CONFLICT: { label: "Amount or currency evidence conflicts", nextAction: "REVIEW_SOURCE_CONFLICT", allowedSourceFamilies: null, forbiddenConclusion: "PURCHASE_NOT_CONFIRMED_COMPLETE" },
+  LIFECYCLE_CONFLICT: { label: "Event lifecycle evidence conflicts", nextAction: "REVIEW_LIFECYCLE", allowedSourceFamilies: null, forbiddenConclusion: "PURCHASE_NOT_CONFIRMED_COMPLETE" },
+  PUBLICATION_TIME_CONFLICT: { label: "Publication-time evidence conflicts", nextAction: "REVIEW_SOURCE_CONFLICT", allowedSourceFamilies: null, forbiddenConclusion: "PURCHASE_NOT_CONFIRMED_COMPLETE" },
+  CORRECTION_LINEAGE_CONFLICT: { label: "Correction lineage evidence conflicts", nextAction: "REVIEW_CORRECTION_LINEAGE", allowedSourceFamilies: null, forbiddenConclusion: "PURCHASE_NOT_CONFIRMED_COMPLETE" },
+  SOURCE_MATERIAL_CONFLICT: { label: "Source material conflicts", nextAction: "REVIEW_SOURCE_CONFLICT", allowedSourceFamilies: null, forbiddenConclusion: "PURCHASE_NOT_CONFIRMED_COMPLETE" },
+  AUTHORITY_TIER_CONFLICT: { label: "Source authority tier conflicts", nextAction: "REVIEW_SOURCE_CONFLICT", allowedSourceFamilies: null, forbiddenConclusion: "NO_EVENT_AUTHORITY" },
+  ORIGIN_GROUP_CONFLICT: { label: "Origin-group evidence conflicts", nextAction: "REVIEW_ORIGIN_BINDING", allowedSourceFamilies: null, forbiddenConclusion: "NO_INDEPENDENT_FACTUAL_VERIFICATION" },
   SOURCE_CONFLICT: { label: "Source material contains unresolved conflicts", nextAction: "REVIEW_SOURCE_CONFLICT", allowedSourceFamilies: null, forbiddenConclusion: "PURCHASE_NOT_CONFIRMED_COMPLETE" },
   STALE_EVIDENCE: { label: "Evidence may be stale", nextAction: "RETRIEVE_PRIMARY_SOURCE", allowedSourceFamilies: null, forbiddenConclusion: "PURCHASE_NOT_CONFIRMED_COMPLETE" },
   INDEPENDENT_CORROBORATION_UNSUPPORTED: { label: "Independent factual corroboration is unsupported", nextAction: "STOP_UNSUPPORTED_CORROBORATION", allowedSourceFamilies: null, forbiddenConclusion: "NO_INDEPENDENT_FACTUAL_VERIFICATION" },
@@ -165,9 +188,10 @@ function blockersFor(result: RoutingEvaluation): ReviewBlocker[] {
   if (!result.rightsApproved) codes.add("RIGHTS_APPROVAL_MISSING");
   if (result.degradationReasons.includes("SOURCE_QUALIFICATION_INCOMPLETE")) codes.add("SOURCE_QUALIFICATION_INCOMPLETE");
   if (result.degradationReasons.includes("CREDENTIAL_MISSING")) codes.add("CREDENTIAL_MISSING");
-  if (result.conflictReasons.length) codes.add("SOURCE_CONFLICT");
+  for (const reason of result.conflictReasons) codes.add(reason as ReviewBlockerCode);
+  if (!result.conflictReasons.length && result.degradationReasons.includes("CONFLICTING_MATERIAL")) codes.add("SOURCE_CONFLICT");
   if (result.degradationReasons.includes("STALE_MATERIAL")) codes.add("STALE_EVIDENCE");
-  if (result.degradationReasons.includes("INDEPENDENT_CORROBORATION_UNAVAILABLE")) codes.add("INDEPENDENT_CORROBORATION_UNSUPPORTED");
+  if (result.degradationReasons.includes("INDEPENDENT_CORROBORATION_UNAVAILABLE") || ((result.currentState === "CORROBORATION_REVIEW_REQUIRED" || result.currentState === "ELIGIBILITY_REVIEW_REQUIRED") && result.independentFactualCorroboration === "UNSUPPORTED")) codes.add("INDEPENDENT_CORROBORATION_UNSUPPORTED");
   if (result.degradationReasons.includes("ACQUISITION_DISABLED")) codes.add("ACQUISITION_DISABLED");
   if (result.duplicate) codes.add("DUPLICATE_CANDIDATE");
   return [...codes].sort(cmp).map(code => makeBlocker(code));
@@ -178,28 +202,36 @@ function mappedPriority(result: RoutingEvaluation): ReviewPriority {
   if (result.conflictReasons.length) return "CONFLICT_REVIEW";
   if (result.operationalPriority === "BLOCKED_RIGHTS") return "BLOCKED_RIGHTS";
   if (result.jurisdiction === "UNKNOWN" || result.jurisdiction === "DUAL_LISTED") return "JURISDICTION_UNKNOWN";
-  if (result.operationalPriority === "PRIMARY_SOURCE_MISSING") return "PRIMARY_SOURCE_MISSING";
-  if (result.operationalPriority === "MAPPING_REQUIRED") return "MAPPING_REQUIRED";
+  if (!result.issuerMapped || !result.assetMapped) return "MAPPING_REQUIRED";
+  if (!result.primaryAvailable || !result.seenFamilies.some(f => f !== "DISCOVERY_AGGREGATOR") || result.operationalPriority === "PRIMARY_SOURCE_MISSING") return "PRIMARY_SOURCE_MISSING";
   if (result.operationalPriority === "NO_ACTION_DUPLICATE") return "NO_ACTION_DUPLICATE";
   return "ROUTINE_DISCOVERY_REVIEW";
 }
+function conflictAction(result: RoutingEvaluation): string {
+  const actions: Readonly<Record<string, string>> = Object.freeze({ CORRECTION_LINEAGE_CONFLICT: "REVIEW_CORRECTION_LINEAGE", ISSUER_IDENTITY_CONFLICT: "REVIEW_SOURCE_CONFLICT", LISTING_JURISDICTION_CONFLICT: "RESOLVE_JURISDICTION_SCOPE", ASSET_REPRESENTATION_CONFLICT: "REVIEW_SOURCE_CONFLICT", AMOUNT_CURRENCY_CONFLICT: "REVIEW_SOURCE_CONFLICT", LIFECYCLE_CONFLICT: "REVIEW_LIFECYCLE", PUBLICATION_TIME_CONFLICT: "REVIEW_SOURCE_CONFLICT", SOURCE_MATERIAL_CONFLICT: "REVIEW_SOURCE_CONFLICT", AUTHORITY_TIER_CONFLICT: "REVIEW_SOURCE_CONFLICT", ORIGIN_GROUP_CONFLICT: "REVIEW_ORIGIN_BINDING" });
+  const precedence = ["CORRECTION_LINEAGE_CONFLICT", "ISSUER_IDENTITY_CONFLICT", "LISTING_JURISDICTION_CONFLICT", "ASSET_REPRESENTATION_CONFLICT", "LIFECYCLE_CONFLICT", "AMOUNT_CURRENCY_CONFLICT", "PUBLICATION_TIME_CONFLICT", "SOURCE_MATERIAL_CONFLICT", "AUTHORITY_TIER_CONFLICT", "ORIGIN_GROUP_CONFLICT"];
+  const selected = precedence.find(code => result.conflictReasons.includes(code));
+  return (selected && actions[selected]) || "REVIEW_SOURCE_CONFLICT";
+}
 function classify(result: RoutingEvaluation): { itemType: ReviewItemType; status: ReviewQueueStatus; priority: ReviewPriority; nextAction: string } {
   if (result.retracted || result.eventHint === "RETRACTION_WITHDRAWAL") return { itemType: "RETRACTION_REVIEW", status: "RETRACTED", priority: "URGENT_RETRACTION_REVIEW", nextAction: "REVIEW_RETRACTION" };
-  if (result.correctionPresent && !result.correctionResolved || result.eventHint === "CORRECTION_AMENDMENT" && !result.correctionResolved) return { itemType: "CORRECTION_LINEAGE_REVIEW", status: "BLOCKED", priority: "URGENT_CORRECTION_REVIEW", nextAction: "REVIEW_CORRECTION_LINEAGE" };
-  if (result.conflictReasons.length) return { itemType: "SOURCE_CONFLICT_REVIEW", status: "BLOCKED", priority: "CONFLICT_REVIEW", nextAction: "REVIEW_SOURCE_CONFLICT" };
+  if (result.correctionPresent && !result.correctionResolved || result.eventHint === "CORRECTION_AMENDMENT" && !result.correctionResolved || result.conflictReasons.includes("CORRECTION_LINEAGE_CONFLICT")) return { itemType: "CORRECTION_LINEAGE_REVIEW", status: "BLOCKED", priority: "URGENT_CORRECTION_REVIEW", nextAction: "REVIEW_CORRECTION_LINEAGE" };
+  if (result.conflictReasons.length) return { itemType: "SOURCE_CONFLICT_REVIEW", status: "BLOCKED", priority: "CONFLICT_REVIEW", nextAction: conflictAction(result) };
   if (!result.rightsApproved) return { itemType: "RIGHTS_APPROVAL_REVIEW", status: "BLOCKED", priority: "BLOCKED_RIGHTS", nextAction: "OBTAIN_RIGHTS_APPROVAL" };
   if (result.jurisdiction === "UNKNOWN" || result.jurisdiction === "DUAL_LISTED") return { itemType: "JURISDICTION_REVIEW", status: "BLOCKED", priority: "JURISDICTION_UNKNOWN", nextAction: "RESOLVE_JURISDICTION_SCOPE" };
-  if (result.duplicate) return { itemType: "DUPLICATE_NO_ACTION", status: "NO_ACTION", priority: "NO_ACTION_DUPLICATE", nextAction: "NO_ACTION_DUPLICATE" };
-  if (result.eventHint === "COMPLETED_PURCHASE" && result.nextState === "STOPPED_BLOCKED") return { itemType: "LIFECYCLE_REVIEW", status: "BLOCKED", priority: "PRIMARY_SOURCE_MISSING", nextAction: "RETRIEVE_PRIMARY_SOURCE" };
-  if (result.currentState === "ISSUER_MAPPING_REQUIRED" || !result.issuerMapped) return { itemType: "ISSUER_MAPPING_REVIEW", status: "OPEN", priority: "MAPPING_REQUIRED", nextAction: "RESOLVE_ISSUER_MAPPING" };
-  if (result.currentState === "ASSET_MAPPING_REQUIRED" || !result.assetMapped) return { itemType: "ASSET_MAPPING_REVIEW", status: "OPEN", priority: "MAPPING_REQUIRED", nextAction: "RESOLVE_ASSET_MAPPING" };
-  if (!result.primaryAvailable || result.currentState === "DISCOVERED" || result.currentState === "SOURCE_RETRIEVAL_REQUIRED" || result.currentState === "PRIMARY_DISCLOSURE_REQUIRED") return { itemType: "PRIMARY_SOURCE_RETRIEVAL_REVIEW", status: "OPEN", priority: mappedPriority(result), nextAction: "RETRIEVE_PRIMARY_SOURCE" };
-  if (result.currentState === "CORRECTION_REVIEW_REQUIRED" || result.correctionPresent) return { itemType: "CORRECTION_LINEAGE_REVIEW", status: result.correctionResolved ? "RESOLVED_NON_AUTHORITATIVE" : "OPEN", priority: "URGENT_CORRECTION_REVIEW", nextAction: "REVIEW_CORRECTION_LINEAGE" };
+  if (!result.issuerMapped) return { itemType: "ISSUER_MAPPING_REVIEW", status: "OPEN", priority: "MAPPING_REQUIRED", nextAction: "RESOLVE_ISSUER_MAPPING" };
+  if (!result.assetMapped) return { itemType: "ASSET_MAPPING_REVIEW", status: "OPEN", priority: "MAPPING_REQUIRED", nextAction: "RESOLVE_ASSET_MAPPING" };
+  if (!result.primaryAvailable || !result.seenFamilies.some(f => f !== "DISCOVERY_AGGREGATOR")) return { itemType: "PRIMARY_SOURCE_RETRIEVAL_REVIEW", status: result.nextState === "STOPPED_BLOCKED" || result.degradationReasons.includes("CREDENTIAL_MISSING") || result.degradationReasons.includes("SOURCE_QUALIFICATION_INCOMPLETE") ? "BLOCKED" : "OPEN", priority: "PRIMARY_SOURCE_MISSING", nextAction: "RETRIEVE_PRIMARY_SOURCE" };
   if (result.publicationOriginGroupCount > 1 || result.syndicatedCopyCount > 0) return { itemType: "ORIGIN_GROUP_REVIEW", status: result.degradationReasons.includes("INDEPENDENT_CORROBORATION_UNAVAILABLE") ? "BLOCKED" : "OPEN", priority: mappedPriority(result), nextAction: "REVIEW_ORIGIN_BINDING" };
+  if ((result.currentState === "CORROBORATION_REVIEW_REQUIRED" || result.currentState === "ELIGIBILITY_REVIEW_REQUIRED") && result.independentFactualCorroboration === "UNSUPPORTED" && result.nextState !== "NON_AUTHORITATIVE_REVIEW_COMPLETE") return { itemType: "BLOCKED_UNSUPPORTED_CORROBORATION", status: "BLOCKED", priority: "ROUTINE_DISCOVERY_REVIEW", nextAction: "STOP_UNSUPPORTED_CORROBORATION" };
+  if (result.duplicate && !result.correctionPresent) return { itemType: "DUPLICATE_NO_ACTION", status: "NO_ACTION", priority: "NO_ACTION_DUPLICATE", nextAction: "NO_ACTION_DUPLICATE" };
   if (result.currentState === "NON_AUTHORITATIVE_REVIEW_COMPLETE" || result.nextState === "NON_AUTHORITATIVE_REVIEW_COMPLETE") return { itemType: "NON_AUTHORITATIVE_REVIEW_COMPLETE", status: result.degradationReasons.includes("INDEPENDENT_CORROBORATION_UNAVAILABLE") ? "BLOCKED" : "RESOLVED_NON_AUTHORITATIVE", priority: "ROUTINE_DISCOVERY_REVIEW", nextAction: "RETAIN_NON_AUTHORITATIVE_SNAPSHOT" };
-  if ((result.currentState === "CORROBORATION_REVIEW_REQUIRED" || result.currentState === "ELIGIBILITY_REVIEW_REQUIRED") && result.degradationReasons.includes("INDEPENDENT_CORROBORATION_UNAVAILABLE")) return { itemType: "BLOCKED_UNSUPPORTED_CORROBORATION", status: "BLOCKED", priority: "ROUTINE_DISCOVERY_REVIEW", nextAction: "STOP_UNSUPPORTED_CORROBORATION" };
+  if (result.currentState === "ISSUER_MAPPING_REQUIRED") return { itemType: "ISSUER_MAPPING_REVIEW", status: "OPEN", priority: "MAPPING_REQUIRED", nextAction: "RESOLVE_ISSUER_MAPPING" };
+  if (result.currentState === "ASSET_MAPPING_REQUIRED") return { itemType: "ASSET_MAPPING_REVIEW", status: "OPEN", priority: "MAPPING_REQUIRED", nextAction: "RESOLVE_ASSET_MAPPING" };
+  if (result.currentState === "DISCOVERED" || result.currentState === "SOURCE_RETRIEVAL_REQUIRED" || result.currentState === "PRIMARY_DISCLOSURE_REQUIRED") return { itemType: "PRIMARY_SOURCE_RETRIEVAL_REVIEW", status: result.nextState === "STOPPED_BLOCKED" || result.degradationReasons.includes("CREDENTIAL_MISSING") || result.degradationReasons.includes("SOURCE_QUALIFICATION_INCOMPLETE") ? "BLOCKED" : "OPEN", priority: mappedPriority(result), nextAction: "RETRIEVE_PRIMARY_SOURCE" };
+  if (result.eventHint === "COMPLETED_PURCHASE" && result.nextState === "STOPPED_BLOCKED") return { itemType: "LIFECYCLE_REVIEW", status: "BLOCKED", priority: "PRIMARY_SOURCE_MISSING", nextAction: "RETRIEVE_PRIMARY_SOURCE" };
+  if (result.currentState === "CORRECTION_REVIEW_REQUIRED" || result.correctionPresent) return { itemType: "CORRECTION_LINEAGE_REVIEW", status: result.correctionResolved ? "RESOLVED_NON_AUTHORITATIVE" : "OPEN", priority: "URGENT_CORRECTION_REVIEW", nextAction: "REVIEW_CORRECTION_LINEAGE" };
   if (result.currentState === "STOPPED_BLOCKED" || result.nextState === "STOPPED_BLOCKED") return { itemType: "LIFECYCLE_REVIEW", status: "BLOCKED", priority: "ROUTINE_DISCOVERY_REVIEW", nextAction: "RETAIN_NON_AUTHORITATIVE_SNAPSHOT" };
-  if (result.publicationOriginGroupCount > 1 || result.syndicatedCopyCount > 0) return { itemType: "ORIGIN_GROUP_REVIEW", status: "OPEN", priority: mappedPriority(result), nextAction: "REVIEW_ORIGIN_BINDING" };
   return { itemType: "LIFECYCLE_REVIEW", status: "OPEN", priority: mappedPriority(result), nextAction: "REVIEW_LIFECYCLE" };
 }
 function itemMaterial(result: RoutingEvaluation, decision: SourcePortfolioDecision, classification: ReturnType<typeof classify>, blockers: readonly ReviewBlocker[]): Record<string, unknown> {
@@ -240,6 +272,7 @@ export function sealEvidenceReviewQueueSet(decision: unknown, routingResults: un
     if (items.some(item => item === null)) return INVALID_SET;
     const trustedItems = items as EvidenceReviewItem[];
     if (new Set(trustedItems.map(item => item.evaluationAsOf)).size !== 1) return INVALID_SET;
+    if (new Set(trustedItems.map(item => item.candidateId)).size !== trustedItems.length) return INVALID_SET;
     const ordered = sortEvidenceReviewItems(trustedItems); if (!ordered) return INVALID_SET;
     const canonicalMembers = ordered.map((item, ordinal) => ({ ordinal, itemCanonical: ITEM_CANONICAL.get(item)! }));
     const canonicalSet = stable({ contractVersion: EVIDENCE_REVIEW_QUEUE_VERSION, decisionId: decision.decisionId, decisionFingerprint: decision.fingerprint, evaluationAsOf: ordered[0]!.evaluationAsOf, memberCount: ordered.length, ordering: CONTRACT_MATERIAL.sortPolicy, members: canonicalMembers });
