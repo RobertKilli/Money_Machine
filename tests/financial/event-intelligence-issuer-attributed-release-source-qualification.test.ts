@@ -10,7 +10,7 @@ import {
 import production from "../../config/intelligence/event-intelligence-issuer-release.production.json";
 import { ISSUER_RELEASE_PRODUCTION } from "../../src/domain/intelligence/event-intelligence-issuer-release-production";
 import { syntheticIssuerRelease, REVIEW_AS_OF } from "../fixtures/event-intelligence-issuer-attributed-release";
-import { constructSyntheticNormalForm, checkFingerprintCollision } from "test-only:issuer-release-normal-form";
+import { constructSyntheticNormalForm, checkFingerprintCollision, compareFingerprintMaterial } from "test-only:issuer-release-normal-form";
 
 function candidate(overrides: Parameters<typeof syntheticIssuerRelease>[0] = {}) {
   const value = syntheticIssuerRelease(overrides);
@@ -78,6 +78,8 @@ describe("issuer-attributed release source qualification", () => {
     const digest = "f".repeat(64);
     expect(checkFingerprintCollision([{ fingerprint: digest, material: { url: "https://a.test/release", title: "first" } }, { fingerprint: digest, material: { url: "https://a.test/release", title: "changed" } }])).toBe(false);
     expect(checkFingerprintCollision([{ fingerprint: digest, material: { url: "https://a.test/release", title: "same" } }, { fingerprint: digest, material: { title: "same", url: "https://a.test/release" } }])).toBe(true);
+    expect(compareFingerprintMaterial(digest, { url: "https://a.test/release", title: "first" }, digest, { url: "https://a.test/release", title: "changed" })).toBe("FINGERPRINT_MATERIAL_CONFLICT");
+    expect(compareFingerprintMaterial(digest, { url: "https://a.test/release", title: "same" }, digest, { title: "same", url: "https://a.test/release" })).toBe("SAME_MATERIAL");
   });
   it.each(["CORRECTION_HINT", "UPDATE_HINT", "RETRACTION_HINT"] as const)("preserves %s as hint only", hint => {
     const c = candidate({ lifecycleHint: hint })!; expect(c.lifecycleHint).toBe(hint); expect(rejectIssuerReleaseAsAuthority(c, "EVENT_AUTHORITY")).toBeNull();

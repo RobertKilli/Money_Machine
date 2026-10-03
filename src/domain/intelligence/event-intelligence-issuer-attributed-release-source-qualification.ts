@@ -202,15 +202,21 @@ function fingerprintMaterialsConsistent(items: readonly Readonly<{ fingerprint: 
   for (const item of items) { const normalized = canonical(item.material), previous = seen.get(item.fingerprint); if (previous !== undefined && previous !== normalized) return false; seen.set(item.fingerprint, normalized); }
   return true;
 }
+function sameFingerprintMaterial(fingerprintA: string, materialA: unknown, fingerprintB: string, materialB: unknown): "DIFFERENT_FINGERPRINT" | "SAME_MATERIAL" | "FINGERPRINT_MATERIAL_CONFLICT" {
+  if (fingerprintA !== fingerprintB) return "DIFFERENT_FINGERPRINT";
+  return canonical(materialA) === canonical(materialB) ? "SAME_MATERIAL" : "FINGERPRINT_MATERIAL_CONFLICT";
+}
 function candidateFingerprintMaterialsConsistent(items: readonly IssuerReleaseCandidate[]): boolean { return fingerprintMaterialsConsistent(items.map(x => ({ fingerprint: x.sourceMaterialFingerprint, material: candidateIdentityMaterial(x) }))); }
 function constructCandidate(v: SyntheticIssuerReleaseInput): IssuerReleaseCandidate {
   const material = materialOf(v), sourceMaterialFingerprint = hash(material);
   const candidate = freeze({ status: "NON_AUTHORITATIVE_DISCOVERY_CANDIDATE" as const, authorityStatus: "DISCOVERY_ONLY" as const, provenance: "SYNTHETIC" as const, candidateId: `issuer-release-candidate:${sourceMaterialFingerprint}`, sourceMaterialFingerprint, receiptFingerprint: hash({ version: ISSUER_RELEASE_NORMAL_FORM_VERSION, sourceMaterialFingerprint, discoveredAt: v.discoveredAt, receivedAt: v.receivedAt, evaluatedAsOf: v.evaluatedAsOf, payloadFingerprint: v.payloadFingerprint }), sourceId: v.sourceId, sourceClass: v.sourceClass, issuerCandidateId: v.issuerCandidateId, issuerDisplayedName: v.issuerDisplayedName, publisherId: v.publisherId, distributorId: v.distributorId, canonicalReleaseUrl: v.canonicalReleaseUrl, releaseIdentifier: v.releaseIdentifier, headline: v.headline, summary: v.summary, publicationAt: v.publicationAt, discoveredAt: v.discoveredAt, receivedAt: v.receivedAt, evaluatedAsOf: v.evaluatedAsOf, categoryCandidate: v.categoryCandidate, assetMentions: [...v.assetMentions], amountText: v.amountText, currencyText: v.currencyText, lifecycleHint: v.lifecycleHint, explicitOriginBinding: v.explicitOriginBinding, issuerMappingEligible: false as const, assetMappingEligible: false as const, corroborationEligible: false as const, issuerDisclosureAuthorityEligible: false as const, eventAuthorityEligible: false as const, persistenceAuthorityEligible: false as const, signalEligible: false as const, tradingEligible: false as const });
   candidateTrust.add(candidate); return candidate;
 }
-export function compareIssuerReleaseCandidates(a: unknown, b: unknown): "UNTRUSTED" | "SAME_LOCAL_SOURCE_MATERIAL" | "SAME_URL_MATERIAL_VARIANT" | "EXPLICIT_SAME_ISSUER_ORIGIN" | "DISTINCT_UNVERIFIED_MATERIAL" {
+export function compareIssuerReleaseCandidates(a: unknown, b: unknown): "UNTRUSTED" | "SAME_LOCAL_SOURCE_MATERIAL" | "FINGERPRINT_MATERIAL_CONFLICT" | "SAME_URL_MATERIAL_VARIANT" | "EXPLICIT_SAME_ISSUER_ORIGIN" | "DISTINCT_UNVERIFIED_MATERIAL" {
   if (!isAuthenticIssuerReleaseCandidate(a) || !isAuthenticIssuerReleaseCandidate(b)) return "UNTRUSTED";
-  if (a.sourceMaterialFingerprint === b.sourceMaterialFingerprint) return "SAME_LOCAL_SOURCE_MATERIAL";
+  const fingerprintComparison = sameFingerprintMaterial(a.sourceMaterialFingerprint, candidateIdentityMaterial(a), b.sourceMaterialFingerprint, candidateIdentityMaterial(b));
+  if (fingerprintComparison === "SAME_MATERIAL") return "SAME_LOCAL_SOURCE_MATERIAL";
+  if (fingerprintComparison === "FINGERPRINT_MATERIAL_CONFLICT") return "FINGERPRINT_MATERIAL_CONFLICT";
   if (a.canonicalReleaseUrl === b.canonicalReleaseUrl) return "SAME_URL_MATERIAL_VARIANT";
   const x = a.explicitOriginBinding, y = b.explicitOriginBinding;
   if (x && y && canonical(x) === canonical(y)) return "EXPLICIT_SAME_ISSUER_ORIGIN";
@@ -248,3 +254,5 @@ export function isAuthenticIssuerReleaseOriginSet(v: unknown): v is IssuerReleas
 function constructSyntheticNormalForm(input: unknown): SyntheticIssuerReleaseInput | null { const parsed = parseSyntheticIssuerRelease(input); if (parsed) normalFormTrust.add(parsed); return parsed; }
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function checkFingerprintCollisionForTest(items: readonly Readonly<{ fingerprint: string; material: unknown }>[]): boolean { return fingerprintMaterialsConsistent(items); }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function compareFingerprintMaterialForTest(fingerprintA: string, materialA: unknown, fingerprintB: string, materialB: unknown): "DIFFERENT_FINGERPRINT" | "SAME_MATERIAL" | "FINGERPRINT_MATERIAL_CONFLICT" { return sameFingerprintMaterial(fingerprintA, materialA, fingerprintB, materialB); }

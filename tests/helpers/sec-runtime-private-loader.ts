@@ -11,13 +11,13 @@ export function secRuntimePrivateLoader():Plugin {
     },
     load(id) {
       if(id==="\0sec-runtime-private-constructor")return 'export { createSecRuntimeBatchForTest as createSecRuntimeBatch } from "@/domain/intelligence/sec-edgar-event-source-provenance-runtime";';
-      if(id==="\0issuer-release-private-normal-form")return 'export { constructSyntheticNormalFormForTest as constructSyntheticNormalForm, checkFingerprintCollisionForTest as checkFingerprintCollision } from "@/domain/intelligence/event-intelligence-issuer-attributed-release-source-qualification";';
+      if(id==="\0issuer-release-private-normal-form")return 'export { constructSyntheticNormalFormForTest as constructSyntheticNormalForm, checkFingerprintCollisionForTest as checkFingerprintCollision, compareFingerprintMaterialForTest as compareFingerprintMaterial } from "@/domain/intelligence/event-intelligence-issuer-attributed-release-source-qualification";';
     },
     transform(code,id) {
       if(id.replaceAll("\\","/").endsWith("/src/domain/intelligence/sec-edgar-event-source-provenance-runtime.ts"))
         return `${code}\nexport { constructSecRuntimeBatch as createSecRuntimeBatchForTest };\n`;
       if(id.replaceAll("\\","/").endsWith("/src/domain/intelligence/event-intelligence-issuer-attributed-release-source-qualification.ts"))
-        return `${code}\nexport { constructSyntheticNormalForm as constructSyntheticNormalFormForTest, checkFingerprintCollisionForTest };\n`;
+        return `${code}\nexport { constructSyntheticNormalForm as constructSyntheticNormalFormForTest, checkFingerprintCollisionForTest, compareFingerprintMaterialForTest };\n`;
     },
   };
 }
