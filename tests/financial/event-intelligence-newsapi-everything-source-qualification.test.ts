@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
-  NEWSAPI_EVERYTHING_PROFILE, NEWSAPI_QUALIFICATION_BLOCKERS, NEWSAPI_QUERY_PROFILES,
+  NEWSAPI_ALLOWED_RESPONSE_FIELDS, NEWSAPI_EVERYTHING_PROFILE, NEWSAPI_QUALIFICATION_BLOCKERS, NEWSAPI_QUERY_PROFILES,
   NEWSAPI_PROVIDER_ID, buildNewsApiEverythingQuery, getSyntheticNewsApiProjectionQualification, isAuthenticNewsApiQualification,
   newsApiQueryProfileFingerprint, newsApiRequestFingerprint, parseNewsApiQualification,
   parseNewsApiSyntheticResponse, projectNewsApiEverythingDiscovery, validateNewsApiEverythingQuery,
@@ -41,6 +41,7 @@ describe("NewsAPI Everything qualification and request profiles", () => {
 
   it("keeps qualification partial, immutable, fingerprinted and untrusted after parsing/copying", () => {
     expect(qualification.status).toBe("PARTIAL_DISCOVERY_ONLY");
+    expect(qualification.allowedResponseFields).toEqual(NEWSAPI_ALLOWED_RESPONSE_FIELDS);
     expect(qualification.credentialReference).toBeNull();
     expect(NEWSAPI_QUALIFICATION_BLOCKERS).toContain("THIRD_PARTY_ARTICLE_CONTENT_RIGHTS_UNRESOLVED");
     expect(isAuthenticNewsApiQualification(qualification)).toBe(true);
@@ -48,14 +49,17 @@ describe("NewsAPI Everything qualification and request profiles", () => {
     const parsed = parseNewsApiQualification(qualification);
     expect(parsed.status).toBe("VALID");
     if (parsed.status === "VALID") expect(isAuthenticNewsApiQualification(parsed.qualification)).toBe(false);
+    const laterReceipt = { ...qualification, recordedAt: "2026-10-03T08:31:00.000Z" };
+    expect(parseNewsApiQualification(laterReceipt)).toMatchObject({ status: "VALID", qualification: { fingerprint: qualification.fingerprint, recordedAt: "2026-10-03T08:31:00.000Z" } });
     for (const copy of [{ ...qualification }, structuredClone(qualification), JSON.parse(JSON.stringify(qualification)), { fingerprint: qualification.fingerprint }]) expect(isAuthenticNewsApiQualification(copy)).toBe(false);
   });
 
-  it.each(["status upgrade", "credential ref", "quota change", "blocker removal", "unknown field", "coercion hook", "proxy", "accessor", "symbol", "inherited", "sparse approvals"]) ("fails closed on qualification mutation or unsafe shape: %s", mode => {
+  it.each(["status upgrade", "credential ref", "quota change", "response field change", "blocker removal", "unknown field", "coercion hook", "proxy", "accessor", "symbol", "inherited", "sparse approvals"]) ("fails closed on qualification mutation or unsafe shape: %s", mode => {
     const copy = structuredClone(qualification) as Record<PropertyKey, unknown>; let effects = 0; let input: unknown = copy;
     if (mode === "status upgrade") input = { ...copy, status: "QUALIFIED" };
     if (mode === "credential ref") input = { ...copy, credentialReference: "SENTINEL_SECRET" };
     if (mode === "quota change") input = { ...copy, maxRequests: 99 };
+    if (mode === "response field change") input = { ...copy, allowedResponseFields: [...NEWSAPI_ALLOWED_RESPONSE_FIELDS].reverse() };
     if (mode === "blocker removal") input = { ...copy, blockers: [] };
     if (mode === "unknown field") input = { ...copy, extra: true };
     if (mode === "coercion hook") input = { ...copy, recordedAt: { [Symbol.toPrimitive]: () => { effects++; return "2026-10-03T08:30:00.000Z"; } } };
@@ -93,6 +97,29 @@ describe("synthetic response normalization and projection", () => {
         expect(updated.candidates[0]?.categoryHint).toBe("CORPORATE_CRYPTO_PURCHASE_INTENT");
       }
     }
+  });
+
+  it("collapses exact duplicate material only, preserving distinct variants", () => {
+    const value = raw() as Record<string, unknown>, article = (value.articles as Array<Record<string, unknown>>)[0]!;
+    const duplicate = trustedResponse({ ...value, articles: [article, { ...article }] });
+    const result = projection(duplicate);
+    if (result.status !== "PROJECTED") throw new Error("synthetic projection unexpectedly blocked");
+    expect(result.candidates).toHaveLength(1);
+  });
+
+  it.each(["title", "description", "content", "publisher", "author", "publishedAt", "URL"] as const)("changes local article identity when %s material changes", field => {
+    const value = raw() as Record<string, unknown>, original = (value.articles as Array<Record<string, unknown>>)[0]!;
+    const changed = { ...original };
+    if (field === "title") changed.title = "Distinct updated treasury announcement";
+    if (field === "description") changed.description = "A materially revised bounded description.";
+    if (field === "content") changed.content = "Different truncated content material.";
+    if (field === "publisher") changed.sourceName = "Different provider source label";
+    if (field === "author") changed.author = "Different unverified author";
+    if (field === "publishedAt") changed.publishedAt = "2026-10-02T11:15:00.000Z";
+    if (field === "URL") changed.articleUrl = "https://publisher.example/news/alternate-path";
+    const first = projection(trustedResponse(value)), next = projection(trustedResponse({ ...value, articles: [changed] }));
+    if (first.status !== "PROJECTED" || next.status !== "PROJECTED") throw new Error("synthetic projection unexpectedly blocked");
+    expect(next.candidates[0]?.sourceMaterialFingerprint).not.toBe(first.candidates[0]?.sourceMaterialFingerprint);
   });
 
   it("F/I: source labels and ambiguous issuer/ticker mentions do not create independent origins or mapping", () => {

@@ -12,6 +12,11 @@ export const NEWSAPI_QUERY_PROFILES = Object.freeze([
   Object.freeze({ id: "strategic-partnership-v1", category: "STRATEGIC_PARTNERSHIP", query: '(crypto OR cryptocurrency OR blockchain OR "digital assets") AND (partnership OR partner OR agreement)' }),
   Object.freeze({ id: "cancellation-correction-retraction-v1", category: "CORRECTION_OR_RETRACTION", query: '("crypto deal" OR "bitcoin purchase" OR "digital asset") AND (cancelled OR canceled OR terminated OR correction OR retraction)' }),
 ] as const);
+export const NEWSAPI_ALLOWED_RESPONSE_FIELDS = Object.freeze([
+  "status", "code", "message", "totalResults", "articles[].source.id", "articles[].source.name",
+  "articles[].author", "articles[].title", "articles[].description", "articles[].url",
+  "articles[].urlToImage", "articles[].publishedAt", "articles[].content",
+] as const);
 export const NEWSAPI_EVERYTHING_PROFILE = Object.freeze({
   id: "newsapi-everything-v2-bounded-discovery-v1", providerId: NEWSAPI_PROVIDER_ID, datasetId: "newsapi-everything", datasetVersion: "v2",
   protocol: "https", hostname: "newsapi.org", path: "/v2/everything", method: "GET",
@@ -37,7 +42,7 @@ type QualificationMaterial = Readonly<{
   datasetId: "newsapi-everything"; datasetVersion: "v2"; endpointProfileId: typeof NEWSAPI_EVERYTHING_PROFILE.id; endpointProfileFingerprint: string;
   protocol: "https"; hostname: "newsapi.org"; path: "/v2/everything"; method: "GET";
   authenticationTransport: "X-Api-Key"; credentialReferenceFormat: "vault://newsapi/<opaque-reference>"; credentialReference: null;
-  queryKeys: readonly string[]; canonicalQueryOrder: readonly string[]; searchFields: "title,description"; languageProfile: "en";
+  queryKeys: readonly string[]; canonicalQueryOrder: readonly string[]; allowedResponseFields: readonly string[]; searchFields: "title,description"; languageProfile: "en";
   queryProfileFingerprints: readonly string[]; maxQueryLength: 500; maxResponseBytes: 524288; maxRecordCount: 25; pageSize: 25; maxPages: 1;
   maxWindowDays: 7; maxRequests: 6; maxRequestsPerMinute: 6; maxRequestsPerProfile: 1; timeoutMs: 5000; retries: 0;
   pagination: "SINGLE_PAGE_ONLY"; datePolicy: "EXPLICIT_UTC_CALENDAR_DAYS_MAX_7"; sortPolicy: "publishedAt";
@@ -143,7 +148,7 @@ function articleUrl(value: unknown): string {
   return s;
 }
 const qKeys = NEWSAPI_EVERYTHING_PROFILE.queryKeys as readonly string[];
-const materialKeys = ["contractVersion", "status", "providerId", "datasetId", "datasetVersion", "endpointProfileId", "endpointProfileFingerprint", "protocol", "hostname", "path", "method", "authenticationTransport", "credentialReferenceFormat", "credentialReference", "queryKeys", "canonicalQueryOrder", "searchFields", "languageProfile", "queryProfileFingerprints", "maxQueryLength", "maxResponseBytes", "maxRecordCount", "pageSize", "maxPages", "maxWindowDays", "maxRequests", "maxRequestsPerMinute", "maxRequestsPerProfile", "timeoutMs", "retries", "pagination", "datePolicy", "sortPolicy", "rateQuota", "history", "sourceIdentitySemantics", "timestampSemantics", "truncationSemantics", "nullMissingPolicy", "duplicatePolicy", "correctionRetraction", "completeness", "freshness", "usageApprovals", "rawArticleStorage", "metadataStorage", "normalizedStorage", "retention", "redistribution", "commercialUse", "blockers", "evidenceReferences", "reviewedAt", "effectiveFrom", "expiresAt", "recordedAt"] as const;
+const materialKeys = ["contractVersion", "status", "providerId", "datasetId", "datasetVersion", "endpointProfileId", "endpointProfileFingerprint", "protocol", "hostname", "path", "method", "authenticationTransport", "credentialReferenceFormat", "credentialReference", "queryKeys", "canonicalQueryOrder", "allowedResponseFields", "searchFields", "languageProfile", "queryProfileFingerprints", "maxQueryLength", "maxResponseBytes", "maxRecordCount", "pageSize", "maxPages", "maxWindowDays", "maxRequests", "maxRequestsPerMinute", "maxRequestsPerProfile", "timeoutMs", "retries", "pagination", "datePolicy", "sortPolicy", "rateQuota", "history", "sourceIdentitySemantics", "timestampSemantics", "truncationSemantics", "nullMissingPolicy", "duplicatePolicy", "correctionRetraction", "completeness", "freshness", "usageApprovals", "rawArticleStorage", "metadataStorage", "normalizedStorage", "retention", "redistribution", "commercialUse", "blockers", "evidenceReferences", "reviewedAt", "effectiveFrom", "expiresAt", "recordedAt"] as const;
 const USAGES = Object.freeze(["RAW_ACQUISITION", "RAW_ARTIFACT_STORAGE", "NORMALIZED_CLAIM_STORAGE", "AUTHORITY_ISSUANCE", "REDISTRIBUTION", "COMMERCIAL_USE", "SIGNAL_RESEARCH"] as const);
 const blockers = NEWSAPI_QUALIFICATION_BLOCKERS;
 const CHECKED_AT = "2026-10-03T08:30:00.000Z";
@@ -159,7 +164,7 @@ const MATERIAL: QualificationMaterial = freeze({
   contractVersion: NEWSAPI_QUALIFICATION_VERSION, status: "PARTIAL_DISCOVERY_ONLY", providerId: NEWSAPI_PROVIDER_ID,
   datasetId: "newsapi-everything", datasetVersion: "v2", endpointProfileId: NEWSAPI_EVERYTHING_PROFILE.id, endpointProfileFingerprint: endpointFingerprint,
   protocol: "https", hostname: "newsapi.org", path: "/v2/everything", method: "GET", authenticationTransport: "X-Api-Key", credentialReferenceFormat: "vault://newsapi/<opaque-reference>", credentialReference: null,
-  queryKeys: [...qKeys], canonicalQueryOrder: [...qKeys], searchFields: "title,description", languageProfile: "en",
+  queryKeys: [...qKeys], canonicalQueryOrder: [...qKeys], allowedResponseFields: [...NEWSAPI_ALLOWED_RESPONSE_FIELDS], searchFields: "title,description", languageProfile: "en",
   queryProfileFingerprints: NEWSAPI_QUERY_PROFILES.map(p => hash({ version: "newsapi-everything-query-profile/v1", ...p, searchIn: "title,description", language: "en" })),
   maxQueryLength: 500, maxResponseBytes: 524288, maxRecordCount: 25, pageSize: 25, maxPages: 1, maxWindowDays: 7,
   maxRequests: 6, maxRequestsPerMinute: 6, maxRequestsPerProfile: 1, timeoutMs: 5000, retries: 0,
@@ -250,11 +255,15 @@ function normalizeResponse(input: unknown, evaluationAsOf: unknown): NewsApiSynt
         contentFingerprint: content === null ? null : createHash("sha256").update(content, "utf8").digest("hex"), articleUrl: article, imageUrl: image, publishedAt });
     });
     if (articles.length > 25 || articles.length > (v.totalResults as number)) return null;
-    const unique = new Map<string, typeof articles[number]>();
-    for (const a of articles) unique.set(hash(a), a);
+    const unique = new Map<string, Readonly<{ canonical: string; article: typeof articles[number] }>>();
+    for (const a of articles) {
+      const canonical = stable(a), fingerprint = hash(a), prior = unique.get(fingerprint);
+      if (prior && prior.canonical !== canonical) return null;
+      if (!prior) unique.set(fingerprint, { canonical, article: a });
+    }
     return freeze({ normalForm: "newsapi-everything-normalized-fixture/v1", providerId: NEWSAPI_PROVIDER_ID, datasetVersion: "v2", queryProfileId: profileId,
       queryProfileFingerprint: String(v.queryProfileFingerprint), queryFingerprint: expected, from, to, receivedAt, rawPayloadFingerprint,
-      totalResults: v.totalResults as number, articles: [...unique.entries()].sort((a, b) => compare(a[0], b[0])).map(x => x[1]) });
+      totalResults: v.totalResults as number, articles: [...unique.entries()].sort((a, b) => compare(a[0], b[0])).map(x => x[1].article) });
   } catch { return null; }
 }
 export function parseNewsApiEverythingSourceQualification(input: unknown): QualificationParse { return parseNewsApiQualification(input); }
