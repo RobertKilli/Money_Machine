@@ -59,7 +59,7 @@ function QueueItem({ item }: { item: EvidenceReviewQueueViewModelItem }) {
         <p className="break-words text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{item.typeLabel}</p>
         <h3 id={`queue-item-${item.publicKey}`} className="mt-2 break-words text-lg font-semibold">{item.title}</h3>
       </div>
-      <div className="flex max-w-full flex-wrap gap-2" aria-label="Item status">
+      <div className="flex max-w-full flex-wrap gap-2" role="group" aria-label="Item status and operational priority">
         <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-semibold">{item.statusLabel}</span>
         <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs">{item.priorityLabel}</span>
       </div>

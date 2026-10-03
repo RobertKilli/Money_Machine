@@ -66,6 +66,7 @@ describe("Evidence review queue UI boundary", () => {
     expect(html).toContain("Historical snapshot");
     expect(html).toContain("No new queue action");
     expect(html).toContain("Evaluated as of (UTC)");
+    expect(html).toContain('role="group" aria-label="Item status and operational priority"');
     expect(html).not.toContain("dangerouslySetInnerHTML");
     expect(html).not.toMatch(/candidate:ui-[0-9]|itemId|setFingerprint|routingResultId/);
   });
