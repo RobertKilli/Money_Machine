@@ -49,22 +49,22 @@ describe("evidence review queue read-model decision", () => {
   });
 
   it("rejects unknown strategy, status, extra/missing fields and duplicate references", () => {
-    const value = decision() as unknown as Record<string, unknown>;
+    const value = decision();
     expect(parseEvidenceReviewQueueReadModelDecision({ ...value, unexpected: true }).status).toBe("INVALID");
-    const missing = { ...value }; delete missing.selectedStrategy;
+    const missing: Record<string, unknown> = { ...value }; delete missing.selectedStrategy;
     expect(parseEvidenceReviewQueueReadModelDecision(missing).status).toBe("INVALID");
     expect(parseEvidenceReviewQueueReadModelDecision(reseal({ ...value, selectedStrategy: "RECOMPUTE_ON_EVERY_READ" })).status).toBe("INVALID");
     expect(parseEvidenceReviewQueueReadModelDecision(reseal({ ...value, status: "READY" })).status).toBe("INVALID");
     expect(parseEvidenceReviewQueueReadModelDecision(reseal({ ...value, blockers: ["CALLER_REMOVED_BLOCKERS"] })).status).toBe("INVALID");
-    const overlongAlternative = [...value.alternatives as Array<Record<string, unknown>>];
+    const overlongAlternative = [...value.alternatives as readonly Record<string, unknown>[]];
     overlongAlternative[0] = { ...overlongAlternative[0], rationale: "x".repeat(2049) };
     expect(parseEvidenceReviewQueueReadModelDecision({ ...value, alternatives: overlongAlternative }).status).toBe("INVALID");
-    const refs = [...value.references as Array<Record<string, unknown>>]; refs[1] = refs[0]!;
+    const refs = [...value.references as readonly Record<string, unknown>[]]; refs[1] = refs[0]!;
     expect(parseEvidenceReviewQueueReadModelDecision(reseal({ ...value, references: refs })).status).toBe("INVALID");
   });
 
   it("rejects inherited, accessor, symbol, sparse, non-plain and proxy inputs without executing caller code", () => {
-    const value = decision() as unknown as Record<string, unknown>;
+    const value = decision();
     let calls = 0;
     const getter = { ...value, get selectedStrategy() { calls++; return value.selectedStrategy; } };
     expect(parseEvidenceReviewQueueReadModelDecision(getter).status).toBe("INVALID");
@@ -81,11 +81,17 @@ describe("evidence review queue read-model decision", () => {
   });
 
   it("enforces canonical times, bounds and non-authoritative snapshot invariants", () => {
-    const value = decision() as unknown as Record<string, unknown>;
+    const value = decision();
     expect(parseEvidenceReviewQueueReadModelDecision({ ...value, recordedAt: "2026-10-03T10:00:00Z" }).status).toBe("INVALID");
     expect(parseEvidenceReviewQueueReadModelDecision({ ...value, blockers: Array(1000).fill("X") }).status).toBe("INVALID");
     expect(EVIDENCE_REVIEW_QUEUE_READ_MODEL_LIMITS.payloadBytes).toBe(1_048_576);
-    expect(value.snapshotPolicy).toMatchObject({ payloadEncoding: "EXACT_CANONICAL_UTF8_JSON_BYTES", replay: expect.stringContaining("EXACT_REREAD"), conflict: expect.stringContaining("ROLLS_BACK") });
+    expect(value.snapshotPolicy).toMatchObject({ payloadEncoding: "UTF8_NO_BOM_SINGLE_JSON_VALUE_NO_TRAILING_NEWLINE", digestAlgorithm: "SHA-256", replay: expect.stringContaining("EXACT_REREAD"), conflict: expect.stringContaining("ROLLS_BACK") });
+    expect(value.snapshotPolicy.canonicalization).toContain("UTF-16 code-unit order");
+    expect(value.snapshotPolicy.readValidation).toContain("byte-for-byte equality");
+    expect(value.transactionPolicy.lockOrder).toContain("fixed family order");
+    expect(value.transactionPolicy.timeoutsCancellation).toContain("rolls back");
+    expect(value.accessPolicy.serviceRole).toContain("RLS alone does not protect");
+    expect(value.schemaCatalog.records[0]?.uniqueKeys).toEqual([["scope_identity", "snapshot_identity"]]);
     expect((value.snapshotPolicy as Record<string, unknown>).excludedFields).toContain("storedAt");
     expect(value.historyPolicy).toMatchObject({ appendOnly: true, payloadUpdate: "FORBIDDEN" });
   });
@@ -101,13 +107,25 @@ describe("evidence review queue read-model decision", () => {
 
   it("reconciles proposed parent keys with tracked applied migrations and exposes missing event parents", () => {
     const sec = readFileSync("supabase/migrations/20261002090638_sec_edgar_event_source_provenance.sql", "utf8").replace(/\s+/g, " ");
-    const m5 = readFileSync("supabase/migrations/20260916212845_m5_mapping_lineage.sql", "utf8").replace(/\s+/g, " ");
+    const m5Create = readFileSync("supabase/migrations/20260916212845_m5_mapping_lineage.sql", "utf8").replace(/\s+/g, " ");
+    const m5SourceLineage = readFileSync("supabase/migrations/20260918181115_m5_mapping_source_lineage.sql", "utf8").replace(/\s+/g, " ");
+    const m5RawLineage = readFileSync("supabase/migrations/20260918215043_m5_raw_source_lineage.sql", "utf8").replace(/\s+/g, " ");
+    const m5Assessment = readFileSync("supabase/migrations/20260920161300_m5_suspicious_assessment_authority.sql", "utf8").replace(/\s+/g, " ");
     const trackedMigrations = readdirSync("supabase/migrations").filter(name => name.endsWith(".sql")).map(name => readFileSync(`supabase/migrations/${name}`, "utf8")).join("\n");
     expect(sec).toContain("unique(lineage_id,fingerprint)");
     expect(sec).toContain("unique(artifact_id,fingerprint)");
-    expect(m5).toContain("unique (mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class)");
-    expect(m5).not.toContain("unique (mapping_revision_id, source_lineage_id,");
+    expect(m5Create).toContain("create table public.intelligence_asset_mapping_revisions");
+    expect(m5Create).toContain("mapping_revision_id text primary key");
+    expect(m5Create).toContain("unique (mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class)");
+    expect(m5SourceLineage).toContain("add column source_lineage_id text not null");
+    expect(m5SourceLineage).toContain("foreign key (source_lineage_id, provider_id, dataset_id, dataset_version)");
+    expect(m5RawLineage).toContain("drop constraint intelligence_asset_mapping_identity_key");
+    expect(m5RawLineage).toContain("unique (mapping_revision_id, source_lineage_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class)");
+    expect(m5Assessment).toContain("unique (mapping_revision_id, provider_id, dataset_id, dataset_version, canonical_asset_id, canonical_identifier, asset_class)");
+    expect(valueFromDecision().schemaCatalog.appliedParentKeys).toContainEqual(expect.objectContaining({ table: "intelligence_asset_mapping_revisions", columns: ["mapping_revision_id", "source_lineage_id", "provider_id", "dataset_id", "dataset_version", "canonical_asset_id", "canonical_identifier", "asset_class"] }));
     expect(trackedMigrations).not.toContain("event_intelligence_evidence_review_queue_snapshots");
+    expect(m5RawLineage).toContain("alter table public.intelligence_asset_mapping_revisions drop constraint intelligence_asset_mapping_identity_key");
+    expect(m5RawLineage).toContain("intelligence_asset_mapping_lineage_identity_key");
     const files = readFileSync("docs/SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md", "utf8");
     expect(files).toContain("issuer evidence");
     expect(valueFromDecision().schemaCatalog.nonexistentRequiredParents.join(" ")).toContain("event_claims_and_correction_lineages");
@@ -115,7 +133,8 @@ describe("evidence review queue read-model decision", () => {
 
   it("production config cannot be upgraded and keeps retention/deletion separate", () => {
     const config = getEvidenceReviewQueueReadModelProductionConfig();
-    expect(config).toMatchObject({ status: "BLOCKED", selectedStrategy: "IMMUTABLE_DERIVED_SNAPSHOT", selectedBackend: null, snapshotPersistence: "BLOCKED", currentSelection: "BLOCKED", readPath: "BLOCKED", retention: "NOT_APPROVED", deletion: "NOT_APPROVED", authorityUpgrade: "UNSUPPORTED", signal: "BLOCKED", trading: "BLOCKED" });
+    expect(config).toMatchObject({ status: "BLOCKED", selectedStrategy: null, selectedBackend: null, snapshotPersistence: "BLOCKED", currentSelection: "BLOCKED", readPath: "BLOCKED", retention: "NOT_APPROVED", deletion: "NOT_APPROVED", authorityUpgrade: "UNSUPPORTED", signal: "BLOCKED", trading: "BLOCKED" });
+    expect(parseEvidenceReviewQueueReadModelProductionConfig({ ...config, selectedStrategy: "IMMUTABLE_DERIVED_SNAPSHOT" })).toBeNull();
     expect(Object.values(config.approvals).every(value => value === "NOT_APPROVED")).toBe(true);
     expect(parseEvidenceReviewQueueReadModelProductionConfig({ ...config, status: "READY" })).toBeNull();
     expect(parseEvidenceReviewQueueReadModelProductionConfig({ ...config, credentials: ["x"] })).toBeNull();

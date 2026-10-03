@@ -16,12 +16,12 @@ export type EvidenceReviewQueueReadModelDecision = Readonly<{
   alternatives: readonly Readonly<{ strategy: string; disposition: string; rationale: string }>[];
   materialClasses: readonly Readonly<{ material: string; classification: string; persistence: string }>[];
   authorityBoundary: Readonly<{ sourceArtifacts: string; mappingAuthorities: string; routingResults: string; queueItemsAndSets: string; viewModel: string; persistedSnapshot: string; currentSelection: string; humanReviewOutcome: string; prohibitions: readonly string[] }>;
-  snapshotPolicy: Readonly<{ identityFields: readonly string[]; excludedFields: readonly string[]; payloadEncoding: string; payloadFormat: string; maxPayloadBytes: number; replay: string; conflict: string; storageRowIdentity: string; provenanceManifest: string }>;
+  snapshotPolicy: Readonly<{ identityFields: readonly string[]; excludedFields: readonly string[]; payloadEncoding: string; canonicalization: string; digestAlgorithm: "SHA-256"; readValidation: string; payloadFormat: string; maxPayloadBytes: number; replay: string; conflict: string; storageRowIdentity: string; provenanceManifest: string }>;
   historyPolicy: Readonly<{ appendOnly: true; payloadUpdate: "FORBIDDEN"; correctionRetraction: string; historicalCutoff: string; supersession: string; policyUpgrade: string; currentSelection: string }>;
   schemaCatalog: Readonly<{ records: readonly Readonly<{ name: string; purpose: string; primaryIdentity: readonly string[]; uniqueKeys: readonly (readonly string[])[]; foreignKeys: readonly Readonly<{ name: string; childColumns: readonly string[]; parentTable: string; parentColumns: readonly string[]; status: string }>[]; indexes: readonly (readonly string[])[]; nullableInvariants: readonly string[]; rls: string; privileges: string; immutableTrigger: string; blockers: readonly string[] }>[]; omittedRecords: readonly Readonly<{ name: string; disposition: string }>[]; appliedParentKeys: readonly Readonly<{ table: string; columns: readonly string[]; evidencePath: string; scope: string }>[]; nonexistentRequiredParents: readonly string[] }>;
-  transactionPolicy: Readonly<{ isolation: string; insert: string; reread: string; identicalWriter: string; conflictingWriter: string; rollback: string; retries: string; seal: string; currentSelectionRace: string; authorityWrites: "FORBIDDEN" }>;
+  transactionPolicy: Readonly<{ isolation: string; lockOrder: string; insert: string; reread: string; identicalWriter: string; conflictingWriter: string; rollback: string; timeoutsCancellation: string; retries: string; seal: string; currentSelectionRace: string; authorityWrites: "FORBIDDEN" }>;
   readPolicy: Readonly<{ scope: string; validation: readonly string[]; failure: string; uiOutput: string; fixturesFallback: "FORBIDDEN" }>;
-  accessPolicy: Readonly<{ serverOnly: true; rls: string; clientPolicies: string; clientPrivileges: string; repositoryRole: string; databaseFunctions: string; logs: string }>;
+  accessPolicy: Readonly<{ serverOnly: true; rls: string; clientPolicies: string; clientPrivileges: string; serviceRole: string; repositoryRole: string; databaseFunctions: string; logs: string }>;
   rightsAndRetention: Readonly<{ sourceContent: string; sourceMetadata: string; derivedCandidates: string; queueSnapshots: string; uiPayload: string; logs: string; backupsWalPitr: string; deletion: string; redistribution: string; commercialUse: string; requiredApprovals: readonly string[] }>;
   blockers: readonly string[];
   references: readonly Readonly<{ kind: string; path: string; claim: string }>[];
@@ -79,12 +79,15 @@ const DECISION_BODY = Object.freeze({
   snapshotPolicy: Object.freeze({
     identityFields: Object.freeze(["snapshotContractVersion", "compositionContractVersion", "routingDecisionVersionAndFingerprint", "queueContractVersion", "viewModelContractVersion", "evaluationAsOf", "canonicalCandidateMemberSetIdentity", "correctionRetractionContext", "jurisdictionAndScope", "degradationAndBlockerState", "canonicalProvenanceManifestFingerprint", "safePayloadFingerprint"]),
     excludedFields: Object.freeze(["storedAt", "databaseTransactionTime", "readAt", "recordedAt", "currentSelection", "receiptAttemptId", "queueProjectionTime"]),
-    payloadEncoding: "EXACT_CANONICAL_UTF8_JSON_BYTES",
+    payloadEncoding: "UTF8_NO_BOM_SINGLE_JSON_VALUE_NO_TRAILING_NEWLINE",
+    canonicalization: "event-review-view-model-canonical-json/v1: preserve array order; sort object keys by UTF-16 code-unit order; JSON-escape strings without Unicode normalization or newline conversion; allow only null, booleans, strings, arrays, plain objects, and finite safe integers; reject duplicate keys and unsupported values.",
+    digestAlgorithm: "SHA-256" as const,
+    readValidation: "Enforce byte cap before decode; fatal UTF-8 decode; exact schema/version parse; recompute SHA-256 over original bytes; canonicalize parsed value and require byte-for-byte equality; compare exact metadata, manifest, payload, and identity on authoritative reread.",
     payloadFormat: "PARENT_VIEW_MODEL_CONTRACT_EXACT_SCHEMA_NO_DOMAIN_OBJECTS",
     maxPayloadBytes: EVIDENCE_REVIEW_QUEUE_READ_MODEL_LIMITS.payloadBytes,
     replay: "SAME_SCOPE_AND_SNAPSHOT_IDENTITY_INSERT_DO_NOTHING_THEN_EXACT_REREAD; IDENTICAL_CANONICAL_MATERIAL_CONVERGES",
     conflict: "SAME_SCOPE_AND_SNAPSHOT_IDENTITY_WITH_DIFFERENT_CANONICAL_MANIFEST_OR_PAYLOAD_IS_A_CONFLICT_AND_ROLLS_BACK",
-    storageRowIdentity: "SCOPE_KEY_PLUS_DOMAIN_SEPARATED_SNAPSHOT_IDENTITY; scope key is unresolved and blocks schema implementation",
+    storageRowIdentity: "SCOPE_IDENTITY_PLUS_DOMAIN_SEPARATED_SNAPSHOT_IDENTITY; scope identity is an unresolved logical placeholder, not an existing column or approved parent key",
     provenanceManifest: "CANONICAL_TYPED_FAMILY_SPECIFIC_REFERENCE_SET; references must resolve to their own approved parent authority; generic free-text referenceId is forbidden",
   }),
   historyPolicy: Object.freeze({
@@ -98,7 +101,7 @@ const DECISION_BODY = Object.freeze({
   }),
   schemaCatalog: Object.freeze({
     records: Object.freeze([
-      Object.freeze({ name: "event_intelligence_evidence_review_queue_snapshots", purpose: "One complete immutable canonical safe-view-model snapshot plus its typed provenance manifest and exact contract/cutoff pins.", primaryIdentity: Object.freeze(["snapshot_id"]), uniqueKeys: Object.freeze([Object.freeze(["scope_id", "snapshot_identity"]), Object.freeze(["snapshot_id", "snapshot_fingerprint"])]), foreignKeys: Object.freeze([]), indexes: Object.freeze([Object.freeze(["scope_id", "evaluation_as_of", "snapshot_id"])]), nullableInvariants: Object.freeze(["No optional identity/scope/provenance field may be partially null; version/fingerprint group nullability is all-or-none."]), rls: "ENABLE_AND_FORCE_RLS; no client policies", privileges: "REVOKE ALL FROM PUBLIC, anon, authenticated; future dedicated server repository grant only after separate approval", immutableTrigger: "Reuse verified immutable mutation-rejection trigger only after actual function semantics are reviewed; add insert-only enforcement; no UPDATE/DELETE", blockers: Object.freeze(["NO_APPROVED_SCOPE_IDENTITY_OR_EXISTING_PARENT_KEY", "NO_COMPLETE_SOURCE_FAMILY_PROVENANCE_PARENT_CATALOG", "SNAPSHOT_SCHEMA_NOT_APPROVED"]) }),
+      Object.freeze({ name: "event_intelligence_evidence_review_queue_snapshots", purpose: "One complete immutable canonical safe-view-model snapshot plus its typed provenance manifest and exact contract/cutoff pins.", primaryIdentity: Object.freeze(["snapshot_id"]), uniqueKeys: Object.freeze([Object.freeze(["scope_identity", "snapshot_identity"])]), foreignKeys: Object.freeze([]), indexes: Object.freeze([Object.freeze(["scope_identity", "evaluation_as_of", "snapshot_id"])]), nullableInvariants: Object.freeze(["No optional identity/scope/provenance field may be partially null; version/fingerprint group nullability is all-or-none."]), rls: "ENABLE_AND_FORCE_RLS; no client policies", privileges: "REVOKE ALL FROM PUBLIC, anon, authenticated; future dedicated server repository grant only after separate approval", immutableTrigger: "Reuse verified immutable mutation-rejection trigger only after actual function semantics are reviewed; add insert-only enforcement; no UPDATE/DELETE", blockers: Object.freeze(["NO_APPROVED_SCOPE_IDENTITY_OR_EXISTING_PARENT_KEY", "NO_COMPLETE_SOURCE_FAMILY_PROVENANCE_PARENT_CATALOG", "SNAPSHOT_SCHEMA_NOT_APPROVED"]) }),
     ]),
     omittedRecords: Object.freeze([
       Object.freeze({ name: "snapshot_member_table", disposition: "NOT_SELECTED_IN_V1: the bounded complete canonical payload and manifest are one parent row; no separately sealed member set is needed. If later normalized, require ordered child members, exact member count/digest, parent-before-member writes, child FK indexes, and deferred commit-time sealing." }),
@@ -108,17 +111,24 @@ const DECISION_BODY = Object.freeze({
     appliedParentKeys: Object.freeze([
       Object.freeze({ table: "sec_event_source_lineages", columns: Object.freeze(["lineage_id", "fingerprint"]), evidencePath: "supabase/migrations/20261002090638_sec_edgar_event_source_provenance.sql", scope: "SEC event-source lineage only; not a generic issuer/news provenance parent." }),
       Object.freeze({ table: "sec_event_document_artifacts", columns: Object.freeze(["artifact_id", "fingerprint"]), evidencePath: "supabase/migrations/20261002090638_sec_edgar_event_source_provenance.sql", scope: "SEC document artifact only; not a generic source or issuer claim." }),
-      Object.freeze({ table: "intelligence_asset_mapping_revisions", columns: Object.freeze(["mapping_revision_id", "provider_id", "dataset_id", "dataset_version", "canonical_asset_id", "canonical_identifier", "asset_class"]), evidencePath: "supabase/migrations/20260916212845_m5_mapping_lineage.sql", scope: "Exact applied M5 mapping identity key; source_record_ids is JSON metadata, not a structured event/issuer provenance FK." }),
+      Object.freeze({ table: "intelligence_asset_mapping_revisions", columns: Object.freeze(["mapping_revision_id", "source_lineage_id", "provider_id", "dataset_id", "dataset_version", "canonical_asset_id", "canonical_identifier", "asset_class"]), evidencePath: "supabase/migrations/20260918215043_m5_raw_source_lineage.sql", scope: "Final applied M5 lineage-scoped mapping identity UNIQUE; the initial seven-column identity key was dropped. This remains asset-mapping provenance, not issuer/event-claim authority." }),
+      Object.freeze({ table: "intelligence_asset_mapping_revisions", columns: Object.freeze(["mapping_revision_id", "provider_id", "dataset_id", "dataset_version", "canonical_asset_id", "canonical_identifier", "asset_class"]), evidencePath: "supabase/migrations/20260920161300_m5_suspicious_assessment_authority.sql", scope: "Additional applied UNIQUE key for assessment binding; distinct from and compatible with the final lineage-scoped key." }),
+      Object.freeze({ table: "intelligence_source_lineages", columns: Object.freeze(["source_lineage_id", "provider_id", "dataset_id", "dataset_version"]), evidencePath: "supabase/migrations/20260917012625_m5_source_lineage.sql", scope: "Applied M5 source-lineage parent key referenced by the mapping table; not an issuer-release or generic event-claim parent." }),
+      Object.freeze({ table: "intelligence_datasets", columns: Object.freeze(["dataset_id", "provider_id", "dataset_version"]), evidencePath: "supabase/migrations/20260916212845_m5_mapping_lineage.sql", scope: "Applied dataset-owner parent key referenced by the mapping table." }),
+      Object.freeze({ table: "intelligence_providers", columns: Object.freeze(["provider_id"]), evidencePath: "supabase/migrations/20260916212845_m5_mapping_lineage.sql", scope: "Applied provider primary key referenced by the mapping table." }),
+      Object.freeze({ table: "intelligence_provider_asset_identity_assertions", columns: Object.freeze(["provider_asset_identity_assertion_id", "provider_id", "dataset_id", "dataset_version", "provider_source_namespace", "provider_asset_id"]), evidencePath: "supabase/migrations/20260918234933_m5_provider_asset_identity.sql", scope: "Applied provider-asset identity assertion parent key referenced by M5 mapping; not Money Machine issuer or canonical asset mapping authority." }),
     ]),
     nonexistentRequiredParents: Object.freeze(["event_issuer_mapping_authorities (only a design descriptor; not in tracked applied migrations)", "event_claims_and_correction_lineages (not in tracked applied migrations)", "issuer-release-source artifact authority (not in tracked applied migrations)", "approved event-intelligence tenant/scope parent key (not established by this read-model contract)"]),
   }),
   transactionPolicy: Object.freeze({
     isolation: "READ_COMMITTED_WITH_EXACT_IMMUTABLE_IDENTITY_AND_EXACT_REREAD; verify on approved PostgreSQL runtime before implementation",
+    lockOrder: "V1 has one snapshot row and no member locks. Resolve immutable typed provenance parents in fixed family order, then binary canonical identity order; write none of those parent families. Any mutable parent/member/current-pointer design needs a separate concurrency decision.",
     insert: "Insert snapshot parent first with exact immutable identity; ON CONFLICT DO NOTHING only on the exact selected identity constraint.",
     reread: "Reread from a new statement snapshot, compare exact metadata, manifest bytes, payload length, payload digest, and canonical bytes before returning.",
     identicalWriter: "Concurrent identical writers converge only after exact reread proves byte/material equality.",
     conflictingWriter: "Same identity with any differing canonical material aborts; never UPDATE/upsert payload.",
     rollback: "Any insert/reread/schema/seal failure rolls back the entire write; no partial snapshot is visible.",
+    timeoutsCancellation: "Bound statement and transaction duration; cancellation or timeout rolls back. If commit outcome is unknown, do not infer failure or retry internally; resolve with an exact identity lookup in a later explicit call.",
     retries: "No internal automatic retry; timeout/deadlock/serialization failure returns sanitized unknown outcome and a later explicit retry resolves by exact lookup.",
     seal: "Single-row payload and manifest are complete before insert; if members are normalized later, deferred commit-time exact count/contiguous ordinal/digest sealing is mandatory.",
     currentSelectionRace: "No write-side current pointer in v1; read selection is a deterministic query over immutable matching snapshots.",
@@ -136,6 +146,7 @@ const DECISION_BODY = Object.freeze({
     rls: "RLS enabled and forced on every future exposed-schema snapshot table; private schema is preferred if application access supports it; no policy is created until exact actor/scope model is approved.",
     clientPolicies: "NONE; no anon/authenticated policies or grants.",
     clientPrivileges: "REVOKE ALL from PUBLIC, anon, authenticated; no client or service-role credential in browser.",
+    serviceRole: "RLS alone does not protect against a BYPASSRLS/service-role credential; no such credential, browser path, grant, or bypass assumption is approved.",
     repositoryRole: "No role/grant selected; a narrowly scoped server-only role requires separate least-privilege and RLS review. No bypass-RLS/service-role assumption is approved.",
     databaseFunctions: "No function required for v1 single-row inserts; any future function SECURITY INVOKER, fixed search_path, EXECUTE revoked by default; no SECURITY DEFINER.",
     logs: "Sanitized categorical errors only; no payload, source text, identifiers, fingerprints, credentials, or raw DB errors.",
@@ -162,7 +173,8 @@ const DECISION_BODY = Object.freeze({
     Object.freeze({ kind: "INTERNAL_DECISION", path: "docs/SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md", claim: "SEC source provenance is distinct from M5 ingestion, issuer evidence, and asset mapping provenance." }),
     Object.freeze({ kind: "INTERNAL_DECISION", path: "docs/SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md", claim: "Byte storage and retention approval remain separate and blocked." }),
     Object.freeze({ kind: "INTERNAL_APPLIED_MIGRATION", path: "supabase/migrations/20261002090638_sec_edgar_event_source_provenance.sql", claim: "Applied SEC-only source lineage and document artifact keys; not generic event claims." }),
-    Object.freeze({ kind: "INTERNAL_APPLIED_MIGRATION", path: "supabase/migrations/20260916212845_m5_mapping_lineage.sql", claim: "Applied M5 asset mapping revision composite identity key; no source_lineage_id column on that table." }),
+    Object.freeze({ kind: "INTERNAL_APPLIED_MIGRATION", path: "supabase/migrations/20260918215043_m5_raw_source_lineage.sql", claim: "Later applied M5 migration adds source_lineage_id and replaces the original mapping identity key with the final eight-column lineage identity key." }),
+    Object.freeze({ kind: "INTERNAL_APPLIED_MIGRATION", path: "supabase/migrations/20260920161300_m5_suspicious_assessment_authority.sql", claim: "Adds a separate seven-column mapping assessment UNIQUE key; it does not remove the final lineage identity key." }),
   ]),
   reviewedAt: "2026-10-03T00:00:00.000Z",
 });
@@ -174,7 +186,7 @@ const INVALID_DECISION: DecisionParse = Object.freeze({ status: "INVALID", code:
 const PRODUCTION_CONFIG = Object.freeze({
   contractVersion: EVIDENCE_REVIEW_QUEUE_READ_MODEL_PRODUCTION_CONFIG_VERSION,
   status: "BLOCKED" as const,
-  selectedStrategy: "IMMUTABLE_DERIVED_SNAPSHOT" as const,
+  selectedStrategy: null,
   selectedBackend: null,
   snapshotPersistence: "BLOCKED" as const,
   currentSelection: "BLOCKED" as const,
@@ -266,7 +278,7 @@ export function parseEvidenceReviewQueueReadModelProductionConfig(input: unknown
   try {
     if (!safeShape(input, PRODUCTION_CONFIG)) return null;
     const value = input as Record<string, unknown>;
-    if (value.contractVersion !== EVIDENCE_REVIEW_QUEUE_READ_MODEL_PRODUCTION_CONFIG_VERSION || value.status !== "BLOCKED" || value.selectedBackend !== null || value.snapshotPersistence !== "BLOCKED" || value.currentSelection !== "BLOCKED" || value.readPath !== "BLOCKED" || value.retention !== "NOT_APPROVED" || value.deletion !== "NOT_APPROVED" || value.authorityUpgrade !== "UNSUPPORTED" || value.signal !== "BLOCKED" || value.trading !== "BLOCKED" || value.selectedStrategy !== "IMMUTABLE_DERIVED_SNAPSHOT" || canonical(value) !== canonical(PRODUCTION_CONFIG)) return null;
+    if (value.contractVersion !== EVIDENCE_REVIEW_QUEUE_READ_MODEL_PRODUCTION_CONFIG_VERSION || value.status !== "BLOCKED" || value.selectedBackend !== null || value.snapshotPersistence !== "BLOCKED" || value.currentSelection !== "BLOCKED" || value.readPath !== "BLOCKED" || value.retention !== "NOT_APPROVED" || value.deletion !== "NOT_APPROVED" || value.authorityUpgrade !== "UNSUPPORTED" || value.signal !== "BLOCKED" || value.trading !== "BLOCKED" || value.selectedStrategy !== null || canonical(value) !== canonical(PRODUCTION_CONFIG)) return null;
     return freeze({ ...value }) as EvidenceReviewQueueReadModelProductionConfig;
   } catch { return null; }
 }
