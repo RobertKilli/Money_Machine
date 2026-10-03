@@ -7,9 +7,11 @@
     "acquisition": "BLOCKED",
     "normalizedDiscoveryPersistence": "BLOCKED",
     "rawContentStorage": "BLOCKED",
+    "persistence": "BLOCKED",
     "issuerAssetMapping": "BLOCKED",
     "corroboration": "BLOCKED",
     "eventAuthority": "BLOCKED",
+    "scheduler": "BLOCKED",
     "signalGeneration": "BLOCKED",
     "trading": "BLOCKED"
   },

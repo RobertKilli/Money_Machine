@@ -20,7 +20,7 @@ function create(record: NewsDiscoveryRecord = syntheticNewsRecord()): NewsDiscov
   expect(result).not.toBeNull(); return result!;
 }
 function seal(members: readonly unknown[], overrides: Record<string, unknown> = {}) {
-  return sealDiscoveryOriginSet({ contractVersion: DISCOVERY_ORIGIN_SET_VERSION, members, declaredMemberCount: members.length, recordedAt: now, ...overrides });
+  return sealDiscoveryOriginSet({ contractVersion: DISCOVERY_ORIGIN_SET_VERSION, members, declaredMemberCount: members.length, evaluatedAsOf: now, recordedAt: now, ...overrides });
 }
 function deepFrozen(value: unknown): void {
   if (!value || typeof value !== "object") return;
@@ -37,11 +37,14 @@ describe("news discovery candidate, origin and lifecycle contract", () => {
     expect(c.status).toBe("NON_AUTHORITATIVE_DISCOVERY_CANDIDATE");
     expect(c.record.eventCategories).toEqual(["CORPORATE_CRYPTO_PURCHASE_INTENT"]);
     expect(c).not.toHaveProperty("completionDate");
+    expect(c).not.toHaveProperty("eventOccurrenceAt"); expect(c).not.toHaveProperty("expectedClosingAt"); expect(c).not.toHaveProperty("completedAt");
     expect([c.eventAuthorityEligible, c.mappingAuthorityEligible, c.persistenceAuthorityEligible, c.signalEligible, c.tradingEligible]).toEqual([false, false, false, false, false]);
     expect(c.record.provenance).toBe("SYNTHETIC"); deepFrozen(c);
   });
   it.each(NEWS_DISCOVERY_CATEGORIES)("models explicit candidate classification %s without authority", category => {
-    expect(create({ ...syntheticNewsRecord(), eventCategories: [category] }).record.eventCategories).toEqual([category]);
+    const candidate = create({ ...syntheticNewsRecord(), eventCategories: [category] });
+    expect(candidate.record.eventCategories).toEqual([category]);
+    expect(candidate).not.toHaveProperty("eventOccurrenceAt"); expect(candidate).not.toHaveProperty("expectedClosingAt"); expect(candidate).not.toHaveProperty("completedAt");
   });
   it("B: issuer + aggregator + wire are one declared origin and zero independent authority origins", () => {
     const candidates = [create(), create(syntheticAggregatorRecord()), create(syntheticWireRecord())];
@@ -81,6 +84,15 @@ describe("news discovery candidate, origin and lifecycle contract", () => {
     expect(rejectNewsDiscoveryAsAuthority(retracted, "SIGNAL")).toBeNull();
     expect(seal([correction])).toBeNull(); // no missing correction parent
     expect(seal([original, correction, create({ ...lifecycle(original, "RETRACTION"), providerRecordId: "fork" })])).toBeNull();
+  });
+  it("future corrections do not affect a historical asOf projection", () => {
+    const original = create(); const correction = create(lifecycle(original, "CORRECTION"));
+    const historicalAsOf = "2026-10-01T12:00:00.000Z";
+    const oldView = seal([original], { evaluatedAsOf: historicalAsOf });
+    expect(oldView?.members[0]?.lifecycleStatus).toBe("ACTIVE");
+    expect(oldView?.evaluatedAsOf).toBe(historicalAsOf);
+    expect(seal([original, correction], { evaluatedAsOf: historicalAsOf })).toBeNull();
+    expect(seal([original, correction], { evaluatedAsOf: "2026-10-02T12:00:00.000Z" })?.members.find(item => item.candidate.candidateId === original.candidateId)?.lifecycleStatus).toBe("CORRECTED");
   });
   it("F/G: ticker, ETH/WETH/native/wrapped/bridged, parent and subsidiary remain separate mentions", () => {
     const r = syntheticNewsRecord();
@@ -220,6 +232,7 @@ describe("fail-closed parser and production config", () => {
     const a = create();
     expect(seal([a], { declaredMemberCount: 0 })).toBeNull(); expect(seal([a, a])).toBeNull(); expect(seal([])).toBeNull();
     expect(seal([a], { extra: true })).toBeNull(); expect(seal([a], { recordedAt: "2026-09-01T00:00:00.000Z" })).toBeNull();
+    expect(seal([a], { evaluatedAsOf: "2026-09-30T00:00:00.000Z" })).toBeNull();
   });
   it("sealed sets enforce the exact 64-member limit and reject unsafe set shapes without traps", () => {
     const members = Array.from({ length: 65 }, (_, i) => create({ ...syntheticNewsRecord(), providerRecordId: `record-${i}` }));
@@ -234,13 +247,13 @@ describe("fail-closed parser and production config", () => {
     try { expect(parseNewsDiscovery(syntheticNewsRecord(), now).status).toBe("INVALID"); } finally { delete (Object.prototype as { newsDiscoveryUnsafe?: string }).newsDiscoveryUnsafe; }
     expect(getterCalls).toBe(0);
   });
-  it("production has an empty stack, all eight operations blocked and all seven usage approvals denied", () => {
+  it("production has an empty stack, all ten operations blocked and all seven usage approvals denied", () => {
     expect(NEWS_DISCOVERY_PRODUCTION.status).toBe("BLOCKED_BACKEND_UNAPPROVED"); expect(NEWS_DISCOVERY_PRODUCTION.selectedProviders).toEqual([]); expect(NEWS_DISCOVERY_PRODUCTION.selectedSources).toEqual([]);
-    expect(Object.values(NEWS_DISCOVERY_PRODUCTION.operations)).toEqual(Array(8).fill("BLOCKED")); expect(NEWS_DISCOVERY_PRODUCTION.usageApprovals).toHaveLength(7); expect(NEWS_DISCOVERY_PRODUCTION.usageApprovals.every(item => item.approval === "NOT_APPROVED")).toBe(true); deepFrozen(NEWS_DISCOVERY_PRODUCTION);
+    expect(Object.values(NEWS_DISCOVERY_PRODUCTION.operations)).toEqual(Array(10).fill("BLOCKED")); expect(NEWS_DISCOVERY_PRODUCTION.usageApprovals).toHaveLength(7); expect(NEWS_DISCOVERY_PRODUCTION.usageApprovals.every(item => item.approval === "NOT_APPROVED")).toBe(true); deepFrozen(NEWS_DISCOVERY_PRODUCTION);
   });
-  it.each(["status", "stack", "operation", "approval", "duplicate", "credentials", "unknownNested", "proxy"])("production rejects %s upgrade/unsafe material", mode => {
+  it.each(["status", "stack", "operation", "persistence", "scheduler", "approval", "duplicate", "credentials", "unknownNested", "proxy"])("production rejects %s upgrade/unsafe material", mode => {
     const c = structuredClone(config);
-    const bad = mode === "status" ? { ...c, status: "READY" } : mode === "stack" ? { ...c, selectedProviders: ["newsapi-discovery"] } : mode === "operation" ? { ...c, operations: { ...c.operations, acquisition: "READY" } } : mode === "approval" ? { ...c, usageApprovals: c.usageApprovals.map(item => ({ ...item, approval: "APPROVED" })) } : mode === "duplicate" ? { ...c, usageApprovals: c.usageApprovals.map(() => c.usageApprovals[0]) } : mode === "credentials" ? { ...c, credentialRef: "api-key" } : mode === "unknownNested" ? { ...c, operations: { ...c.operations, extra: "BLOCKED" } } : new Proxy(c, { getPrototypeOf: () => { throw new Error("trap must not run"); } });
+    const bad = mode === "status" ? { ...c, status: "READY" } : mode === "stack" ? { ...c, selectedProviders: ["newsapi-discovery"] } : mode === "operation" ? { ...c, operations: { ...c.operations, acquisition: "READY" } } : mode === "persistence" ? { ...c, operations: { ...c.operations, persistence: "READY" } } : mode === "scheduler" ? { ...c, operations: { ...c.operations, scheduler: "READY" } } : mode === "approval" ? { ...c, usageApprovals: c.usageApprovals.map(item => ({ ...item, approval: "APPROVED" })) } : mode === "duplicate" ? { ...c, usageApprovals: c.usageApprovals.map(() => c.usageApprovals[0]) } : mode === "credentials" ? { ...c, credentialRef: "api-key" } : mode === "unknownNested" ? { ...c, operations: { ...c.operations, extra: "BLOCKED" } } : new Proxy(c, { getPrototypeOf: () => { throw new Error("trap must not run"); } });
     expect(parseNewsDiscoveryProduction(bad)).toBeNull();
   });
 });

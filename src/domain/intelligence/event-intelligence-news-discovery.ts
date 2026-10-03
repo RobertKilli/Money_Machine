@@ -227,21 +227,22 @@ export type DiscoveryOriginSet = Readonly<{
   contractVersion: typeof DISCOVERY_ORIGIN_SET_VERSION; status: "DISCOVERY_ONLY"; fingerprint: string;
   members: readonly Readonly<{ ordinal: number; candidate: NewsDiscoveryCandidate; lifecycleStatus: "ACTIVE" | "CORRECTED" | "RETRACTED" }>[];
   groups: readonly Readonly<{ groupId: string; basis: "DECLARED_SYNDICATION" | "UNRESOLVED_SINGLETON"; candidateIds: readonly string[]; authorityOriginCount: 0 }>[];
-  independentAuthorityOriginCount: 0; declaredMemberCount: number; recordedAt: string;
+  independentAuthorityOriginCount: 0; declaredMemberCount: number; evaluatedAsOf: string; recordedAt: string;
 }>;
 export function sealDiscoveryOriginSet(input: unknown): DiscoveryOriginSet | null {
   try {
-    const v = object(input, ["contractVersion", "members", "declaredMemberCount", "recordedAt"]);
+    const v = object(input, ["contractVersion", "members", "declaredMemberCount", "evaluatedAsOf", "recordedAt"]);
     const items = array(v.members, NEWS_DISCOVERY_LIMITS.originMembers);
     if (v.contractVersion !== DISCOVERY_ORIGIN_SET_VERSION || !items.length || v.declaredMemberCount !== items.length || !items.every(isAuthenticNewsDiscoveryCandidate)) return null;
-    const recordedAt = time(v.recordedAt);
+    const evaluatedAsOf = time(v.evaluatedAsOf), recordedAt = time(v.recordedAt);
+    if (evaluatedAsOf > recordedAt) return null;
     const candidates = uniqueSorted(items as NewsDiscoveryCandidate[], item => item.candidateId);
     const byId = new Map(candidates.map(item => [item.candidateId, item]));
     const replayKeys = new Set<string>(), names = new Map<string, string>(), publicationUrls = new Map<string, string>();
     const successor = new Map<string, NewsDiscoveryCandidate>();
     const groups = new Map<string, NewsDiscoveryCandidate[]>();
     for (const c of candidates) {
-      if (c.record.recordedAt > recordedAt || replayKeys.has(c.providerReplayKey)) return null;
+      if (c.record.recordedAt > recordedAt || c.record.recordedAt > evaluatedAsOf || c.record.receivedAt > evaluatedAsOf || replayKeys.has(c.providerReplayKey)) return null;
       replayKeys.add(c.providerReplayKey);
       for (const p of [c.record.publisher, c.record.origin.originalPublisher, c.record.origin.distributor]) {
         if (!p) continue;
@@ -263,15 +264,22 @@ export function sealDiscoveryOriginSet(input: unknown): DiscoveryOriginSet | nul
       const key = originKey(c) ?? c.candidateId;
       const group = groups.get(key) ?? []; group.push(c); groups.set(key, group);
     }
-    const members = candidates.map((candidate, ordinal) => {
+    const members = candidates.flatMap((candidate, ordinal) => {
       let next = successor.get(candidate.candidateId);
       let lifecycleStatus: "ACTIVE" | "CORRECTED" | "RETRACTED" = candidate.record.lifecycleHint.kind === "RETRACTION" ? "RETRACTED" : "ACTIVE";
-      while (next) { lifecycleStatus = next.record.lifecycleHint.kind === "RETRACTION" ? "RETRACTED" : "CORRECTED"; next = successor.get(next.candidateId); }
-      return { ordinal, candidate, lifecycleStatus };
+      const visited = new Set<string>([candidate.candidateId]);
+      while (next) {
+        if (visited.has(next.candidateId) || visited.size >= candidates.length) return [];
+        visited.add(next.candidateId);
+        lifecycleStatus = next.record.lifecycleHint.kind === "RETRACTION" ? "RETRACTED" : "CORRECTED";
+        next = successor.get(next.candidateId);
+      }
+      return [{ ordinal, candidate, lifecycleStatus }];
     });
+    if (members.length !== candidates.length) return null;
     const sealedGroups = [...groups.entries()].sort(([a], [b]) => compare(a, b)).map(([groupId, group]) => ({ groupId, basis: originKey(group[0]!) === null ? "UNRESOLVED_SINGLETON" as const : "DECLARED_SYNDICATION" as const, candidateIds: group.map(item => item.candidateId), authorityOriginCount: 0 as const }));
     const fingerprint = hash({ version: DISCOVERY_ORIGIN_SET_VERSION, members: members.map(item => ({ ordinal: item.ordinal, fingerprint: item.candidate.fingerprint, lifecycleStatus: item.lifecycleStatus })), groups: sealedGroups });
-    const result: DiscoveryOriginSet = freeze({ contractVersion: DISCOVERY_ORIGIN_SET_VERSION, status: "DISCOVERY_ONLY", fingerprint, members, groups: sealedGroups, independentAuthorityOriginCount: 0, declaredMemberCount: members.length, recordedAt });
+    const result: DiscoveryOriginSet = freeze({ contractVersion: DISCOVERY_ORIGIN_SET_VERSION, status: "DISCOVERY_ONLY", fingerprint, members, groups: sealedGroups, independentAuthorityOriginCount: 0, declaredMemberCount: members.length, evaluatedAsOf, recordedAt });
     originSetTrust.add(result); return result;
   } catch { return null; }
 }
@@ -282,7 +290,7 @@ export const DISCOVERY_FORBIDDEN_BOUNDARIES = Object.freeze(["ISSUER_DISCLOSURE"
 export function rejectNewsDiscoveryAsAuthority(value: unknown, boundary: typeof DISCOVERY_FORBIDDEN_BOUNDARIES[number]): null { void value; void boundary; return null; }
 
 export const NEWS_DISCOVERY_PRODUCTION_VERSION = "event-intelligence-news-discovery-production/v1" as const;
-const blockedOperations = Object.freeze(["acquisition", "normalizedDiscoveryPersistence", "rawContentStorage", "issuerAssetMapping", "corroboration", "eventAuthority", "signalGeneration", "trading"] as const);
+const blockedOperations = Object.freeze(["acquisition", "normalizedDiscoveryPersistence", "rawContentStorage", "persistence", "issuerAssetMapping", "corroboration", "eventAuthority", "scheduler", "signalGeneration", "trading"] as const);
 export function parseNewsDiscoveryProduction(input: unknown) {
   try {
     const v = object(input, ["contractVersion", "status", "selectedProviders", "selectedSources", "operations", "usageApprovals", "storageApproval", "retentionApproval", "redistributionApproval", "commercialApproval"]);
