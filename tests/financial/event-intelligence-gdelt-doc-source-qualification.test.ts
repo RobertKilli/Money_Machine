@@ -28,6 +28,10 @@ describe("GDELT DOC qualification profiles", () => {
     expect(query.split("&").map(x => decodeURIComponent(x.split("=")[0]!))).toEqual([...GDELT_DOC_REQUEST_PROFILE.canonicalQueryOrder]);
     expect(buildGdeltDocRequestQuery("caller-query", "2026-10-03T07:35:00.000Z", "2026-10-03T08:00:00.000Z")).toBeNull();
     expect(buildGdeltDocRequestQuery(GDELT_DOC_QUERY_PROFILES[0].id, "2026-10-03T00:00:00.000Z", "2026-10-01T00:00:00.000Z")).toBeNull();
+    // DOC timestamps have second precision; reject subsecond input instead of
+    // fingerprinting one interval and silently sending a truncated interval.
+    expect(buildGdeltDocRequestQuery(GDELT_DOC_QUERY_PROFILES[0].id, "2026-10-03T07:35:00.123Z", "2026-10-03T08:00:00.000Z")).toBeNull();
+    expect(buildGdeltDocRequestQuery(GDELT_DOC_QUERY_PROFILES[0].id, "2026-10-03T07:35:00.000Z", "2026-10-03T08:00:00.123Z")).toBeNull();
     expect(GDELT_DOC_QUERY_PROFILES.every(p => p.query.length <= 512 && gdeltDocQueryProfileFingerprint(p.id))).toBe(true);
     expect(deeplyFrozen(GDELT_DOC_QUERY_PROFILES)).toBe(true);
   });
@@ -65,6 +69,16 @@ describe("GDELT DOC qualification profiles", () => {
     if (mode === "proxy") unsafe = new Proxy(input, { getPrototypeOf: () => { effects++; throw Error("secret"); }, ownKeys: () => { effects++; throw Error("secret"); } });
     if (mode === "sparse" || mode === "array-prototype") { const altered = structuredClone(input) as Record<string, unknown>; const refs = altered.evidenceReferences as unknown[]; if (mode === "sparse") delete refs[0]; else Object.setPrototypeOf(refs, {}); unsafe = altered; }
     expect(parseGdeltDocQualification(unsafe).status).toBe("INVALID"); expect(effects).toBe(0);
+  });
+  it("does not coerce attacker-controlled qualification values while parsing", () => {
+    let effects = 0;
+    const reviewedAtInput = { ...qualification, reviewedAt: { [Symbol.toPrimitive]: () => { effects++; return "2026-10-03T07:34:18.000Z"; } } };
+    const evidence = structuredClone(qualification.evidenceReferences).map(ref => ({ ...ref })) as unknown as Array<Record<string, unknown>>;
+    evidence[0] = { ...evidence[0], classification: { [Symbol.toPrimitive]: () => { effects++; return "DOCUMENTED"; } } };
+    const classificationInput = { ...qualification, evidenceReferences: evidence };
+    expect(parseGdeltDocQualification(reviewedAtInput).status).toBe("INVALID");
+    expect(parseGdeltDocQualification(classificationInput).status).toBe("INVALID");
+    expect(effects).toBe(0);
   });
 });
 
@@ -124,6 +138,9 @@ describe("synthetic DOC response and projection guard", () => {
     if (label === "domain spoof") input = { ...raw, records: [{ ...raw.records[0]!, sourceDomain: "evil.example" }] };
     if (label === "control text") input = { ...raw, records: [{ ...raw.records[0]!, title: "Buy\u202eBitcoin" }] };
     expect(parseGdeltSyntheticResponse(input, GDELT_EVALUATION_AS_OF)).toBeNull();
+  });
+  it("rejects a native-looking GDELT payload because native ArticleList JSON is not qualified", () => {
+    expect(parseGdeltSyntheticResponse({ articles: [{ url: "https://news.example/a", title: "Bitcoin purchase" }] }, GDELT_EVALUATION_AS_OF)).toBeNull();
   });
   it.each(["spread qualification", "serialized qualification", "fabricated qualification", "fabricated response", "spread response", "scope mismatch"]) ("projection rejects untrusted %s", mode => {
     let q: unknown = qualification, r: unknown = validResponse();

@@ -166,16 +166,16 @@ export function parseGdeltDocQualification(input: unknown): QualificationParse {
     if (uses.length !== usageNames.length || uses.some((e, i) => e.usage !== usageNames[i] || e.approval !== "NOT_APPROVED")) return INVALID;
     const blockers = arr(v.blockers, 16).map(x => { const item = txt(x, 128); if (!/^[A-Z][A-Z0-9_]*$/.test(item)) return fail(); return item; });
     if (stable(blockers) !== stable(GDELT_DOC_BLOCKERS)) return INVALID;
+    const reviewedAt = utc(v.reviewedAt), effectiveFrom = utc(v.effectiveFrom), expiresAt = utc(v.expiresAt), recordedAt = utc(v.recordedAt);
+    if (reviewedAt !== checkedAt || effectiveFrom !== reviewedAt || expiresAt <= effectiveFrom || recordedAt < reviewedAt) return INVALID;
     const refs = arr(v.evidenceReferences, 8).map(raw => {
       const r = plain(raw, refKeys), title = txt(r.title, 256), url = httpsUrl(r.url), checked = utc(r.checkedAt);
-      if (checked > String(v.reviewedAt) || !["DOCUMENTED", "UNKNOWN"].includes(String(r.classification))) return fail();
+      if (checked > reviewedAt || (r.classification !== "DOCUMENTED" && r.classification !== "UNKNOWN")) return fail();
       const claims = arr(r.claims, 16).map(x => txt(x, 256)); if (!claims.length || new Set(claims).size !== claims.length) return fail();
       return { title, url, checkedAt: checked, classification: r.classification as "DOCUMENTED" | "UNKNOWN", claims };
     });
     refs.sort((a, b) => compare(a.url, b.url));
     if (refs.length !== 5 || new Set(refs.map(r => r.url)).size !== refs.length) return INVALID;
-    const reviewedAt = utc(v.reviewedAt), effectiveFrom = utc(v.effectiveFrom), expiresAt = utc(v.expiresAt), recordedAt = utc(v.recordedAt);
-    if (reviewedAt !== checkedAt || effectiveFrom !== reviewedAt || expiresAt <= effectiveFrom || recordedAt < reviewedAt) return INVALID;
     const supplied: Record<string, unknown> = { ...v, methods, modes, formats, queryKeys: qkeys, responseFields, usageApprovals: uses, blockers, evidenceReferences: refs };
     delete supplied.status; delete supplied.fingerprint;
     if (qualificationMaterialFingerprint(supplied) !== qualificationFingerprint) return INVALID;
@@ -196,7 +196,7 @@ export function gdeltDocRequestFingerprint(profileId: string, windowStart: strin
 }
 export function buildGdeltDocRequestQuery(profileId: string, start: string, end: string): string | null {
   const p = GDELT_DOC_QUERY_PROFILES.find(x => x.id === profileId); if (!p) return null;
-  try { const s = utc(start), e = utc(end); if (s >= e || Date.parse(e) - Date.parse(s) > GDELT_DOC_REQUEST_PROFILE.maxWindowSeconds * 1000) return null;
+  try { const s = utc(start), e = utc(end); if (!s.endsWith(".000Z") || !e.endsWith(".000Z") || s >= e || Date.parse(e) - Date.parse(s) > GDELT_DOC_REQUEST_PROFILE.maxWindowSeconds * 1000) return null;
     const stamp = (x: string) => x.replace(/[-:TZ.]/g, "").slice(0, 14);
     const params = new URLSearchParams([ ["query", p.query], ["mode", "artlist"], ["format", "json"], ["maxrecords", "25"], ["startdatetime", stamp(s)], ["enddatetime", stamp(e)], ["sort", "DateDesc"] ]);
     const result = params.toString(); return result.length <= GDELT_DOC_REQUEST_PROFILE.maxQueryLength ? result : null;

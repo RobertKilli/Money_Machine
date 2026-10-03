@@ -96,3 +96,11 @@ GDELT DOC
 ## Tests
 
 `tests/financial/event-intelligence-gdelt-doc-source-qualification.test.ts` covers static profiles, synthetic projection, replay/receipt identity, duplicate material, unsafe shapes, bounds, future data, URL validation, mapping and authority denial, and blocked production config. No network operation is used.
+
+## Independent review follow-up (2026-10-03)
+
+The official DOC launch documentation was rechecked at 2026-10-03 08:17 UTC. It documents the `/api/v2/doc/doc` examples, quoted phrase and parenthesized `OR` syntax, `artlist`, JSON, `DateDesc`, explicit `STARTDATETIME`/`ENDDATETIME` in `YYYYMMDDHHMMSS` precision, and the documented 250-result ArticleList maximum. This contract's 25-record and seven-day limits remain local safeguards. The page describes start as strictly after and end as strictly before the supplied timestamps. Historical horizon changes do not establish today's horizon; it remains `UNKNOWN`. GDELT's current published About page describes use/redistribution terms for released datasets, but this does not establish rights in linked publisher content or internal product approval. No legal conclusion is made.
+
+The review added two fail-closed checks: request windows with fractional seconds are rejected because the wire format cannot represent them without truncation, and qualification parsing type-checks timestamp/classification values before any comparison so attacker-controlled coercion hooks are not invoked. A native-looking `articles` payload is explicitly tested as unqualified. The parser remains limited to the internal synthetic normal form.
+
+Official pages rechecked: [GDELT DOC 2.0 API Debuts!](https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/), [Ukraine, API Rate Limiting & Web NGrams 3.0](https://blog.gdeltproject.org/ukraine-api-rate-limiting-web-ngrams-3-0/), and [The GDELT Story: About the GDELT Project](https://gdeltproject.org/about.html). The DOC API page documents syntax and historical settings; rate limiting is documented without a numeric quota in the reviewed rate-limit notice; the About page speaks to GDELT datasets. Current archive horizon, numeric rate quota, native ArticleList field schema, stable record identifiers, pagination, completeness, publisher authority and linked-content rights remain `UNKNOWN`.
