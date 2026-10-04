@@ -237,14 +237,14 @@ const queueMaterial = freeze({
   },
   contractRuntimeAlignment: {
     status: "PARENT_ROUTING_MAPPING_ORDER_REQUIRES_RECONCILIATION",
-    declaredContractOrder: { routineFallbackPrecedence: 11, nonAuthoritativeTerminalPrecedence: 12 },
-    actualClassifierOrder: { nonAuthoritativeTerminalBeforeFinalRoutineFallback: true },
+    declaredContractOrder: { unsupportedCorroborationPrecedence: 9, duplicatePrecedence: 10, routineFallbackPrecedence: 11, nonAuthoritativeTerminalPrecedence: 12 },
+    actualClassifierOrder: { originGroupPrecedesUnsupportedCorroboration: true, unsupportedCorroborationOrder: 10, duplicateOrder: 11, nonAuthoritativeTerminalOrder: 12, finalRoutineFallbackOrder: 19 },
     runtimeOwner: "event-intelligence-evidence-review-queue.ts:classify",
   },
   excludedPresentationAndRuntimeMetadata: ["recordedAt", "fingerprint", "labels", "titles", "viewModelPolicy", "productionBlockers", "approvals", "itemCounts", "cutoffInstance", "candidateIds", "artifactIds"],
   closure: {
     status: "PARTIAL_UPSTREAM_AND_REMAINING_LIFECYCLE_BRANCHES_REQUIRE_CONFORMANCE",
-    gaps: ["The queue consumes authentic routing results but does not independently authenticate the candidate source type.", "Historical cutoff validation is performed by upstream discovery/composition/routing contracts; queue material describes same-cutoff membership, not those input checks.", "SUPERSEDED is a presentation/read-model status and is not emitted by this queue classifier.", "The parent contract routingMappings labels routine fallback precedence 11 and terminal precedence 12, but classify evaluates terminal before its final routine fallback; reconcile these parent semantics before claiming complete identity.", "Conformance fixtures cover selected branches and cannot prove full equivalence or code execution."],
+    gaps: ["The queue consumes authentic routing results but does not independently authenticate the candidate source type.", "Historical cutoff validation is performed by upstream discovery/composition/routing contracts; queue material describes same-cutoff membership, not those input checks.", "SUPERSEDED is a presentation/read-model status and is not emitted by this queue classifier.", "The parent contract routingMappings declares unsupported-corroboration precedence 9 and duplicate precedence 10, while classify runs origin-group review first, then unsupported corroboration and duplicate; it also labels routine fallback 11 before terminal 12 although classify checks terminal before final fallback. Reconcile these parent semantics before claiming complete identity.", "Conformance fixtures cover selected branches and cannot prove full equivalence or code execution."],
   },
 });
 

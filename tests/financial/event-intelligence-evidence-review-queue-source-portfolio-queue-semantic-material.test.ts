@@ -187,6 +187,11 @@ describe("source-portfolio and queue semantic material", () => {
     expect(projectRoutingResultToEvidenceReviewItem(decision, duplicate)?.status).toBe("NO_ACTION");
     const conflict = evaluateSourcePortfolioRouting(decision, base({ conflicts: ["LIFECYCLE_CONFLICT", "ISSUER_IDENTITY_CONFLICT"] }));
     expect(projectRoutingResultToEvidenceReviewItem(decision, conflict)?.requiredNextAction).toBe("REVIEW_SOURCE_CONFLICT");
+    const originCollision = authenticRouting("CORROBORATION_REVIEW_REQUIRED", { originBindings: [
+      { sourceRecordId: "record:origin-a", retrievalArtifactId: "artifact:origin-a", publicationId: "publication:a", issuerOriginId: "issuer-origin:a", distributionCopyOf: null },
+      { sourceRecordId: "record:origin-b", retrievalArtifactId: "artifact:origin-b", publicationId: "publication:b", issuerOriginId: "issuer-origin:b", distributionCopyOf: null },
+    ] });
+    expect(projectRoutingResultToEvidenceReviewItem(decision, originCollision)).toMatchObject({ itemType: "ORIGIN_GROUP_REVIEW", status: "BLOCKED" });
     const cutoffRouting = authenticRouting("SOURCE_RETRIEVAL_REQUIRED");
     expect(cutoffRouting?.evaluationAsOf).toBe("2026-10-03T00:00:00.000Z");
     const before = authenticRouting("SOURCE_RETRIEVAL_REQUIRED", { evaluationAsOf: "2026-10-01T00:03:00.000Z" });
@@ -206,8 +211,8 @@ describe("source-portfolio and queue semantic material", () => {
     expect(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL.queueOrdering.queueSetInputMaximum).toBe(512);
     expect(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL.contractRuntimeAlignment).toMatchObject({
       status: "PARENT_ROUTING_MAPPING_ORDER_REQUIRES_RECONCILIATION",
-      declaredContractOrder: { routineFallbackPrecedence: 11, nonAuthoritativeTerminalPrecedence: 12 },
-      actualClassifierOrder: { nonAuthoritativeTerminalBeforeFinalRoutineFallback: true },
+      declaredContractOrder: { unsupportedCorroborationPrecedence: 9, duplicatePrecedence: 10, routineFallbackPrecedence: 11, nonAuthoritativeTerminalPrecedence: 12 },
+      actualClassifierOrder: { originGroupPrecedesUnsupportedCorroboration: true, unsupportedCorroborationOrder: 10, duplicateOrder: 11, nonAuthoritativeTerminalOrder: 12, finalRoutineFallbackOrder: 19 },
     });
   });
 
