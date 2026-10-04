@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { composeEventIntelligenceEvidenceReviewQueue } from "@/application/intelligence/compose-event-intelligence-evidence-review-queue";
 import {
   EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL,
   parseEvidenceReviewQueueSemanticMaterial,
@@ -16,6 +17,8 @@ import {
   projectRoutingResultToEvidenceReviewItem,
   sortEvidenceReviewItems,
 } from "@/domain/intelligence/event-intelligence-evidence-review-queue";
+import { createSyntheticNewsDiscoveryCandidate } from "@/domain/intelligence/event-intelligence-news-discovery";
+import { syntheticAggregatorRecord } from "../fixtures/event-intelligence-news-discovery";
 
 const base = (patch: Partial<SyntheticRoutingMaterial> = {}): SyntheticRoutingMaterial => {
   const jurisdiction = patch.jurisdiction ?? "US_SEC";
@@ -71,6 +74,37 @@ describe("source-portfolio and queue semantic material", () => {
     }
   });
 
+  it("keeps each complete fixed material within every documented structural bound", () => {
+    const measure = (root: unknown) => {
+      let nodes = 0;
+      let maxDepth = 0;
+      const visit = (value: unknown, depth: number): void => {
+        nodes++;
+        maxDepth = Math.max(maxDepth, depth);
+        if (typeof value === "string") expect(value.length).toBeLessThanOrEqual(4_096);
+        if (!value || typeof value !== "object") return;
+        if (Array.isArray(value)) {
+          expect(value.length).toBeLessThanOrEqual(512);
+          value.forEach(child => visit(child, depth + 1));
+        } else {
+          const keys = Object.keys(value);
+          expect(keys.length).toBeLessThanOrEqual(64);
+          keys.forEach(key => {
+            expect(key.length).toBeLessThanOrEqual(4_096);
+            visit((value as Record<string, unknown>)[key], depth + 1);
+          });
+        }
+      };
+      visit(root, 0);
+      expect(nodes).toBeLessThanOrEqual(10_000);
+      expect(maxDepth).toBeLessThanOrEqual(12);
+    };
+    measure(SOURCE_PORTFOLIO_SEMANTIC_MATERIAL);
+    measure(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL);
+    expect(parseSourcePortfolioSemanticMaterial(SOURCE_PORTFOLIO_SEMANTIC_MATERIAL).status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
+    expect(parseEvidenceReviewQueueSemanticMaterial(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL).status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
+  });
+
   it("rejects nested alterations, getters, sparse arrays, cycles and unsupported prototypes without invoking getters", () => {
     const changed = structuredClone(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL) as { classificationRules: { ruleId: string }[] };
     changed.classificationRules[0]!.ruleId = "CALLER_RULE";
@@ -88,6 +122,25 @@ describe("source-portfolio and queue semantic material", () => {
     expect(parseSourcePortfolioSemanticMaterial(Object.assign(Object.create({ unsafe: true }), SOURCE_PORTFOLIO_SEMANTIC_MATERIAL)).status).toBe("INVALID");
   });
 
+  it("rejects missing, unknown, symbol-keyed, accessor-array and unsupported primitive shapes", () => {
+    const missing = structuredClone(SOURCE_PORTFOLIO_SEMANTIC_MATERIAL) as { rules: Record<string, unknown> };
+    delete missing.rules.sourceFamilies;
+    expect(parseSourcePortfolioSemanticMaterial(missing).status).toBe("INVALID");
+    const nestedUnknown = structuredClone(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL) as { queueOrdering: Record<string, unknown> };
+    nestedUnknown.queueOrdering.unexpected = true;
+    expect(parseEvidenceReviewQueueSemanticMaterial(nestedUnknown).status).toBe("INVALID");
+    const setPermutation = structuredClone(SOURCE_PORTFOLIO_SEMANTIC_MATERIAL) as { rules: { sourceFamilies: string[] } };
+    setPermutation.rules.sourceFamilies.reverse();
+    expect(parseSourcePortfolioSemanticMaterial(setPermutation).status).toBe("INVALID");
+    const symbolKeyed = { ...SOURCE_PORTFOLIO_SEMANTIC_MATERIAL, [Symbol("extra")]: true };
+    expect(parseSourcePortfolioSemanticMaterial(symbolKeyed).status).toBe("INVALID");
+    const arrayProperty = structuredClone(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL) as { classificationRules: unknown[] };
+    Object.defineProperty(arrayProperty.classificationRules, "extra", { enumerable: true, value: 1 });
+    expect(parseEvidenceReviewQueueSemanticMaterial(arrayProperty).status).toBe("INVALID");
+    expect(parseSourcePortfolioSemanticMaterial({ ...SOURCE_PORTFOLIO_SEMANTIC_MATERIAL, unsupported: 1n }).status).toBe("INVALID");
+    expect(parseSourcePortfolioSemanticMaterial({ ...SOURCE_PORTFOLIO_SEMANTIC_MATERIAL, unsupported: -0 }).status).toBe("INVALID");
+  });
+
   it("matches source-family strength, jurisdiction fallback, correction priority and authentic progression boundaries", () => {
     const decision = getSourcePortfolioDecision();
     const filing = evaluateSourcePortfolioRouting(decision, base({ seenFamilies: ["FILING_AUTHORITY"] }));
@@ -101,6 +154,24 @@ describe("source-portfolio and queue semantic material", () => {
     const first = evaluateSourcePortfolioRouting(decision, base())!;
     expect(evaluateSourcePortfolioRouting(decision, base(), { ...first })).toBeNull();
     expect(evaluateSourcePortfolioRouting({ ...decision }, base())).toBeNull();
+  });
+
+  it("binds the discovered source type to its family and rejects an authentic aggregator relabel as filing authority", () => {
+    const cutoff = "2026-10-03T12:00:00.000Z";
+    const candidate = createSyntheticNewsDiscoveryCandidate(syntheticAggregatorRecord(), cutoff);
+    expect(candidate).not.toBeNull();
+    if (!candidate) return;
+    const route: SyntheticRoutingMaterial = {
+      ...base({ candidateId: candidate.candidateId, jurisdiction: "US_SEC", listingScopes: ["listing:us-sec"],
+        eventHint: "PURCHASE_INTENT", seenFamilies: ["DISCOVERY_AGGREGATOR"], availableFamilies: [],
+        publicationAt: candidate.record.publishedAt, discoveredAt: candidate.record.discoveredAt, receivedAt: candidate.record.receivedAt,
+        evaluationAsOf: cutoff, primaryAvailable: true, correctionPresent: false, correctionResolved: false,
+        correctionFieldHints: [], correctionAvailableAt: null, retracted: false }),
+    };
+    const valid = composeEventIntelligenceEvidenceReviewQueue({ evaluationAsOf: cutoff, candidates: [{ candidate, routingMaterial: route }] });
+    expect(valid.status).toBe("COMPOSED");
+    const relabeled = { ...route, seenFamilies: ["FILING_AUTHORITY"] as SyntheticRoutingMaterial["seenFamilies"] };
+    expect(composeEventIntelligenceEvidenceReviewQueue({ evaluationAsOf: cutoff, candidates: [{ candidate, routingMaterial: relabeled }] })).toMatchObject({ status: "BLOCKED", code: "COMPOSITION_INPUT_INVALID" });
   });
 
   it("conforms queue precedence for correction, retraction, duplicate, conflict, cutoff and ordinality", () => {
@@ -127,9 +198,29 @@ describe("source-portfolio and queue semantic material", () => {
   });
 
   it("keeps cutoff validation upstream and rejects a future correction before queue projection", () => {
-    const material = base({ correctionPresent: true, correctionResolved: false, correctionFieldHints: ["OTHER"], correctionAvailableAt: "2026-10-04T00:00:00.000Z" });
-    expect(parseSyntheticRoutingMaterial(material).status).toBe("INVALID");
+    const correction = { correctionPresent: true, correctionResolved: false, correctionFieldHints: ["OTHER"] as const };
+    expect(parseSyntheticRoutingMaterial(base({ ...correction, evaluationAsOf: "2026-10-02T00:00:00.000Z", correctionAvailableAt: "2026-10-03T00:00:00.000Z" })).status).toBe("INVALID");
+    expect(parseSyntheticRoutingMaterial(base({ ...correction, evaluationAsOf: "2026-10-02T00:00:00.000Z", correctionAvailableAt: "2026-10-02T00:00:00.000Z" })).status).toBe("VALID");
+    expect(parseSyntheticRoutingMaterial(base({ ...correction, evaluationAsOf: "2026-10-03T00:00:00.000Z", correctionAvailableAt: "2026-10-02T00:00:00.000Z" })).status).toBe("VALID");
     expect(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL.historicalAndSupersession.supersededStatus).toContain("NOT_EMITTED");
     expect(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL.queueOrdering.queueSetInputMaximum).toBe(512);
+    expect(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL.contractRuntimeAlignment).toMatchObject({
+      status: "PARENT_ROUTING_MAPPING_ORDER_REQUIRES_RECONCILIATION",
+      declaredContractOrder: { routineFallbackPrecedence: 11, nonAuthoritativeTerminalPrecedence: 12 },
+      actualClassifierOrder: { nonAuthoritativeTerminalBeforeFinalRoutineFallback: true },
+    });
+  });
+
+  it("sorts queue output by the fixed priority, publication, and item-ID tie-breakers and rejects copied results", () => {
+    const decision = getSourcePortfolioDecision();
+    const first = evaluateSourcePortfolioRouting(decision, base({ candidateId: "candidate:sort-a", seenFamilies: ["FILING_AUTHORITY"], publicationAt: "2026-10-01T00:00:00.000Z" }));
+    const second = evaluateSourcePortfolioRouting(decision, base({ candidateId: "candidate:sort-b", seenFamilies: ["FILING_AUTHORITY"], publicationAt: "2026-10-01T00:00:00.000Z" }));
+    const firstItem = projectRoutingResultToEvidenceReviewItem(decision, first)!;
+    const secondItem = projectRoutingResultToEvidenceReviewItem(decision, second)!;
+    const sorted = sortEvidenceReviewItems([secondItem, firstItem]);
+    expect(sorted?.map(item => item.itemId)).toEqual([firstItem.itemId, secondItem.itemId].sort((a, b) => a < b ? -1 : a > b ? 1 : 0));
+    expect(projectRoutingResultToEvidenceReviewItem(decision, { ...first! })).toBeNull();
+    expect(firstItem.status).not.toBe("SUPERSEDED");
+    expect(firstItem.evaluationAsOf).toBe("2026-10-03T00:00:00.000Z");
   });
 });
