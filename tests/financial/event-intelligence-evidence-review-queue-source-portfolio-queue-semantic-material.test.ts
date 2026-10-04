@@ -187,6 +187,8 @@ describe("source-portfolio and queue semantic material", () => {
     expect(projectRoutingResultToEvidenceReviewItem(decision, duplicate)?.status).toBe("NO_ACTION");
     const conflict = evaluateSourcePortfolioRouting(decision, base({ conflicts: ["LIFECYCLE_CONFLICT", "ISSUER_IDENTITY_CONFLICT"] }));
     expect(projectRoutingResultToEvidenceReviewItem(decision, conflict)?.requiredNextAction).toBe("REVIEW_SOURCE_CONFLICT");
+    const conflictOrder = evaluateSourcePortfolioRouting(decision, base({ conflicts: ["AMOUNT_CURRENCY_CONFLICT", "LIFECYCLE_CONFLICT"] }));
+    expect(projectRoutingResultToEvidenceReviewItem(decision, conflictOrder)?.requiredNextAction).toBe("REVIEW_LIFECYCLE");
     const originCollision = authenticRouting("CORROBORATION_REVIEW_REQUIRED", { originBindings: [
       { sourceRecordId: "record:origin-a", retrievalArtifactId: "artifact:origin-a", publicationId: "publication:a", issuerOriginId: "issuer-origin:a", distributionCopyOf: null },
       { sourceRecordId: "record:origin-b", retrievalArtifactId: "artifact:origin-b", publicationId: "publication:b", issuerOriginId: "issuer-origin:b", distributionCopyOf: null },
@@ -210,9 +212,11 @@ describe("source-portfolio and queue semantic material", () => {
     expect(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL.historicalAndSupersession.supersededStatus).toContain("NOT_EMITTED");
     expect(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL.queueOrdering.queueSetInputMaximum).toBe(512);
     expect(EVIDENCE_REVIEW_QUEUE_SEMANTIC_MATERIAL.contractRuntimeAlignment).toMatchObject({
-      status: "PARENT_ROUTING_MAPPING_ORDER_REQUIRES_RECONCILIATION",
+      status: "PARENT_QUEUE_PRECEDENCE_REQUIRES_RECONCILIATION",
       declaredContractOrder: { unsupportedCorroborationPrecedence: 9, duplicatePrecedence: 10, routineFallbackPrecedence: 11, nonAuthoritativeTerminalPrecedence: 12 },
       actualClassifierOrder: { originGroupPrecedesUnsupportedCorroboration: true, unsupportedCorroborationOrder: 10, duplicateOrder: 11, nonAuthoritativeTerminalOrder: 12, finalRoutineFallbackOrder: 19 },
+      declaredConflictActionOrder: ["CORRECTION_LINEAGE_CONFLICT", "ISSUER_IDENTITY_CONFLICT", "LISTING_JURISDICTION_CONFLICT", "ASSET_REPRESENTATION_CONFLICT", "AMOUNT_CURRENCY_CONFLICT", "LIFECYCLE_CONFLICT", "PUBLICATION_TIME_CONFLICT", "SOURCE_MATERIAL_CONFLICT", "AUTHORITY_TIER_CONFLICT", "ORIGIN_GROUP_CONFLICT"],
+      actualConflictActionOrder: ["CORRECTION_LINEAGE_CONFLICT", "ISSUER_IDENTITY_CONFLICT", "LISTING_JURISDICTION_CONFLICT", "ASSET_REPRESENTATION_CONFLICT", "LIFECYCLE_CONFLICT", "AMOUNT_CURRENCY_CONFLICT", "PUBLICATION_TIME_CONFLICT", "SOURCE_MATERIAL_CONFLICT", "AUTHORITY_TIER_CONFLICT", "ORIGIN_GROUP_CONFLICT"],
     });
   });
 
