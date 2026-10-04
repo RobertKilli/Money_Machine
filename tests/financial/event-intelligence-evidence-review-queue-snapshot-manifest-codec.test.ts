@@ -131,6 +131,29 @@ describe("snapshot provenance manifest canonical byte codec", () => {
     expect(result.sha256).toBe(expectedDigest);
   });
 
+  it("matches a nonempty golden that fixes family order, full-reference tie-break, keys, and ordinals", () => {
+    const secZ: EvidenceReviewQueueSnapshotProvenanceReference = {
+      family: "SEC_EVENT_DOCUMENT", schemaVersion: "sec-event-document-reference/v1", targetKind: "PROFILE",
+      key: { profile_id: "z-profile", fingerprint: "b".repeat(64) },
+    };
+    const secA: EvidenceReviewQueueSnapshotProvenanceReference = {
+      family: "SEC_EVENT_DOCUMENT", schemaVersion: "sec-event-document-reference/v1", targetKind: "PROFILE",
+      key: { profile_id: "a-profile", fingerprint: "a".repeat(64) },
+    };
+    const issuer: EvidenceReviewQueueSnapshotProvenanceReference = {
+      family: "ISSUER_EVIDENCE", schemaVersion: "issuer-evidence-reference/v1",
+      issuerEvidenceContractVersion: "event-intelligence-issuer-evidence/v1",
+      evidenceMaterialIdentity: "c".repeat(64), sourceOriginBinding: "d".repeat(64),
+    };
+    const input = manifest([issuer, secZ, secA]);
+    const expected = `{"manifest":{"manifestContractVersion":"event-intelligence-evidence-review-queue-snapshot-provenance-manifest/v1","members":[{"ordinal":0,"reference":{"family":"SEC_EVENT_DOCUMENT","key":{"fingerprint":"${"a".repeat(64)}","profile_id":"a-profile"},"schemaVersion":"sec-event-document-reference/v1","targetKind":"PROFILE"},"scopeIdentity":"${scopeIdentity}","snapshotDigest":"${snapshotDigest}"},{"ordinal":1,"reference":{"family":"SEC_EVENT_DOCUMENT","key":{"fingerprint":"${"b".repeat(64)}","profile_id":"z-profile"},"schemaVersion":"sec-event-document-reference/v1","targetKind":"PROFILE"},"scopeIdentity":"${scopeIdentity}","snapshotDigest":"${snapshotDigest}"},{"ordinal":2,"reference":{"evidenceMaterialIdentity":"${"c".repeat(64)}","family":"ISSUER_EVIDENCE","issuerEvidenceContractVersion":"event-intelligence-issuer-evidence/v1","schemaVersion":"issuer-evidence-reference/v1","sourceOriginBinding":"${"d".repeat(64)}"},"scopeIdentity":"${scopeIdentity}","snapshotDigest":"${snapshotDigest}"}],"scopeIdentity":"${scopeIdentity}","snapshotDigest":"${snapshotDigest}","snapshotFormatVersion":"event-intelligence-evidence-review-queue-snapshot/v1"},"manifestCodecProfile":"event-intelligence-evidence-review-queue-snapshot-provenance-manifest-canonical-json/v1"}`;
+    const result = encode(input);
+    expect(new TextDecoder().decode(result.canonicalBytes)).toBe(expected);
+    expect(result.sha256).toBe("40a9054cba924715eb70aa56d0aba8cad53b9cb67f19a4583bc30fccc9b8a967");
+    expect(input.members.map(member => member.reference.family)).toEqual(["ISSUER_EVIDENCE", "SEC_EVENT_DOCUMENT", "SEC_EVENT_DOCUMENT"]);
+    expect(input.members.map(member => member.ordinal)).toEqual([0, 1, 2]);
+  });
+
   it("rejects canonicality changes even when each manipulated byte string has its own correct digest", () => {
     const encoded = encode(manifest(refs().slice(0, 2)));
     const text = new TextDecoder().decode(encoded.canonicalBytes);
@@ -141,6 +164,7 @@ describe("snapshot provenance manifest canonical byte codec", () => {
       reversedRoot,
       text.replace("/v1", "\\/v1"),
       text.replace(`"snapshotDigest":"${snapshotDigest}"`, `"snapshotDigest":"${snapshotDigest}","snapshotDigest":"${snapshotDigest}"`),
+      text.replace(`"snapshotDigest":"${snapshotDigest}"`, `"snapshotD\\u0069gest":"${snapshotDigest}","snapshotDigest":"${snapshotDigest}"`),
       text.replace('"ordinal":0', '"ordinal":0.0'),
     ];
     for (const variant of variants) {
