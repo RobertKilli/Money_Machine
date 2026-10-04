@@ -51,12 +51,13 @@ function Summary({ model }: Props) {
   </dl>;
 }
 
-function QueueItem({ item, idPrefix }: { item: EvidenceReviewQueueViewModelItem; idPrefix?: string }) {
+function QueueItem({ item, idPrefix, presentation }: { item: EvidenceReviewQueueViewModelItem; idPrefix?: string; presentation: Props["presentation"] }) {
   const emphasis = item.retracted ? "border-rose-400/70 bg-rose-400/10" : item.correctionPresent ? "border-amber-300/70 bg-amber-300/10" : "border-[var(--border)] bg-[var(--panel)]";
   const headingId = idPrefix ? `queue-${idPrefix}-item-${item.publicKey}` : `queue-item-${item.publicKey}`;
+  const demoPresentation = presentation === "SYNTHETIC_OFFLINE_DEMO";
   return <article aria-labelledby={headingId} className={`min-w-0 rounded-2xl border p-5 sm:p-6 ${emphasis}`}>
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0 flex-1">
+    <div className={demoPresentation ? "flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between" : "flex flex-wrap items-start justify-between gap-3"}>
+      <div className={demoPresentation ? "w-full min-w-0 flex-1 sm:w-auto" : "min-w-0 flex-1"}>
         <p className="break-words text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{item.typeLabel}</p>
         <h3 id={headingId} className="mt-2 break-words text-lg font-semibold">{item.title}</h3>
       </div>
@@ -160,7 +161,7 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
         </div>
         <p className="mt-3 text-xs leading-5 text-[var(--muted)]">Filters change only what is shown. Corrections and retractions are included by default; queue status and source material are never changed.</p>
       </fieldset>
-      {filtered.length === 0 ? <div role="status" className="mt-5 rounded-2xl border border-[var(--border)] p-8 text-center"><h3 className="font-semibold">No items match these filters</h3><p className="mt-2 text-sm text-[var(--muted)]">Clear or change the presentation filters to view the available cutoff-bound snapshots.</p></div> : <div className="mt-5 space-y-4">{filtered.map(item => <QueueItem key={item.publicKey} item={item} idPrefix={idPrefix} />)}</div>}
+      {filtered.length === 0 ? <div role="status" className="mt-5 rounded-2xl border border-[var(--border)] p-8 text-center"><h3 className="font-semibold">No items match these filters</h3><p className="mt-2 text-sm text-[var(--muted)]">Clear or change the presentation filters to view the available cutoff-bound snapshots.</p></div> : <div className="mt-5 space-y-4">{filtered.map(item => <QueueItem key={item.publicKey} item={item} idPrefix={idPrefix} presentation={presentation} />)}</div>}
     </section>}
 
     {model.state === "EMPTY" && <section role="status" className="mt-8 rounded-2xl border border-[var(--border)] p-8 text-center"><h2 className="text-lg font-semibold">No evidence-review items</h2><p className="mt-2 text-sm text-[var(--muted)]">{model.emptyState}</p></section>}

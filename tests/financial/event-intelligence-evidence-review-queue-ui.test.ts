@@ -59,6 +59,8 @@ describe("Evidence review queue UI boundary", () => {
 
   it("renders synthetic candidate statuses, correction and retraction as plain text", () => {
     const html = render(model);
+    expect(html).toContain('class="flex flex-wrap items-start justify-between gap-3"');
+    expect(html).not.toContain("flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between");
     expect(html).toContain("Issuer mapping review");
     expect(html).toContain("Blocked by rights approval");
     expect(html).toContain("Correction material present");

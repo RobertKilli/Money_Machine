@@ -28,6 +28,7 @@ export default async function OfflineEvidenceReviewDemoPage() {
           return <a key={scenario.key} href={`#offline-demo-${scenario.key}`} className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--panel)] p-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">
             <span className="block text-sm font-semibold">{scenario.label}</span>
             <span className="mt-2 block text-xs text-[var(--muted)]">{item ? `${item.statusLabel} · ${item.priorityLabel}` : "Ingen review-rad"}</span>
+            {item?.historical && <span className="mt-2 inline-block rounded border border-sky-300/50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide">Historical snapshot</span>}
             {item && <span className="mt-2 block break-words text-xs leading-5 text-[var(--muted)]">{item.reasonLabels.join(" · ")}</span>}
           </a>;
         })}

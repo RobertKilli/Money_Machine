@@ -67,7 +67,11 @@ describe("offline evidence-review demo composition and presentation", () => {
     expect(html).toContain("ISSUER_MAPPING_REVIEW");
     expect(html).toContain("RIGHTS_APPROVAL_REVIEW");
     expect(html).toContain("CORRECTION_LINEAGE_REVIEW");
+    expect(html).toContain("flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between");
     expect(html).toContain("Scenariooversikt");
+    const overview = html.match(/<nav aria-label="Scenariooversikt"[\s\S]*?<\/nav>/)?.[0];
+    expect(overview).toBeDefined();
+    expect(overview?.match(/Historical snapshot/g)).toHaveLength(3);
     expect(html).toContain("Hva mangler?");
     expect(html).toContain("Hva må undersøkes videre?");
     expect(html).toContain("Veiledende neste handling:");
@@ -84,8 +88,8 @@ describe("offline evidence-review demo composition and presentation", () => {
     for (const [, references] of html.matchAll(/\saria-labelledby="([^"]+)"/g)) {
       for (const reference of references.split(/\s+/)) expect(ids).toContain(reference);
     }
-    expect(html).not.toContain("Approve rights");
-    expect(html).not.toMatch(/<(?:button|form)\b/i);
+    const actionControls = [...html.matchAll(/<button\b[\s\S]*?<\/button>/gi), ...html.matchAll(/<input\b[^>]*>/gi)].map(([markup]) => markup).join(" ");
+    expect(actionControls).not.toMatch(/approve|complete review|resolve rights|trading/i);
     expect(html).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl|offline-demo-mapping/);
   });
 });
