@@ -113,7 +113,7 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
   const sectionId = (name: string) => idPrefix ? `queue-${idPrefix}-${name}` : name;
 
   return <Root className={presentation === "SYNTHETIC_OFFLINE_DEMO" ? "w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8" : "mx-auto min-h-screen w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8"}>
-    <header className="mb-8 flex flex-wrap items-start justify-between gap-5 border-b border-[var(--border)] pb-6">
+    {presentation === "DEFAULT" && <header className="mb-8 flex flex-wrap items-start justify-between gap-5 border-b border-[var(--border)] pb-6">
       <div className="min-w-0 max-w-3xl">
         <p className="text-xs font-semibold tracking-[0.2em] text-[var(--accent)]">MONEY MACHINE / INTELLIGENCE</p>
         <h1 className="mt-3 break-words text-3xl font-semibold tracking-tight sm:text-4xl">Evidence review queue</h1>
@@ -121,28 +121,25 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
       </div>
       <div className="flex min-w-0 flex-col items-start gap-3">
         <nav aria-label="Workspace navigation"><Link href="/" className="rounded px-1 py-1 text-sm text-[var(--muted)] underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Home</Link></nav>
-        {presentation === "SYNTHETIC_OFFLINE_DEMO" ? <div className="flex flex-col items-start gap-2" aria-label="Demo status">
-          <span className="rounded-full border border-amber-300/70 bg-amber-300/10 px-3 py-1.5 text-xs font-bold tracking-wide">SYNTETISK OFFLINE-DEMO</span>
-          <span className="max-w-56 text-xs leading-5 text-[var(--muted)]">Ingen live data eller godkjente events</span>
-        </div> : <div className="flex flex-col items-start gap-2" aria-label="Production status">
+        <div className="flex flex-col items-start gap-2" aria-label="Production status">
           <span className="rounded-full border border-sky-300/60 bg-sky-300/10 px-3 py-1.5 text-xs font-bold tracking-wide">DISCOVERY ONLY</span>
           <span className="rounded-full border border-amber-300/70 bg-amber-300/10 px-3 py-1.5 text-xs font-bold tracking-wide">ACQUISITION BLOCKED</span>
-        </div>}
+        </div>
       </div>
-    </header>
+    </header>}
 
-    <section aria-labelledby={sectionId("verification-heading")} className="mb-8 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 sm:p-6">
+    {presentation === "DEFAULT" && <section aria-labelledby={sectionId("verification-heading")} className="mb-8 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">Evidence path</p><h2 id={sectionId("verification-heading")} className="mt-2 text-lg font-semibold">Review before any authority decision</h2></div><p className="max-w-xl text-sm leading-6 text-[var(--muted)]">Issuer and asset mapping, primary-source retrieval, lifecycle review and corroboration remain separate required steps.</p></div>
       <ol className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         {["Discovery", "Issuer mapping", "Asset mapping", "Primary source", "Correction review", "Corroboration", "Separate authority policy"].map((label, i) => <li key={label} className={`min-w-0 rounded-lg border p-3 text-sm ${i === 0 ? "border-sky-300/60 bg-sky-300/10" : "border-[var(--border)]"}`}><span className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">{i === 0 ? "Current" : "Pending"}</span><span className="mt-1 block break-words font-medium">{label}</span></li>)}
       </ol>
       <p className="mt-4 text-xs leading-5 text-[var(--muted)]">Discovery, issuer disclosure and a filed claim do not by themselves establish underlying truth, completion, corroboration, recommendation or trading eligibility.</p>
-    </section>
+    </section>}
 
-    <section aria-label="Queue overview" className="space-y-4">
+    {presentation === "DEFAULT" && <section aria-label="Queue overview" className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">Queue snapshot</p><h2 className="mt-1 text-xl font-semibold">Review workload</h2></div><p className="text-xs text-[var(--muted)]">{model.generatedForAsOf ? <>Cutoff (UTC): <time dateTime={model.generatedForAsOf}>{model.generatedForAsOf}</time></> : "No evaluated snapshot is available."}</p></div>
       <Summary model={model} />
-    </section>
+    </section>}
 
     {model.state === "BLOCKED" && <section role="status" aria-labelledby={sectionId("blocked-heading")} className="mt-8 rounded-2xl border border-amber-300/60 bg-amber-300/10 p-6 sm:p-8">
       <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-100">Production queue unavailable</p><h2 id={sectionId("blocked-heading")} className="mt-2 text-xl font-semibold">Acquisition and queue projection are blocked</h2>
@@ -168,6 +165,6 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
 
     {model.state === "EMPTY" && <section role="status" className="mt-8 rounded-2xl border border-[var(--border)] p-8 text-center"><h2 className="text-lg font-semibold">No evidence-review items</h2><p className="mt-2 text-sm text-[var(--muted)]">{model.emptyState}</p></section>}
 
-    <footer className="mt-10 border-t border-[var(--border)] pt-5 text-xs leading-5 text-[var(--muted)]">This workspace is not an event-authority, recommendation, signal or trading interface. A queue item records review work only; it does not verify its underlying claim.</footer>
+    {presentation === "DEFAULT" && <footer className="mt-10 border-t border-[var(--border)] pt-5 text-xs leading-5 text-[var(--muted)]">This workspace is not an event-authority, recommendation, signal or trading interface. A queue item records review work only; it does not verify its underlying claim.</footer>}
   </Root>;
 }

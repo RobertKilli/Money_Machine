@@ -14,6 +14,7 @@ type DemoScenario = Readonly<{
   key: "issuer-mapping" | "rights-blocked" | "unresolved-correction";
   label: string;
   description: string;
+  reviewGuidance: Readonly<{ why: string; missing: string; investigate: string }>;
   model: EvidenceReviewQueueViewModel;
 }>;
 
@@ -134,6 +135,11 @@ export async function loadEventIntelligenceOfflineReviewDemo(): Promise<OfflineR
       key: "issuer-mapping" as const,
       label: "Åpen issuer-mapping-review",
       description: "Syntetisk aggregator-kandidat; mapping mangler og kilden er fortsatt bare discovery-materiale.",
+      reviewGuidance: {
+        why: "Kandidaten nevner et selskap og Bitcoin, men omtalen er bare discovery-materiale.",
+        missing: "Issuer- og asset-koblingene er ikke verifisert. OPEN betyr at raden er tilgjengelig for review, ikke at koblingene er godkjent.",
+        investigate: "Undersøk om omtalt issuer og asset kan knyttes til verifiserte identiteter og kildemateriale.",
+      },
       record: newsRecord(discovery.NEWS_DISCOVERY_VERSION, { suffix: "mapping", sourceType: "NEWS_AGGREGATOR", jurisdiction: "US", category: "CORPORATE_CRYPTO_PURCHASE_INTENT", headline: "Synthetic Demo Company considers a Bitcoin purchase" }),
       flags: { issuerMapped: false, assetMapped: false, primaryAvailable: false, qualificationComplete: false, rightsApproved: true, correctionPresent: false },
       eventHint: "PURCHASE_INTENT" as const,
@@ -142,6 +148,11 @@ export async function loadEventIntelligenceOfflineReviewDemo(): Promise<OfflineR
       key: "rights-blocked" as const,
       label: "Blokkert: rights-gjennomgang",
       description: "Syntetisk issuer-attributed fixture med manglende rights approval; dette er en blocker, ikke en godkjenningshandling.",
+      reviewGuidance: {
+        why: "Kandidaten er blokkert fordi kildens brukstillatelse ikke er godkjent i dette scenarioet.",
+        missing: "Rights approval mangler; neste handling beskriver nødvendig avklaring, ikke en godkjenning i demoen.",
+        investigate: "Undersøk tillatt kildebruk og nødvendig godkjenning uten å behandle denne visningen som authority.",
+      },
       record: newsRecord(discovery.NEWS_DISCOVERY_VERSION, { suffix: "rights", sourceType: "ISSUER_IR", jurisdiction: "US", category: "CORPORATE_CRYPTO_PURCHASE_INTENT", headline: "Synthetic Demo Company reviews a Bitcoin purchase" }),
       flags: { issuerMapped: true, assetMapped: true, primaryAvailable: true, qualificationComplete: true, rightsApproved: false, correctionPresent: false },
       eventHint: "PURCHASE_INTENT" as const,
@@ -150,6 +161,11 @@ export async function loadEventIntelligenceOfflineReviewDemo(): Promise<OfflineR
       key: "unresolved-correction" as const,
       label: "Uavklart correction – lineage krever gjennomgang",
       description: "Syntetisk correction-melding uten løst lineage; ingen retract- eller claim-authority påstås.",
+      reviewGuidance: {
+        why: "Meldingen rapporterer en correction som krever lineage-review.",
+        missing: "Lineage er ikke løst, og meldingen beviser ikke en autentisk lifecycle-relasjon til et tidligere claim.",
+        investigate: "Undersøk hvilket tidligere materiale meldingen viser til; vurder raden som historical ved den faste cutoffen.",
+      },
       record: newsRecord(discovery.NEWS_DISCOVERY_VERSION, { suffix: "correction", sourceType: "ISSUER_IR", jurisdiction: "US", category: "CORRECTION_OR_RETRACTION", headline: "Synthetic Demo Company corrects an earlier notice" }),
       flags: { issuerMapped: true, assetMapped: true, primaryAvailable: true, qualificationComplete: true, rightsApproved: true, correctionPresent: true },
       eventHint: "CORRECTION_AMENDMENT" as const,
@@ -174,6 +190,7 @@ export async function loadEventIntelligenceOfflineReviewDemo(): Promise<OfflineR
       key: specification.key,
       label: specification.label,
       description: specification.description,
+      reviewGuidance: Object.freeze(specification.reviewGuidance),
       model: composed.composition.viewModel,
     }));
   }
