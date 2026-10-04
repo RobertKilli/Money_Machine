@@ -1,0 +1,28 @@
+{
+  "contractVersion": "event-intelligence-evidence-review-queue-snapshot-producer-production/v1",
+  "producerActivation": "BLOCKED",
+  "selectedProducer": null,
+  "selectedAuthorityStrategy": null,
+  "activeProducerRegistry": [],
+  "activeScopeRegistry": [],
+  "activeProvenanceRegistry": [],
+  "approvals": {
+    "producer": "NOT_APPROVED",
+    "rights": "NOT_APPROVED",
+    "sourceAcquisition": "NOT_APPROVED",
+    "processing": "NOT_APPROVED",
+    "rawAndReferenceStorage": "NOT_APPROVED",
+    "derivedStorage": "NOT_APPROVED",
+    "retention": "NOT_APPROVED",
+    "deletion": "NOT_APPROVED",
+    "redistribution": "NOT_APPROVED",
+    "commercialUse": "NOT_APPROVED",
+    "accessAuthorization": "NOT_APPROVED"
+  },
+  "persistence": "BLOCKED",
+  "readPath": "BLOCKED",
+  "currentSelection": "BLOCKED",
+  "authorityUpgrade": "UNSUPPORTED",
+  "signal": "BLOCKED",
+  "trading": "BLOCKED"
+}
