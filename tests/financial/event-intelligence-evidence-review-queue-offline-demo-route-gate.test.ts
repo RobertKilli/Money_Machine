@@ -17,7 +17,21 @@ afterEach(() => {
 describe("offline demo route environment boundary", () => {
   it.each(["production", "test", "", "staging", undefined])("returns not-found before calling the loader when NODE_ENV is %s", async environment => {
     vi.stubEnv("NODE_ENV", environment);
-    await expect(invokeRouteWithUntrustedProps({ searchParams: Promise.resolve({ environment: "development" }) })).rejects.toThrow("MOCK_NOT_FOUND");
+    await expect(invokeRouteWithUntrustedProps({ searchParams: Promise.resolve({ scenario: "issuer-mapping" }) })).rejects.toThrow("MOCK_NOT_FOUND");
+    expect(notFoundSpy).toHaveBeenCalledOnce();
+    expect(loaderSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([{ value: "unknown" }, { value: "" }, { value: ["rights", "correction"] }])("rejects an invalid scenario selection before loading the demo: $value", async ({ value: scenario }) => {
+    vi.stubEnv("NODE_ENV", "development");
+    await expect(invokeRouteWithUntrustedProps({ searchParams: Promise.resolve({ scenario }) })).rejects.toThrow("MOCK_NOT_FOUND");
+    expect(notFoundSpy).toHaveBeenCalledOnce();
+    expect(loaderSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([{ value: "unknown" }, { value: "" }, { value: ["rights", "correction"] }])("keeps the environment gate ahead of invalid selection: $value", async ({ value: scenario }) => {
+    vi.stubEnv("NODE_ENV", "test");
+    await expect(invokeRouteWithUntrustedProps({ searchParams: Promise.resolve({ scenario }) })).rejects.toThrow("MOCK_NOT_FOUND");
     expect(notFoundSpy).toHaveBeenCalledOnce();
     expect(loaderSpy).not.toHaveBeenCalled();
   });

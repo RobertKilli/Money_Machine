@@ -128,4 +128,70 @@ describe("offline evidence-review demo composition and presentation", () => {
     expect(sourceDetails.join(" ")).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl|originBindings|fingerprint|queueSet/i);
     expect(html).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl/);
   });
+
+  it("shows all scenarios by default with a fixed navigation link for each one", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const { default: page } = await import("@/app/intelligence/events/review/offline-demo/page");
+    const html = renderToStaticMarkup(await page());
+
+    expect(html.match(/id="offline-demo-(?:issuer-mapping|rights-blocked|unresolved-correction)"/g)).toHaveLength(3);
+    expect(html).toContain('href="/intelligence/events/review/offline-demo?scenario=issuer-mapping"');
+    expect(html).toContain('href="/intelligence/events/review/offline-demo?scenario=rights"');
+    expect(html).toContain('href="/intelligence/events/review/offline-demo?scenario=correction"');
+    expect(html).not.toContain("Vis alle scenarioer");
+
+    const overview = html.match(/<nav aria-label="Scenariooversikt"[\s\S]*?<\/nav>/)?.[0];
+    expect(overview).toContain("Open review");
+    expect(overview).toContain("Mapping review required");
+    expect(overview).toContain("Issuer mapping is missing");
+    expect(overview).toContain("Blocked by rights approval");
+    expect(overview).toContain("Required source-use approval is missing");
+    expect(overview).toContain("Urgent correction review");
+    expect(overview).toContain("Correction lineage is unresolved");
+    expect(overview).toContain("Historical snapshot");
+  });
+
+  it.each([
+    ["issuer-mapping", "issuer-mapping", "offline-demo-mapping", "ISSUER_MAPPING_REVIEW"],
+    ["rights", "rights-blocked", "offline-demo-rights", "RIGHTS_APPROVAL_REVIEW"],
+    ["correction", "unresolved-correction", "offline-demo-correction", "CORRECTION_LINEAGE_REVIEW"],
+  ] as const)("navigates to only the %s presentation scenario while retaining the complete overview", async (selection, scenarioKey, fixtureId, reviewType) => {
+    vi.stubEnv("NODE_ENV", "development");
+    const { default: page } = await import("@/app/intelligence/events/review/offline-demo/page");
+    const html = renderToStaticMarkup(await page({ searchParams: Promise.resolve({ scenario: selection }) }));
+
+    expect(html.match(/id="offline-demo-(?:issuer-mapping|rights-blocked|unresolved-correction)"/g)).toEqual([`id="offline-demo-${scenarioKey}"`]);
+    expect(html.match(/<details aria-label="Synthetic source context"/g)).toHaveLength(1);
+    expect(html).toContain(fixtureId);
+    expect(html).toContain(`id="queue-${scenarioKey}-status"`);
+    expect(html).toContain(reviewType);
+    expect(html).toContain("Valgt scenario:");
+    expect(html).toContain('href="/intelligence/events/review/offline-demo"');
+    expect(html).toContain("Vis alle scenarioer");
+    expect(html).toContain(`aria-current="page"`);
+    expect(html).toContain(`href="/intelligence/events/review/offline-demo?scenario=${selection}"`);
+    expect(html).toContain("2026-10-03T12:00:00.000Z");
+    const overview = html.match(/<nav aria-label="Scenariooversikt"[\s\S]*?<\/nav>/)?.[0];
+    expect(overview).toContain("Open review");
+    expect(overview).toContain("Issuer mapping is missing");
+    expect(overview).toContain("Blocked by rights approval");
+    expect(overview).toContain("Required source-use approval is missing");
+    expect(overview).toContain("Urgent correction review");
+    expect(overview).toContain("Correction lineage is unresolved");
+    expect(overview).toContain("Historical snapshot");
+    expect(overview).toMatch(new RegExp(`<a aria-current="page"[^>]*href="/intelligence/events/review/offline-demo\\?scenario=${selection}"`));
+    expect(html).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl|originBindings|fingerprint|queueSet/i);
+    expect(html).not.toMatch(/<button\b|<form\b/i);
+  });
+
+  it("keeps the standard review route on its existing blocked production view", async () => {
+    const { default: reviewPage } = await import("@/app/intelligence/events/review/page");
+    const html = renderToStaticMarkup(reviewPage());
+
+    expect(html).toContain("Production queue unavailable");
+    expect(html).toContain("No provider stack is selected and no persisted read model is available");
+    expect(html).not.toContain("SYNTETISK OFFLINE-DEMO");
+    expect(html).not.toContain("offline-demo-mapping");
+    expect(loadEvidenceReviewQueueViewModel()).toMatchObject({ state: "BLOCKED", items: [] });
+  });
 });
