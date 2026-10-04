@@ -39,7 +39,7 @@ There is no direct pipeline gap between the existing domain APIs. The missing pi
 Use three fixtures at one fixed cutoff. Build each candidate with the public synthetic factory and build the corresponding routing material explicitly; pass all entries to one call to `composeEventIntelligenceEvidenceReviewQueue`.
 
 1. **Routine mapping review:** an aggregator discovery candidate for a synthetic purchase-intent headline, with `issuerMapped: false`. The existing composition test demonstrates that this can produce an `ISSUER_MAPPING_REVIEW` item. It shows a source category and a clear next action without implying the aggregator is primary evidence.
-2. **Blocked jurisdiction or rights case:** a second, distinct synthetic candidate with unknown jurisdiction (or, alternatively, a rights failure). Existing composition tests demonstrate a blocked jurisdiction/rights result and its reason. Use only one variant to keep the demo short.
+2. **Blocked jurisdiction or rights case:** a second, distinct synthetic candidate with unknown jurisdiction (or, alternatively, a rights failure). Existing composition tests demonstrate a blocked jurisdiction/rights result and its reason. Use only one variant to keep the demo short. A rights case is a displayed `RIGHTS_APPROVAL_REVIEW` blocker and next action, not an interactive approval workflow or an approval capability.
 3. **Unresolved correction:** a synthetic record categorized `CORRECTION_OR_RETRACTION` with no accepted lifecycle resolution, bound to the same cutoff. Existing tests show unresolved correction remains an urgent correction-review item even alongside duplicate/no-action work. Present it as a reported correction requiring lineage review, not as a verified correction or retraction.
 
 These cases exercise the useful path and two distinct review reasons while avoiding the unresolved precedence collisions. Do not add a duplicate/conflict fixture to the first demo: it is optional, and its visible winner can depend on the known classifier/mapping disagreements. A later explicitly labeled scenario may demonstrate current duplicate behavior without claiming the contract mismatch is resolved.
@@ -50,7 +50,7 @@ The workspace already displays a safe title/type, status, priority, bounded reas
 
 **Slice:** `EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_OFFLINE_DEMO_PRESENTATION`.
 
-Add an explicit development-only route, for example `/intelligence/events/review/demo`, implemented as a server page that constructs a small fixed set of synthetic records, calls `createSyntheticNewsDiscoveryCandidate`, constructs candidate-bound synthetic routing inputs, and invokes the existing composition once. If `NODE_ENV` is production, the demo route should return not-found; it must not alter `/intelligence/events/review` or its blocked loader. Reuse `EvidenceReviewQueueWorkspace` with a small presentation-mode prop or wrapper that makes “synthetic offline demo” prominent and avoids describing the demo items as production results. Keep fixture creation server-side and pass only the existing serializable view model plus safe demo labels to the client.
+Add an explicit development-only route, for example `/intelligence/events/review/demo`, implemented as a server page that constructs a small fixed set of synthetic records, calls `createSyntheticNewsDiscoveryCandidate`, constructs candidate-bound synthetic routing inputs, and invokes the existing composition once. Permit access only when `NODE_ENV === "development"`; for `production`, `test`, or any other value, the route must return not-found. A hidden link or omitted navigation is not an access boundary. The route must not alter `/intelligence/events/review` or its blocked loader. Reuse `EvidenceReviewQueueWorkspace` with a small presentation-mode prop or wrapper that makes “synthetic offline demo” prominent and avoids describing the demo items as production results. Keep fixture creation server-side and pass only the existing serializable view model plus safe demo labels to the client.
 
 Likely files:
 
@@ -61,11 +61,11 @@ Likely files:
 
 Acceptance criteria:
 
-- The demo route works without network, provider, database or environment credentials, uses one explicit cutoff and only factory-created authentic synthetic candidates, and produces 3 visible items through the existing composition API.
+- The demo route returns not-found unless the runtime environment is explicitly `development`; direct URL access in `test`, `production`, and other environments is covered by tests. It works without network, provider, database or environment credentials, uses one explicit cutoff and only factory-created authentic synthetic candidates, and produces 3 visible items through the existing composition API.
 - The three rows show the expected open mapping-review, blocked jurisdiction/rights, and urgent unresolved-correction cases with bounded reasons, next actions and the same displayed cutoff.
 - The page visibly states that records and routing facts are synthetic, offline and non-authoritative; it makes no event-approval, milestone-completion, investment, signal or trading claim.
 - No candidate/routing/queue authenticity object crosses into client code. Only the existing serializable view model and fixed display labels cross the server/client boundary.
-- `/intelligence/events/review` continues to render the blocked production state; the demo is unavailable in production and is not imported by the production loader.
+- `/intelligence/events/review` continues to render the blocked production state; the demo route's explicit environment gate denies every non-development environment and it is not imported by the production loader.
 - No scope/codec/manifest format, persistence path, active registry, production configuration or authority status changes.
 
 No policy or issuer clarification is needed before this bounded demo. Its copy must state the limitations above; later production use still requires the currently missing applied source/lifecycle authority, milestone evidence and reviewer/issuer authorization, plus the unresolved queue/routing contract alignment.
