@@ -21,6 +21,31 @@ describe("offline evidence-review demo composition and presentation", () => {
     expect(first.scenarios.map(scenario => scenario.key)).toEqual(["issuer-mapping", "rights-blocked", "unresolved-correction"]);
 
     const [mapping, rights, correction] = first.scenarios;
+    expect(mapping?.sourceMaterial).toEqual({
+      sourceLabel: "Synthetic News Aggregator",
+      sourceType: "NEWS_AGGREGATOR",
+      fixtureId: "offline-demo-mapping",
+      receivedAt: "2026-10-01T09:00:01.000Z",
+      title: "Synthetic Demo Company considers a Bitcoin purchase",
+      summary: "Synthetic fixture for an offline review demonstration; no completed event is established.",
+      evidence: [
+        { label: "Publication time (UTC)", value: "2026-10-01T08:00:00.000Z" },
+        { label: "Discovery time (UTC)", value: "2026-10-01T09:00:00.000Z" },
+      ],
+      relevance: "The synthetic headline mentions an issuer and asset whose mapping remains unverified.",
+      synthetic: true,
+    });
+    expect(rights?.sourceMaterial).toMatchObject({ sourceType: "ISSUER_IR", fixtureId: "offline-demo-rights", synthetic: true });
+    expect(correction?.sourceMaterial).toMatchObject({
+      sourceType: "ISSUER_IR",
+      fixtureId: "offline-demo-correction",
+      summary: expect.stringMatching(/no underlying claim or lifecycle authority is established/i),
+      evidence: expect.arrayContaining([{ label: "Lifecycle relationship", value: "Unresolved; no authenticated relation is established" }]),
+      synthetic: true,
+    });
+    for (const scenario of first.scenarios) {
+      expect(Object.keys(scenario.sourceMaterial).sort()).toEqual(["evidence", "fixtureId", "receivedAt", "relevance", "sourceLabel", "sourceType", "summary", "synthetic", "title"]);
+    }
     expect(mapping?.model).toMatchObject({ state: "HAS_REVIEW_ITEMS", generatedForAsOf: CUTOFF, summary: { totalItems: 1, open: 1 } });
     expect(mapping?.model.items[0]).toMatchObject({ reviewType: "ISSUER_MAPPING_REVIEW", status: "OPEN", operationalPriority: "MAPPING_REQUIRED", evaluatedAsOf: CUTOFF });
     expect(mapping?.reviewGuidance).toMatchObject({
@@ -75,6 +100,13 @@ describe("offline evidence-review demo composition and presentation", () => {
     expect(html).toContain("Hva mangler?");
     expect(html).toContain("Hva må undersøkes videre?");
     expect(html).toContain("Veiledende neste handling:");
+    expect(html.match(/<details aria-label="Synthetic source context"/g)).toHaveLength(3);
+    expect(html.match(/View synthetic source context/g)).toHaveLength(3);
+    expect(html).toContain("Synthetic fixture material · read-only");
+    expect(html).toContain("Synthetic News Aggregator");
+    expect(html).toContain("Synthetic issuer investor-relations release");
+    expect(html).toContain("Synthetic issuer investor-relations correction notice");
+    expect(html).toContain("This fixture is not a source of truth or proof of approval, rights, or lifecycle relationships.");
     expect(html).toContain("Issuer- og asset-koblingene er ikke verifisert");
     expect(html).toContain("brukstillatelse ikke er godkjent");
     expect(html).toContain("Lineage er ikke løst");
@@ -90,6 +122,10 @@ describe("offline evidence-review demo composition and presentation", () => {
     }
     const actionControls = [...html.matchAll(/<button\b[\s\S]*?<\/button>/gi), ...html.matchAll(/<input\b[^>]*>/gi)].map(([markup]) => markup).join(" ");
     expect(actionControls).not.toMatch(/approve|complete review|resolve rights|trading/i);
-    expect(html).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl|offline-demo-mapping/);
+    const sourceDetails = [...html.matchAll(/<details aria-label="Synthetic source context"[\s\S]*?<\/details>/g)].map(([markup]) => markup);
+    expect(sourceDetails).toHaveLength(3);
+    expect(sourceDetails.join(" ")).not.toMatch(/<button\b|<form\b|<input\b|<select\b|<a\b/i);
+    expect(sourceDetails.join(" ")).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl|originBindings|fingerprint|queueSet/i);
+    expect(html).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl/);
   });
 });

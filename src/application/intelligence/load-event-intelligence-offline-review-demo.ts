@@ -10,11 +10,24 @@ const DISCOVERED_AT = "2026-10-01T09:00:00.000Z";
 const RECEIVED_AT = "2026-10-01T09:00:01.000Z";
 const RECORDED_AT = "2026-10-01T09:00:02.000Z";
 
+type SyntheticSourceMaterial = Readonly<{
+  sourceLabel: string;
+  sourceType: "NEWS_AGGREGATOR" | "ISSUER_IR";
+  fixtureId: string;
+  receivedAt: string;
+  title: string;
+  summary: string;
+  evidence: readonly Readonly<{ label: string; value: string }>[];
+  relevance: string;
+  synthetic: true;
+}>;
+
 type DemoScenario = Readonly<{
   key: "issuer-mapping" | "rights-blocked" | "unresolved-correction";
   label: string;
   description: string;
   reviewGuidance: Readonly<{ why: string; missing: string; investigate: string }>;
+  sourceMaterial: SyntheticSourceMaterial;
   model: EvidenceReviewQueueViewModel;
 }>;
 
@@ -140,6 +153,20 @@ export async function loadEventIntelligenceOfflineReviewDemo(): Promise<OfflineR
         missing: "Issuer- og asset-koblingene er ikke verifisert. OPEN betyr at raden er tilgjengelig for review, ikke at koblingene er godkjent.",
         investigate: "Undersøk om omtalt issuer og asset kan knyttes til verifiserte identiteter og kildemateriale.",
       },
+      sourceMaterial: {
+        sourceLabel: "Synthetic News Aggregator",
+        sourceType: "NEWS_AGGREGATOR",
+        fixtureId: "offline-demo-mapping",
+        receivedAt: RECEIVED_AT,
+        title: "Synthetic Demo Company considers a Bitcoin purchase",
+        summary: "Synthetic fixture for an offline review demonstration; no completed event is established.",
+        evidence: [
+          { label: "Publication time (UTC)", value: PUBLISHED_AT },
+          { label: "Discovery time (UTC)", value: DISCOVERED_AT },
+        ],
+        relevance: "The synthetic headline mentions an issuer and asset whose mapping remains unverified.",
+        synthetic: true,
+      } satisfies SyntheticSourceMaterial,
       record: newsRecord(discovery.NEWS_DISCOVERY_VERSION, { suffix: "mapping", sourceType: "NEWS_AGGREGATOR", jurisdiction: "US", category: "CORPORATE_CRYPTO_PURCHASE_INTENT", headline: "Synthetic Demo Company considers a Bitcoin purchase" }),
       flags: { issuerMapped: false, assetMapped: false, primaryAvailable: false, qualificationComplete: false, rightsApproved: true, correctionPresent: false },
       eventHint: "PURCHASE_INTENT" as const,
@@ -153,6 +180,20 @@ export async function loadEventIntelligenceOfflineReviewDemo(): Promise<OfflineR
         missing: "Rights approval mangler; neste handling beskriver nødvendig avklaring, ikke en godkjenning i demoen.",
         investigate: "Undersøk tillatt kildebruk og nødvendig godkjenning uten å behandle denne visningen som authority.",
       },
+      sourceMaterial: {
+        sourceLabel: "Synthetic issuer investor-relations release",
+        sourceType: "ISSUER_IR",
+        fixtureId: "offline-demo-rights",
+        receivedAt: RECEIVED_AT,
+        title: "Synthetic Demo Company reviews a Bitcoin purchase",
+        summary: "Synthetic issuer-attributed fixture for an offline review demonstration; no completed event is established.",
+        evidence: [
+          { label: "Publication time (UTC)", value: PUBLISHED_AT },
+          { label: "Discovery time (UTC)", value: DISCOVERED_AT },
+        ],
+        relevance: "This synthetic item is displayed beside the rights-review candidate; its content does not establish permission to use a source.",
+        synthetic: true,
+      } satisfies SyntheticSourceMaterial,
       record: newsRecord(discovery.NEWS_DISCOVERY_VERSION, { suffix: "rights", sourceType: "ISSUER_IR", jurisdiction: "US", category: "CORPORATE_CRYPTO_PURCHASE_INTENT", headline: "Synthetic Demo Company reviews a Bitcoin purchase" }),
       flags: { issuerMapped: true, assetMapped: true, primaryAvailable: true, qualificationComplete: true, rightsApproved: false, correctionPresent: false },
       eventHint: "PURCHASE_INTENT" as const,
@@ -166,6 +207,20 @@ export async function loadEventIntelligenceOfflineReviewDemo(): Promise<OfflineR
         missing: "Lineage er ikke løst, og meldingen beviser ikke en autentisk lifecycle-relasjon til et tidligere claim.",
         investigate: "Undersøk hvilket tidligere materiale meldingen viser til; vurder raden som historical ved den faste cutoffen.",
       },
+      sourceMaterial: {
+        sourceLabel: "Synthetic issuer investor-relations correction notice",
+        sourceType: "ISSUER_IR",
+        fixtureId: "offline-demo-correction",
+        receivedAt: RECEIVED_AT,
+        title: "Synthetic Demo Company corrects an earlier notice",
+        summary: "Synthetic correction notice; no underlying claim or lifecycle authority is established.",
+        evidence: [
+          { label: "Publication time (UTC)", value: PUBLISHED_AT },
+          { label: "Lifecycle relationship", value: "Unresolved; no authenticated relation is established" },
+        ],
+        relevance: "The notice is visible for correction-lineage review, but it does not prove which earlier claim it concerns.",
+        synthetic: true,
+      } satisfies SyntheticSourceMaterial,
       record: newsRecord(discovery.NEWS_DISCOVERY_VERSION, { suffix: "correction", sourceType: "ISSUER_IR", jurisdiction: "US", category: "CORRECTION_OR_RETRACTION", headline: "Synthetic Demo Company corrects an earlier notice" }),
       flags: { issuerMapped: true, assetMapped: true, primaryAvailable: true, qualificationComplete: true, rightsApproved: true, correctionPresent: true },
       eventHint: "CORRECTION_AMENDMENT" as const,
@@ -191,6 +246,10 @@ export async function loadEventIntelligenceOfflineReviewDemo(): Promise<OfflineR
       label: specification.label,
       description: specification.description,
       reviewGuidance: Object.freeze(specification.reviewGuidance),
+      sourceMaterial: Object.freeze({
+        ...specification.sourceMaterial,
+        evidence: Object.freeze(specification.sourceMaterial.evidence.map(entry => Object.freeze({ ...entry }))),
+      }),
       model: composed.composition.viewModel,
     }));
   }
