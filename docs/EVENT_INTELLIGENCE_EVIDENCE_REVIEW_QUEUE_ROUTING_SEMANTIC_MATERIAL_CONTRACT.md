@@ -53,6 +53,8 @@ The profile records the parent decision's declarations and actual evaluator beha
 
 These gaps block a claim of complete semantic identity until reconciled. The previously documented queue-only conflicts remain unchanged: parent `conflictActionOrder` says amount/currency before lifecycle while queue runtime is lifecycle-first, and parent `routingMappings` precedence differs from queue `classify` ordering. This slice does not edit the queue contract, its alignment fields, or its tests.
 
+The concrete recommended semantics and future versioned alignment plan for retraction and `eventRoutes.required` are recorded in [the routing normative semantics decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_ROUTING_NORMATIVE_SEMANTICS_DECISION.md). That decision does not change the declarations or evaluator described here.
+
 ## Limits
 
 Parser bounds are depth 12, 10,000 traversed values, 4,096 UTF-16 code units per string, 64 own properties per object, and 512 array elements. The complete fixed profile is measured by its test against these structural limits. There is no canonical serialization or byte limit in this slice.
