@@ -40,7 +40,8 @@ import {
   isAuthenticRoutingEvaluation,
   SOURCE_PORTFOLIO_DECISION_VERSION,
 } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
-import { isAuthenticNewsDiscoveryCandidate } from "@/domain/intelligence/event-intelligence-news-discovery";
+import { createSyntheticNewsDiscoveryCandidate, isAuthenticNewsDiscoveryCandidate } from "@/domain/intelligence/event-intelligence-news-discovery";
+import { syntheticNewsRecord } from "../fixtures/event-intelligence-news-discovery";
 
 const cutoff = "2026-10-03T00:00:00.000Z";
 const material = () => ({
@@ -110,6 +111,8 @@ function references(): EvidenceQueueProvenanceReference[] {
   ];
 }
 
+const hashValue = (value: number) => value.toString(16).padStart(64, "0");
+
 function manifest(snapshotDigest: string, scopeIdentity: string, refs: readonly EvidenceQueueProvenanceReference[] = []) {
   return {
     manifestContractVersion: EVIDENCE_REVIEW_QUEUE_SNAPSHOT_PROVENANCE_MANIFEST_VERSION,
@@ -174,8 +177,22 @@ describe("snapshot manifest local binding", () => {
     const { scope, encoded } = snapshot();
     expect(verifyEvidenceReviewQueueSnapshotManifestBinding(null, "bad", scope.identity, material(), null))
       .toEqual({ status: "INVALID", code: "SNAPSHOT_SCOPE_BINDING_REJECTED", bindingError: { status: "INVALID", code: "SNAPSHOT_CODEC_REJECTED", codecCode: "BYTE_INPUT_INVALID" } });
+    expect(verifyEvidenceReviewQueueSnapshotManifestBinding(encoded.canonicalBytes, encoded.sha256, `${scope.identity}\n`, material(), null))
+      .toEqual({ status: "INVALID", code: "SNAPSHOT_SCOPE_BINDING_REJECTED", bindingError: { status: "INVALID", code: "EXPECTED_SCOPE_INVALID", scopeCode: "SCOPE_IDENTITY_INVALID" } });
     expect(verifyEvidenceReviewQueueSnapshotManifestBinding(encoded.canonicalBytes, encoded.sha256, scope.identity, material(), null))
       .toEqual({ status: "INVALID", code: "MANIFEST_SYNTAX_REJECTED", manifestCode: "MANIFEST_SHAPE_INVALID" });
+  });
+
+  it("checks digest before scope and scope before correction cutoff", () => {
+    const { scope, encoded } = snapshot();
+    const bothRootMismatches = manifest("f".repeat(64), `eviqs1_${"b".repeat(64)}`);
+    expect(parseEvidenceReviewQueueSnapshotProvenanceManifest(bothRootMismatches).status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
+    expect(verify(encoded, scope, bothRootMismatches)).toEqual({ status: "INVALID", code: "MANIFEST_SNAPSHOT_DIGEST_MISMATCH" });
+
+    const wrongCutoff = { ...references()[4]!, evaluationAsOf: "2026-10-03T00:00:01.000Z" } as EvidenceQueueProvenanceReference;
+    const scopeAndCutoffMismatch = manifest(encoded.sha256, `eviqs1_${"b".repeat(64)}`, [wrongCutoff]);
+    expect(parseEvidenceReviewQueueSnapshotProvenanceManifest(scopeAndCutoffMismatch).status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
+    expect(verify(encoded, scope, scopeAndCutoffMismatch)).toEqual({ status: "INVALID", code: "MANIFEST_SNAPSHOT_SCOPE_MISMATCH" });
   });
 
   it("does not fall back when any runtime argument is omitted", () => {
@@ -214,10 +231,17 @@ describe("snapshot manifest local binding", () => {
     const refs = references();
     const matching = manifest(encoded.sha256, scope.identity, [refs[4]!, refs[0]!]);
     expect(verify(encoded, scope, matching).status).toBe("VERIFIED_LOCAL_MANIFEST_BINDING_NON_AUTHORITATIVE");
-    const laterCorrection = { ...refs[4]!, rootClaimIdentity: "c".repeat(64), selectedTerminalIdentity: "d".repeat(64), evaluationAsOf: "2026-10-03T00:00:01.000Z" } as EvidenceQueueProvenanceReference;
-    const mismatchAtEnd = manifest(encoded.sha256, scope.identity, [refs[0]!, laterCorrection]);
-    expect(parseEvidenceReviewQueueSnapshotProvenanceManifest(mismatchAtEnd).status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
-    expect(verify(encoded, scope, mismatchAtEnd)).toEqual({ status: "INVALID", code: "CORRECTION_CUTOFF_MISMATCH" });
+    for (const mismatchIndex of [0, 1, 2]) {
+      const corrections = [0, 1, 2].map(index => ({
+        ...refs[4]!,
+        rootClaimIdentity: hashValue(index + 1),
+        selectedTerminalIdentity: hashValue(index + 10),
+        evaluationAsOf: index === mismatchIndex ? "2026-10-03T00:00:01.000Z" : cutoff,
+      } as EvidenceQueueProvenanceReference));
+      const input = manifest(encoded.sha256, scope.identity, corrections);
+      expect(parseEvidenceReviewQueueSnapshotProvenanceManifest(input).status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
+      expect(verify(encoded, scope, input)).toEqual({ status: "INVALID", code: "CORRECTION_CUTOFF_MISMATCH" });
+    }
   });
 
   it("accepts other parser-valid inventories for the same binding without claiming manifest integrity", () => {
@@ -259,5 +283,27 @@ describe("snapshot manifest local binding", () => {
     const result = verify(encoded, scope, manifest(encoded.sha256, scope.identity, references().filter(ref => ref.family !== "CORRECTION_LINEAGE")));
     expect(result.status).toBe("VERIFIED_LOCAL_MANIFEST_BINDING_NON_AUTHORITATIVE");
     if (result.status === "VERIFIED_LOCAL_MANIFEST_BINDING_NON_AUTHORITATIVE") expect(result).not.toHaveProperty("correctionComplete");
+  });
+
+  it("does not accept prior success objects as snapshot bytes or manifest input", () => {
+    const { scope, encoded } = snapshot();
+    const priorSuccess = verify(encoded, scope, manifest(encoded.sha256, scope.identity));
+    expect(priorSuccess.status).toBe("VERIFIED_LOCAL_MANIFEST_BINDING_NON_AUTHORITATIVE");
+    expect(verifyEvidenceReviewQueueSnapshotManifestBinding(priorSuccess, encoded.sha256, scope.identity, material(), manifest(encoded.sha256, scope.identity)))
+      .toMatchObject({ status: "INVALID", code: "SNAPSHOT_SCOPE_BINDING_REJECTED", bindingError: { code: "SNAPSHOT_CODEC_REJECTED", codecCode: "BYTE_INPUT_INVALID" } });
+    expect(verify(encoded, scope, priorSuccess as unknown as ReturnType<typeof manifest>))
+      .toEqual({ status: "INVALID", code: "MANIFEST_SYNTAX_REJECTED", manifestCode: "MANIFEST_SHAPE_INVALID" });
+  });
+
+  it("exercises composition's module-local candidate authenticity gate with a shape-compatible clone", () => {
+    const authenticCandidate = createSyntheticNewsDiscoveryCandidate(syntheticNewsRecord(), cutoff);
+    expect(authenticCandidate).not.toBeNull();
+    expect(isAuthenticNewsDiscoveryCandidate(authenticCandidate)).toBe(true);
+    const shapeCompatibleCopy = { ...authenticCandidate! };
+    expect(isAuthenticNewsDiscoveryCandidate(shapeCompatibleCopy)).toBe(false);
+    expect(composeEventIntelligenceEvidenceReviewQueue({
+      evaluationAsOf: cutoff,
+      candidates: [{ candidate: shapeCompatibleCopy, routingMaterial: {} }],
+    })).toEqual({ status: "BLOCKED", code: "COMPOSITION_CANDIDATE_UNTRUSTED" });
   });
 });
