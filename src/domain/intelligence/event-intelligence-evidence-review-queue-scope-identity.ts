@@ -8,7 +8,9 @@ import { SOURCE_PORTFOLIO_DECISION_VERSION } from "./event-intelligence-source-p
 export const EVIDENCE_QUEUE_SCOPE_MATERIAL_VERSION = "event-intelligence-evidence-review-queue-scope-material/v1" as const;
 export const EVIDENCE_QUEUE_SCOPE_CANONICALIZATION_PROFILE = "event-intelligence-evidence-review-queue-scope-canonical-json/v1" as const;
 export const EVIDENCE_QUEUE_SCOPE_IDENTITY_DOMAIN = "event-intelligence-evidence-review-queue-snapshot-scope/v1\0" as const;
-export const EVIDENCE_QUEUE_SCOPE_IDENTITY_LIMITS = Object.freeze({ maxBytes: 16_384, maxStringCodeUnits: 256, maxSetMembers: 64, maxDepth: 6, maxNodes: 256 });
+// 18,264 is the reachable v1 maximum: all closed enums, 64 full-length asset
+// references, two 96-unit policy IDs and v9999. The domain prefix is excluded.
+export const EVIDENCE_QUEUE_SCOPE_IDENTITY_LIMITS = Object.freeze({ maxBytes: 18_264, maxStringCodeUnits: 256, maxSetMembers: 64, maxDepth: 6, maxNodes: 256 });
 
 export const EVIDENCE_QUEUE_SCOPE_PURPOSES = Object.freeze(["FORMAL_ISSUER_DISCLOSURE_REVIEW", "CRYPTO_TREASURY_DISCLOSURE_REVIEW"] as const);
 export const EVIDENCE_QUEUE_SCOPE_JURISDICTIONS = Object.freeze(["AU_ASX", "DUAL_LISTED", "GB_LSE", "UNKNOWN", "UNLISTED", "US_SEC"] as const);
