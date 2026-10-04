@@ -57,6 +57,11 @@ describe("offline evidence-review demo composition and presentation", () => {
     expect(html).toContain('id="queue-issuer-mapping-status"');
     expect(html).toContain('id="queue-rights-blocked-status"');
     expect(html).toContain('id="queue-unresolved-correction-status"');
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const [, references] of html.matchAll(/\saria-labelledby="([^"]+)"/g)) {
+      for (const reference of references.split(/\s+/)) expect(ids).toContain(reference);
+    }
     expect(html).not.toContain("Approve rights");
     expect(html).not.toMatch(/<(?:button|form)\b/i);
     expect(html).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl|offline-demo-mapping/);

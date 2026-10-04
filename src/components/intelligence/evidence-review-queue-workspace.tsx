@@ -51,13 +51,14 @@ function Summary({ model }: Props) {
   </dl>;
 }
 
-function QueueItem({ item }: { item: EvidenceReviewQueueViewModelItem }) {
+function QueueItem({ item, idPrefix }: { item: EvidenceReviewQueueViewModelItem; idPrefix?: string }) {
   const emphasis = item.retracted ? "border-rose-400/70 bg-rose-400/10" : item.correctionPresent ? "border-amber-300/70 bg-amber-300/10" : "border-[var(--border)] bg-[var(--panel)]";
-  return <article aria-labelledby={`queue-item-${item.publicKey}`} className={`min-w-0 rounded-2xl border p-5 sm:p-6 ${emphasis}`}>
+  const headingId = idPrefix ? `queue-${idPrefix}-item-${item.publicKey}` : `queue-item-${item.publicKey}`;
+  return <article aria-labelledby={headingId} className={`min-w-0 rounded-2xl border p-5 sm:p-6 ${emphasis}`}>
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
         <p className="break-words text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{item.typeLabel}</p>
-        <h3 id={`queue-item-${item.publicKey}`} className="mt-2 break-words text-lg font-semibold">{item.title}</h3>
+        <h3 id={headingId} className="mt-2 break-words text-lg font-semibold">{item.title}</h3>
       </div>
       <div className="flex max-w-full flex-wrap gap-2" role="group" aria-label="Item status and operational priority">
         <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs font-semibold">{item.statusLabel}</span>
@@ -109,6 +110,7 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
   const filtered = useMemo(() => filterEvidenceReviewItems(model.items, { status, priority, type, query }), [model.items, status, priority, type, query]);
   const Root = presentation === "SYNTHETIC_OFFLINE_DEMO" ? "div" : "main";
   const filterId = (name: string) => idPrefix ? `queue-${idPrefix}-${name}` : `queue-${name}`;
+  const sectionId = (name: string) => idPrefix ? `queue-${idPrefix}-${name}` : name;
 
   return <Root className={presentation === "SYNTHETIC_OFFLINE_DEMO" ? "w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8" : "mx-auto min-h-screen w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8"}>
     <header className="mb-8 flex flex-wrap items-start justify-between gap-5 border-b border-[var(--border)] pb-6">
@@ -129,8 +131,8 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
       </div>
     </header>
 
-    <section aria-labelledby="verification-heading" className="mb-8 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 sm:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">Evidence path</p><h2 id="verification-heading" className="mt-2 text-lg font-semibold">Review before any authority decision</h2></div><p className="max-w-xl text-sm leading-6 text-[var(--muted)]">Issuer and asset mapping, primary-source retrieval, lifecycle review and corroboration remain separate required steps.</p></div>
+    <section aria-labelledby={sectionId("verification-heading")} className="mb-8 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">Evidence path</p><h2 id={sectionId("verification-heading")} className="mt-2 text-lg font-semibold">Review before any authority decision</h2></div><p className="max-w-xl text-sm leading-6 text-[var(--muted)]">Issuer and asset mapping, primary-source retrieval, lifecycle review and corroboration remain separate required steps.</p></div>
       <ol className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         {["Discovery", "Issuer mapping", "Asset mapping", "Primary source", "Correction review", "Corroboration", "Separate authority policy"].map((label, i) => <li key={label} className={`min-w-0 rounded-lg border p-3 text-sm ${i === 0 ? "border-sky-300/60 bg-sky-300/10" : "border-[var(--border)]"}`}><span className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">{i === 0 ? "Current" : "Pending"}</span><span className="mt-1 block break-words font-medium">{label}</span></li>)}
       </ol>
@@ -142,15 +144,15 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
       <Summary model={model} />
     </section>
 
-    {model.state === "BLOCKED" && <section role="status" aria-labelledby="blocked-heading" className="mt-8 rounded-2xl border border-amber-300/60 bg-amber-300/10 p-6 sm:p-8">
-      <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-100">Production queue unavailable</p><h2 id="blocked-heading" className="mt-2 text-xl font-semibold">Acquisition and queue projection are blocked</h2>
+    {model.state === "BLOCKED" && <section role="status" aria-labelledby={sectionId("blocked-heading")} className="mt-8 rounded-2xl border border-amber-300/60 bg-amber-300/10 p-6 sm:p-8">
+      <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-100">Production queue unavailable</p><h2 id={sectionId("blocked-heading")} className="mt-2 text-xl font-semibold">Acquisition and queue projection are blocked</h2>
       <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--muted)]">No provider stack is selected and no persisted read model is available. No synthetic candidates are shown in production.</p>
       <ul className="mt-4 list-inside list-disc space-y-1 text-sm">{model.blockedReasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
       <p className="mt-5 text-sm leading-6">Before an event could be considered authoritative, a separately reviewed source must be retrieved, issuer and asset mappings resolved, corrections reconciled, and the corroboration and authority policies evaluated.</p>
     </section>}
 
-    {model.state === "HAS_REVIEW_ITEMS" && <section aria-labelledby="items-heading" className="mt-8">
-      <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">Candidates</p><h2 id="items-heading" className="mt-1 text-xl font-semibold">Evidence items</h2></div><p className="text-sm text-[var(--muted)]" aria-live="polite">{filtered.length} of {model.items.length} items shown</p></div>
+    {model.state === "HAS_REVIEW_ITEMS" && <section aria-labelledby={sectionId("items-heading")} className="mt-8">
+      <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">Candidates</p><h2 id={sectionId("items-heading")} className="mt-1 text-xl font-semibold">Evidence items</h2></div><p className="text-sm text-[var(--muted)]" aria-live="polite">{filtered.length} of {model.items.length} items shown</p></div>
       <fieldset className="mt-5 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4 sm:p-5">
         <legend className="px-2 text-sm font-semibold">Presentation filters</legend>
         <div className="grid min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -161,7 +163,7 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
         </div>
         <p className="mt-3 text-xs leading-5 text-[var(--muted)]">Filters change only what is shown. Corrections and retractions are included by default; queue status and source material are never changed.</p>
       </fieldset>
-      {filtered.length === 0 ? <div role="status" className="mt-5 rounded-2xl border border-[var(--border)] p-8 text-center"><h3 className="font-semibold">No items match these filters</h3><p className="mt-2 text-sm text-[var(--muted)]">Clear or change the presentation filters to view the available cutoff-bound snapshots.</p></div> : <div className="mt-5 space-y-4">{filtered.map(item => <QueueItem key={item.publicKey} item={item} />)}</div>}
+      {filtered.length === 0 ? <div role="status" className="mt-5 rounded-2xl border border-[var(--border)] p-8 text-center"><h3 className="font-semibold">No items match these filters</h3><p className="mt-2 text-sm text-[var(--muted)]">Clear or change the presentation filters to view the available cutoff-bound snapshots.</p></div> : <div className="mt-5 space-y-4">{filtered.map(item => <QueueItem key={item.publicKey} item={item} idPrefix={idPrefix} />)}</div>}
     </section>}
 
     {model.state === "EMPTY" && <section role="status" className="mt-8 rounded-2xl border border-[var(--border)] p-8 text-center"><h2 className="text-lg font-semibold">No evidence-review items</h2><p className="mt-2 text-sm text-[var(--muted)]">{model.emptyState}</p></section>}
