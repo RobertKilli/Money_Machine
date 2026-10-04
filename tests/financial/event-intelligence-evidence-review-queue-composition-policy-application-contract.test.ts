@@ -7,7 +7,7 @@ import {
   parseCompositionPolicyApplicationProductionConfig,
 } from "@/domain/intelligence/event-intelligence-evidence-review-queue-composition-policy-application-contract";
 import { EVENT_INTELLIGENCE_QUEUE_COMPOSITION_VERSION } from "@/application/intelligence/compose-event-intelligence-evidence-review-queue";
-import { EVIDENCE_QUEUE_SCOPE_CANONICALIZATION_PROFILE, EVIDENCE_QUEUE_SCOPE_MATERIAL_VERSION } from "@/domain/intelligence/event-intelligence-evidence-review-queue-scope-identity";
+import { EVIDENCE_QUEUE_SCOPE_CANONICALIZATION_PROFILE, EVIDENCE_QUEUE_SCOPE_EVENT_CATEGORIES, EVIDENCE_QUEUE_SCOPE_JURISDICTIONS, EVIDENCE_QUEUE_SCOPE_MATERIAL_VERSION } from "@/domain/intelligence/event-intelligence-evidence-review-queue-scope-identity";
 import { EVIDENCE_REVIEW_QUEUE_VERSION } from "@/domain/intelligence/event-intelligence-evidence-review-queue";
 import { SOURCE_PORTFOLIO_DECISION_VERSION } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
 
@@ -75,14 +75,87 @@ describe("composition policy application evidence contract", () => {
     expect(parseCompositionPolicyApplicationEvidence({ ...evidence(), evaluation: { ...evidence().evaluation, resultBinding: "TRUSTED" } }).status).toBe("INVALID");
   });
 
+  it("rejects mismatches in each scope dimension while honoring parent set semantics", () => {
+    const mutations: Array<(value: ReturnType<typeof scope>) => void> = [
+      value => { value.reviewPurpose = "CRYPTO_TREASURY_DISCLOSURE_REVIEW"; },
+      value => { value.jurisdictionUniverse = ["UNKNOWN"]; },
+      value => { value.eventRepresentationUniverse = ["TREASURY_POLICY"]; },
+      value => { value.assetRepresentationUniverse = ["asset-representation/v1/other"]; },
+      value => { value.issuerListingEligibilityPolicy.policyId = "issuer-listing-other"; },
+      value => { value.issuerListingEligibilityPolicy.version = "v2"; },
+      value => { value.issuerListingEligibilityPolicy.canonicalMaterialDigest = digest("e"); },
+      value => { value.sourcePortfolioPolicy.canonicalMaterialDigest = digest("e"); },
+      value => { value.routingPolicy.policyId = "event-routing-other"; },
+      value => { value.routingPolicy.version = "v2"; },
+      value => { value.routingPolicy.canonicalMaterialDigest = digest("e"); },
+      value => { value.queueContract.canonicalMaterialDigest = digest("e"); },
+      value => { value.accessClassification = "INTERNAL_GENERAL"; },
+    ];
+    for (const mutate of mutations) {
+      const input = evidence();
+      mutate(input.declaredAppliedScopeMaterial);
+      expect(parseCompositionPolicyApplicationEvidence(input).status).toBe("INVALID");
+    }
+    const reordered = evidence();
+    reordered.declaredAppliedScopeMaterial.jurisdictionUniverse.reverse();
+    reordered.declaredAppliedScopeMaterial.eventRepresentationUniverse.reverse();
+    expect(parseCompositionPolicyApplicationEvidence(reordered).status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
+    const badExpectation = evidence();
+    badExpectation.expectedScopeMaterial.reviewPurpose = "CRYPTO_TREASURY_DISCLOSURE_REVIEW";
+    const expectedIdentity = buildEvidenceReviewQueueScopeIdentity(badExpectation.expectedScopeMaterial);
+    if (expectedIdentity.status !== "VALID_SYNTAX_ONLY") throw new Error("alternate expected scope invalid");
+    badExpectation.scopeIdentity = expectedIdentity.identity;
+    expect(parseCompositionPolicyApplicationEvidence(badExpectation).status).toBe("INVALID");
+  });
+
+  it("accepts maximum valid scope material on both declaration sides within the combined walk budget", () => {
+    const maximum = scope();
+    maximum.jurisdictionUniverse = [...EVIDENCE_QUEUE_SCOPE_JURISDICTIONS];
+    maximum.eventRepresentationUniverse = [...EVIDENCE_QUEUE_SCOPE_EVENT_CATEGORIES];
+    maximum.assetRepresentationUniverse = Array.from({ length: 64 }, (_, index) => `asset-representation/v1/${String(index).padStart(2, "0")}${"a".repeat(230)}`);
+    maximum.issuerListingEligibilityPolicy.policyId = "a".repeat(96);
+    maximum.routingPolicy.policyId = "a".repeat(96);
+    maximum.issuerListingEligibilityPolicy.version = "v9999";
+    maximum.routingPolicy.version = "v9999";
+    const identity = buildEvidenceReviewQueueScopeIdentity(maximum);
+    expect(identity.status).toBe("VALID_SYNTAX_ONLY");
+    if (identity.status !== "VALID_SYNTAX_ONLY") throw new Error("maximum scope fixture invalid");
+    const input = {
+      contractVersion: COMPOSITION_POLICY_APPLICATION_EVIDENCE_VERSION,
+      scopeIdentity: identity.identity,
+      expectedScopeMaterial: maximum,
+      declaredAppliedScopeMaterial: clone(maximum),
+      evaluation: { compositionContractVersion: EVENT_INTELLIGENCE_QUEUE_COMPOSITION_VERSION, evaluationAsOf: "2026-10-04T12:30:00.000Z", resultBinding: "MISSING_RUNTIME_RESULT_BINDING" },
+    };
+    const parsed = parseCompositionPolicyApplicationEvidence(input);
+    expect(parsed.status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
+  });
+
   it("does not invoke getters, accepts no sparse arrays, and isolates parsed output", () => {
     let calls = 0;
     const getter = Object.defineProperty(evidence(), "scopeIdentity", { enumerable: true, get: () => { calls++; return "eviqs1_" + digest("0"); } });
     expect(parseCompositionPolicyApplicationEvidence(getter).status).toBe("INVALID");
     expect(calls).toBe(0);
+    const symbolKey = evidence() as ReturnType<typeof evidence> & { [key: symbol]: unknown };
+    Object.defineProperty(symbolKey, Symbol("extra"), { value: 1, enumerable: true });
+    expect(parseCompositionPolicyApplicationEvidence(symbolKey).status).toBe("INVALID");
+    const nonEnumerable = evidence();
+    Object.defineProperty(nonEnumerable, "extra", { value: 1, enumerable: false });
+    expect(parseCompositionPolicyApplicationEvidence(nonEnumerable).status).toBe("INVALID");
+    expect(parseCompositionPolicyApplicationEvidence(Object.assign(Object.create({ inherited: true }), evidence())).status).toBe("INVALID");
     const sparse = evidence();
     sparse.expectedScopeMaterial.jurisdictionUniverse = new Array(1) as unknown as string[];
     expect(parseCompositionPolicyApplicationEvidence(sparse).status).toBe("INVALID");
+    const oversized = evidence();
+    oversized.evaluation.evaluationAsOf = "x".repeat(257);
+    expect(parseCompositionPolicyApplicationEvidence(oversized).status).toBe("INVALID");
+    const sharedScope = scope();
+    const sharedIdentity = buildEvidenceReviewQueueScopeIdentity(sharedScope);
+    if (sharedIdentity.status !== "VALID_SYNTAX_ONLY") throw new Error("shared fixture invalid");
+    expect(parseCompositionPolicyApplicationEvidence({ ...evidence(), scopeIdentity: sharedIdentity.identity, expectedScopeMaterial: sharedScope, declaredAppliedScopeMaterial: sharedScope }).status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
+    const cutoffChanged = evidence();
+    cutoffChanged.evaluation.evaluationAsOf = "2026-10-05T12:30:00.000Z";
+    expect(parseCompositionPolicyApplicationEvidence(cutoffChanged).status).toBe("VALID_SYNTAX_ONLY_NON_AUTHORITATIVE");
     const input = evidence();
     const result = parseCompositionPolicyApplicationEvidence(input);
     input.expectedScopeMaterial.assetRepresentationUniverse[0] = "asset-representation/v1/changed";
@@ -116,6 +189,7 @@ describe("composition policy application blocked config", () => {
     expect(parseCompositionPolicyApplicationProductionConfig({ ...clone(config), applicationEvidenceActivation: "ACTIVE" }).status).toBe("INVALID");
     expect(parseCompositionPolicyApplicationProductionConfig({ ...clone(config), selectedApplicationStrategy: "strategy/v1" }).status).toBe("INVALID");
     expect(parseCompositionPolicyApplicationProductionConfig({ ...clone(config), selectedAuthorityStrategy: "authority/v1" }).status).toBe("INVALID");
+    expect(parseCompositionPolicyApplicationProductionConfig({ ...clone(config), contractVersion: "event-intelligence-evidence-review-queue-composition-policy-application-production/v2" }).status).toBe("INVALID");
     expect(parseCompositionPolicyApplicationProductionConfig({ ...clone(config), activeApplicationRegistry: ["registry"] }).status).toBe("INVALID");
     expect(parseCompositionPolicyApplicationProductionConfig({ ...clone(config), activeScopeRegistry: ["scope"] }).status).toBe("INVALID");
     expect(parseCompositionPolicyApplicationProductionConfig({ ...clone(config), activeProducerRegistry: ["producer"] }).status).toBe("INVALID");
