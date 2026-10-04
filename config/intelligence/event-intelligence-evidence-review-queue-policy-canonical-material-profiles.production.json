@@ -1,0 +1,26 @@
+{
+  "contractVersion": "event-intelligence-evidence-review-queue-policy-canonical-material-profiles-production/v1",
+  "selectedMaterialVerificationStrategy": null,
+  "selectedPolicyResolver": null,
+  "activeProfileRegistry": [],
+  "activePolicyRegistry": [],
+  "activeProducerRegistry": [],
+  "contentVerification": "BLOCKED",
+  "applicationEvidence": "BLOCKED",
+  "producer": "BLOCKED",
+  "approvals": {
+    "policyContent": "NOT_APPROVED",
+    "applicationEvidence": "NOT_APPROVED",
+    "producer": "NOT_APPROVED",
+    "rights": "NOT_APPROVED",
+    "retention": "NOT_APPROVED",
+    "deletion": "NOT_APPROVED",
+    "accessAuthorization": "NOT_APPROVED"
+  },
+  "persistence": "BLOCKED",
+  "storageRead": "BLOCKED",
+  "currentSelection": "BLOCKED",
+  "authorityUpgrade": "UNSUPPORTED",
+  "signal": "BLOCKED",
+  "trading": "BLOCKED"
+}
