@@ -77,6 +77,8 @@ describe("routing semantic material", () => {
       discoveryOriginSet: DISCOVERY_ORIGIN_SET_VERSION,
     });
     expect(ROUTING_SEMANTIC_MATERIAL.inputContract.sourceFamilies.acceptedSet).toEqual(SOURCE_FAMILIES.filter(family => family !== "INDEPENDENT_FACTUAL_CORROBORATION"));
+    expect(ROUTING_SEMANTIC_MATERIAL.inputContract.primitiveAndCollectionBounds).toMatchObject({ sourceFamilyArrayInputMaxMembers: 5, acceptedSourceFamilyMaxMembers: 4 });
+    expect(ROUTING_SEMANTIC_MATERIAL.sourceTypeBoundary.notProducedByCurrentNewsDiscovery).toEqual(["FILING_AUTHORITY"]);
     expect(ROUTING_SEMANTIC_MATERIAL.degradation.acceptedReasons).toEqual(DEGRADATION_REASONS);
   });
 

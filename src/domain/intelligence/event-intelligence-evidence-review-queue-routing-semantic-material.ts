@@ -99,7 +99,7 @@ const routingMaterial = deepFreeze({
     exactFields: ["provenance", "candidateId", "jurisdiction", "listingScopes", "eventHint", "seenFamilies", "availableFamilies", "issuerMapped", "assetMapped", "duplicate", "rightsApproved", "credentialAvailable", "completionMaterialPresent", "primaryAvailable", "qualificationComplete", "correctionPresent", "correctionResolved", "correctionFieldHints", "retracted", "conflicts", "stale", "originBindings", "publicationAt", "discoveredAt", "receivedAt", "correctionAvailableAt", "evaluationAsOf"],
     validationOrder: ["EXACT_ROOT_AND_DESCRIPTOR_SHAPE", "SYNTHETIC_PROVENANCE", "BOOLEAN_FIELDS", "JURISDICTION_AND_LISTING_SCOPES", "CONFLICT_ENUM_SET", "CORRECTION_HINT_SET_AND_CORRECTION_PRESENCE", "ORIGIN_BINDING_SHAPES_AND_GRAPH", "CORRECTION_AVAILABLE_AT_UTC_SHAPE", "SOURCE_FAMILY_SETS_AND_DISJOINTNESS", "UTC_TIME_SHAPES_AND_ORDER", "CANDIDATE_IDENTIFIER", "EVENT_HINT_ENUM"],
     provenance: "SYNTHETIC",
-    primitiveAndCollectionBounds: { jurisdictionMaxCodeUnits: 32, listingScopesMaxMembers: 64, sourceFamiliesPerSetMaxMembers: 5, conflictsMaxMembers: 10, correctionHintsMaxMembers: 6, originBindingsMaxMembers: 128, safeIdentifierMinCodeUnits: 2, safeIdentifierMaxCodeUnits: 96, timestamps: "UTC_ISO_8601_MILLISECONDS_Z_ROUND_TRIP" },
+    primitiveAndCollectionBounds: { jurisdictionMaxCodeUnits: 32, listingScopesMaxMembers: 64, sourceFamilyArrayInputMaxMembers: 5, acceptedSourceFamilyMaxMembers: 4, conflictsMaxMembers: 10, correctionHintsMaxMembers: 6, originBindingsMaxMembers: 128, safeIdentifierMinCodeUnits: 2, safeIdentifierMaxCodeUnits: 96, timestamps: "UTC_ISO_8601_MILLISECONDS_Z_ROUND_TRIP" },
     candidateIdentifier: { grammar: "LOWERCASE_ASCII_ID_START_AND_FOLLOWING_ID_CHARS", maxCodeUnits: 96, minimumCodeUnits: 2, secretOrUrlLikeValues: "REJECT" },
     jurisdictions: ["US_SEC", "GB_LSE", "AU_ASX", "UNLISTED", "UNKNOWN", "DUAL_LISTED"],
     listingScopeRules: [
@@ -139,6 +139,7 @@ const routingMaterial = deepFreeze({
       { sourceType: "NEWSWIRE", family: "ISSUER_ATTRIBUTED_RELEASE", requiresIssuerAttribution: true },
       { sourceType: "EXCHANGE_OR_REGULATOR_FEED", family: "REGULATORY_OR_EXCHANGE_DISCLOSURE" },
     ],
+    notProducedByCurrentNewsDiscovery: ["FILING_AUTHORITY"],
     callerSeenFamiliesCannotRelabelCandidate: true,
     aggregatorCannotBecomeIssuerRegulatoryOrFilingAuthority: true,
     routingEvaluatorAuthenticatesCandidate: false,
