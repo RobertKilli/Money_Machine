@@ -17,6 +17,10 @@ describe("policy canonical material profiles decision", () => {
     expect(decision.profiles.map(profile => profile.disposition)).toEqual(Array(4).fill("RECOMMENDED_NOT_IMPLEMENTED"));
     expect(decision.profiles.every(profile => profile.requiresNewScopeMaterialVersion)).toBe(true);
     expect(decision.canonicalProfile.preimage).toContain("event-intelligence-policy-content-identity/v1\\0");
+    expect(decision.canonicalProfile.preimageFieldRules).toContain("exactly one 0x00 byte");
+    expect(decision.canonicalProfile.preimageFieldRules).toContain("contain no NUL");
+    expect(decision.canonicalProfile.schemaRules.join(" ")).toContain("minimal base-10");
+    expect(decision.canonicalProfile.schemaRules.join(" ")).toContain("lowercase \\u00xx");
     expect(Object.isFrozen(decision)).toBe(true);
     expect(Object.isFrozen(decision.profiles[0].requiredSemantics)).toBe(true);
   });
