@@ -5,12 +5,19 @@ import {
   parseRoutingSemanticMaterial,
 } from "@/domain/intelligence/event-intelligence-evidence-review-queue-routing-semantic-material";
 import {
+  DEGRADATION_REASONS,
+  SOURCE_FAMILIES,
+  SOURCE_PORTFOLIO_DECISION_VERSION,
   evaluateSourcePortfolioRouting,
   getSourcePortfolioDecision,
   parseSyntheticRoutingMaterial,
   type SyntheticRoutingMaterial,
 } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
-import { createSyntheticNewsDiscoveryCandidate } from "@/domain/intelligence/event-intelligence-news-discovery";
+import {
+  DISCOVERY_ORIGIN_SET_VERSION,
+  NEWS_DISCOVERY_VERSION,
+  createSyntheticNewsDiscoveryCandidate,
+} from "@/domain/intelligence/event-intelligence-news-discovery";
 import { syntheticAggregatorRecord } from "../fixtures/event-intelligence-news-discovery";
 
 const base = (patch: Partial<SyntheticRoutingMaterial> = {}): SyntheticRoutingMaterial => {
@@ -61,6 +68,18 @@ function priorAtCurrentState(input: SyntheticRoutingMaterial, currentState: stri
 }
 
 describe("routing semantic material", () => {
+  it("pins supported parent and discovery versions instead of inheriting future versions implicitly", () => {
+    expect(ROUTING_SEMANTIC_MATERIAL.policyContractVersion).toBe("event-intelligence-source-portfolio-routing-decision/v1");
+    expect(ROUTING_SEMANTIC_MATERIAL.policyContractVersion).toBe(SOURCE_PORTFOLIO_DECISION_VERSION);
+    expect(ROUTING_SEMANTIC_MATERIAL.upstreamContracts).toEqual({
+      sourcePortfolioDecision: SOURCE_PORTFOLIO_DECISION_VERSION,
+      newsDiscovery: NEWS_DISCOVERY_VERSION,
+      discoveryOriginSet: DISCOVERY_ORIGIN_SET_VERSION,
+    });
+    expect(ROUTING_SEMANTIC_MATERIAL.inputContract.sourceFamilies.acceptedSet).toEqual(SOURCE_FAMILIES.filter(family => family !== "INDEPENDENT_FACTUAL_CORROBORATION"));
+    expect(ROUTING_SEMANTIC_MATERIAL.degradation.acceptedReasons).toEqual(DEGRADATION_REASONS);
+  });
+
   it("accepts only the fixed versioned syntax and returns an isolated deeply frozen material", () => {
     const input = structuredClone(ROUTING_SEMANTIC_MATERIAL) as { routeSelection: { jurisdictionRouteOrder: { order: string[] }[] } };
     const parsed = parseRoutingSemanticMaterial(input);
@@ -221,6 +240,73 @@ describe("routing semantic material", () => {
     expect(parseSyntheticRoutingMaterial(base({ ...atReceived, correctionAvailableAt: "2026-10-01T00:00:00.000Z" })).status).toBe("VALID");
     expect(parseSyntheticRoutingMaterial(base({ ...atReceived, correctionAvailableAt: "2026-10-03T00:00:00.000Z" })).status).toBe("VALID");
     expect(parseSyntheticRoutingMaterial(base({ ...atReceived, evaluationAsOf: "2026-10-02T23:59:59.999Z", correctionAvailableAt: "2026-10-03T00:00:00.000Z" })).status).toBe("INVALID");
+  });
+
+  it("materializes conditional degradation codes and the identical primaryNeeded route effect", () => {
+    const cases: Array<[SyntheticRoutingMaterial, string]> = [
+      [base({ duplicate: true }), "DUPLICATE_MATERIAL"],
+      [base({ rightsApproved: false }), "RIGHTS_UNAPPROVED"],
+      [base({ credentialAvailable: false }), "CREDENTIAL_MISSING"],
+      [base({ qualificationComplete: false }), "SOURCE_QUALIFICATION_INCOMPLETE"],
+      [base({ issuerMapped: false }), "MAPPING_INCOMPLETE"],
+      [base({ primaryAvailable: false }), "PRIMARY_SOURCE_UNAVAILABLE"],
+      [base({ seenFamilies: ["ISSUER_ATTRIBUTED_RELEASE"], availableFamilies: ["REGULATORY_OR_EXCHANGE_DISCLOSURE"] }), "PRIMARY_SOURCE_UNAVAILABLE"],
+      [base({ correctionPresent: true, correctionResolved: false, correctionFieldHints: ["OTHER"], correctionAvailableAt: "2026-10-02T00:00:00.000Z" }), "CORRECTION_UNRESOLVED"],
+      [base({ stale: true }), "STALE_MATERIAL"],
+      [base({ jurisdiction: "UNKNOWN", listingScopes: [] }), "UNSUPPORTED_JURISDICTION"],
+      [base({ conflicts: ["SOURCE_MATERIAL_CONFLICT"] }), "CONFLICTING_MATERIAL"],
+      [base({ eventHint: "COMPLETED_PURCHASE", completionMaterialPresent: false }), "PRIMARY_SOURCE_UNAVAILABLE"],
+      [base({ eventHint: "COMPLETED_PURCHASE", seenFamilies: ["ISSUER_ATTRIBUTED_RELEASE"] }), "PRIMARY_SOURCE_UNAVAILABLE"],
+      [base({ eventHint: "RETRACTION_WITHDRAWAL" }), "CORRECTION_UNRESOLVED"],
+    ];
+    for (const [input, reason] of cases) {
+      expect(parseSyntheticRoutingMaterial(input).status).toBe("VALID");
+      const result = evaluate(input)!;
+      expect(result.degradationReasons).toContain(reason);
+      expect(result.degradationReasons).toContain("ACQUISITION_DISABLED");
+    }
+    let complete = evaluate(base())!;
+    while (complete.nextState !== "NON_AUTHORITATIVE_REVIEW_COMPLETE") complete = evaluate(base(), complete)!;
+    expect(complete.degradationReasons).toContain("INDEPENDENT_CORROBORATION_UNAVAILABLE");
+
+    const ordinary = base({ eventHint: "PURCHASE_INTENT" });
+    const primaryNeeded = base({ eventHint: "BINDING_AGREEMENT" });
+    const ordinaryPrior = priorAtCurrentState(ordinary, "PRIMARY_DISCLOSURE_REQUIRED");
+    const primaryNeededPrior = priorAtCurrentState(primaryNeeded, "PRIMARY_DISCLOSURE_REQUIRED");
+    expect(ordinaryPrior).not.toBeNull();
+    expect(primaryNeededPrior).not.toBeNull();
+    const ordinaryResult = evaluate(ordinary, ordinaryPrior)!;
+    const primaryNeededResult = evaluate(primaryNeeded, primaryNeededPrior)!;
+    expect(ordinaryResult.nextState).toBe("CORRECTION_REVIEW_REQUIRED");
+    expect(primaryNeededResult.nextState).toBe("CORRECTION_REVIEW_REQUIRED");
+    expect({ ...ordinaryResult, eventHint: undefined, routingResultId: undefined }).toEqual({ ...primaryNeededResult, eventHint: undefined, routingResultId: undefined });
+    expect(ordinaryResult.eventHint).not.toBe(primaryNeededResult.eventHint);
+    expect(ordinaryResult.routingResultId).not.toBe(primaryNeededResult.routingResultId);
+
+    expect(evaluate(base())?.operationalPriority).toBe("ROUTINE_DISCOVERY_REVIEW");
+    expect(evaluate(base({ duplicate: true }))?.operationalPriority).toBe("NO_ACTION_DUPLICATE");
+    expect(evaluate(base({ correctionPresent: true, correctionResolved: true, correctionFieldHints: ["OTHER"], correctionAvailableAt: "2026-10-02T00:00:00.000Z" }))?.operationalPriority).toBe("URGENT_CORRECTION_REVIEW");
+    expect(evaluate(base({ rightsApproved: false }))?.operationalPriority).toBe("BLOCKED_RIGHTS");
+    expect(evaluate(base({ primaryAvailable: false }))?.operationalPriority).toBe("PRIMARY_SOURCE_MISSING");
+    expect(evaluate(base({ seenFamilies: ["ISSUER_ATTRIBUTED_RELEASE"], availableFamilies: ["REGULATORY_OR_EXCHANGE_DISCLOSURE"] }))?.operationalPriority).toBe("PRIMARY_SOURCE_MISSING");
+    expect(evaluate(base({ issuerMapped: false }))?.operationalPriority).toBe("MAPPING_REQUIRED");
+  });
+
+  it("pins all valid combinations of retraction hint and retracted flag", () => {
+    const cases = [
+      { eventHint: "PURCHASE_INTENT", retracted: false, blocked: false },
+      { eventHint: "RETRACTION_WITHDRAWAL", retracted: false, blocked: false },
+      { eventHint: "PURCHASE_INTENT", retracted: true, blocked: true },
+      { eventHint: "RETRACTION_WITHDRAWAL", retracted: true, blocked: true },
+    ] as const;
+    for (const fixture of cases) {
+      const input = base({ eventHint: fixture.eventHint, retracted: fixture.retracted });
+      expect(parseSyntheticRoutingMaterial(input).status).toBe("VALID");
+      const result = evaluate(input)!;
+      expect(result.nextState === "STOPPED_BLOCKED").toBe(fixture.blocked);
+      if (fixture.eventHint === "RETRACTION_WITHDRAWAL") expect(result.degradationReasons).toContain("CORRECTION_UNRESOLVED");
+      expect(result.operationalPriority).toBe(fixture.retracted ? "URGENT_CORRECTION_REVIEW" : "ROUTINE_DISCOVERY_REVIEW");
+    }
   });
 
   it("covers the state-specific stop branches and unknown-jurisdiction progression guard", () => {

@@ -1,20 +1,13 @@
 import "server-only";
 
 import { types } from "node:util";
-import {
-  DISCOVERY_ORIGIN_SET_VERSION,
-  NEWS_DISCOVERY_VERSION,
-} from "./event-intelligence-news-discovery";
-import {
-  SOURCE_PORTFOLIO_DECISION_VERSION,
-} from "./event-intelligence-source-portfolio-routing-decision";
 
 export const ROUTING_SEMANTIC_MATERIAL_SCHEMA_VERSION =
   "event-intelligence-routing-semantic-material-contract/v1" as const;
 export const ROUTING_MATERIAL_PROFILE_VERSION =
   "event-intelligence-routing-policy-material/v1" as const;
 export const ROUTING_POLICY_CONTRACT_VERSION =
-  SOURCE_PORTFOLIO_DECISION_VERSION;
+  "event-intelligence-source-portfolio-routing-decision/v1" as const;
 export const ROUTING_ALGORITHM_VERSION =
   "event-intelligence-routing-semantic-algorithm/v1" as const;
 
@@ -98,14 +91,15 @@ const routingMaterial = deepFreeze({
   policyContractVersion: ROUTING_POLICY_CONTRACT_VERSION,
   algorithmVersion: ROUTING_ALGORITHM_VERSION,
   upstreamContracts: {
-    sourcePortfolioDecision: SOURCE_PORTFOLIO_DECISION_VERSION,
-    newsDiscovery: NEWS_DISCOVERY_VERSION,
-    discoveryOriginSet: DISCOVERY_ORIGIN_SET_VERSION,
+    sourcePortfolioDecision: "event-intelligence-source-portfolio-routing-decision/v1",
+    newsDiscovery: "event-intelligence-news-discovery/v1",
+    discoveryOriginSet: "event-intelligence-discovery-origin-set/v1",
   },
   inputContract: {
     exactFields: ["provenance", "candidateId", "jurisdiction", "listingScopes", "eventHint", "seenFamilies", "availableFamilies", "issuerMapped", "assetMapped", "duplicate", "rightsApproved", "credentialAvailable", "completionMaterialPresent", "primaryAvailable", "qualificationComplete", "correctionPresent", "correctionResolved", "correctionFieldHints", "retracted", "conflicts", "stale", "originBindings", "publicationAt", "discoveredAt", "receivedAt", "correctionAvailableAt", "evaluationAsOf"],
     validationOrder: ["EXACT_ROOT_AND_DESCRIPTOR_SHAPE", "SYNTHETIC_PROVENANCE", "BOOLEAN_FIELDS", "JURISDICTION_AND_LISTING_SCOPES", "CONFLICT_ENUM_SET", "CORRECTION_HINT_SET_AND_CORRECTION_PRESENCE", "ORIGIN_BINDING_SHAPES_AND_GRAPH", "CORRECTION_AVAILABLE_AT_UTC_SHAPE", "SOURCE_FAMILY_SETS_AND_DISJOINTNESS", "UTC_TIME_SHAPES_AND_ORDER", "CANDIDATE_IDENTIFIER", "EVENT_HINT_ENUM"],
     provenance: "SYNTHETIC",
+    primitiveAndCollectionBounds: { jurisdictionMaxCodeUnits: 32, listingScopesMaxMembers: 64, sourceFamiliesPerSetMaxMembers: 5, conflictsMaxMembers: 10, correctionHintsMaxMembers: 6, originBindingsMaxMembers: 128, safeIdentifierMinCodeUnits: 2, safeIdentifierMaxCodeUnits: 96, timestamps: "UTC_ISO_8601_MILLISECONDS_Z_ROUND_TRIP" },
     candidateIdentifier: { grammar: "LOWERCASE_ASCII_ID_START_AND_FOLLOWING_ID_CHARS", maxCodeUnits: 96, minimumCodeUnits: 2, secretOrUrlLikeValues: "REJECT" },
     jurisdictions: ["US_SEC", "GB_LSE", "AU_ASX", "UNLISTED", "UNKNOWN", "DUAL_LISTED"],
     listingScopeRules: [
@@ -157,13 +151,14 @@ const routingMaterial = deepFreeze({
       { jurisdiction: "UNLISTED", order: ["ISSUER_ATTRIBUTED_RELEASE", "DISCOVERY_AGGREGATOR"] },
       { jurisdiction: "UNKNOWN", order: ["DISCOVERY_AGGREGATOR"] },
     ],
-    nextSourceFamily: "FIRST_ROUTE_ORDER_FAMILY_NOT_SEEN_AND_AVAILABLE; ELSE_NULL",
-    preferredFamily: "FIRST_JURISDICTION_ROUTE_ORDER_ENTRY",
-    preferredUnavailableDegradation: "PRIMARY_SOURCE_UNAVAILABLE_IF_PREFERRED_IS_NEITHER_SEEN_NOR_AVAILABLE",
-    unlistedRouteFallback: "NO_MATCHING_TABLE_USES_DISCOVERY_AGGREGATOR",
+    nextSourceFamily: { select: "FIRST", from: "routeOrderForInputJurisdiction", where: [{ family: "NOT_IN", collection: "seenFamilies" }, { family: "IN", collection: "availableFamilies" }], otherwise: null },
+    preferredFamily: { select: "FIRST", from: "routeOrderForInputJurisdiction" },
+    preferredUnavailableDegradation: { condition: { field: "preferredFamily", neitherSeenNorAvailable: true }, add: ["PRIMARY_SOURCE_UNAVAILABLE"] },
+    noMatchingJurisdictionRouteFallback: "DISCOVERY_AGGREGATOR",
     dualListed: "NO_TABLE_MATCH_USES_DISCOVERY_AGGREGATOR_BUT_ROUTE_STOPS_BLOCKED",
   },
   eventRouting: {
+    parentEventRouteRowsSemantics: "ONE_DECLARATION_PER_EVENT_HINT; REQUIRED_STATE_MEANING_UNRESOLVED",
     parentEventRouteRows: [
       { hint: "PURCHASE_INTENT", required: "SOURCE_RETRIEVAL_REQUIRED", completionEvidenceRequired: false, retractionStops: false },
       { hint: "BOARD_AUTHORIZATION", required: "SOURCE_RETRIEVAL_REQUIRED", completionEvidenceRequired: false, retractionStops: false },
@@ -179,6 +174,7 @@ const routingMaterial = deepFreeze({
     ],
     initialState: "DISCOVERED",
     primaryRequiredHints: ["BINDING_AGREEMENT", "EXPECTED_CLOSING", "COMPLETED_PURCHASE", "CORRECTION_AMENDMENT", "RETRACTION_WITHDRAWAL"],
+    primaryRequiredHintsSemantics: "MEMBERSHIP_SET; ORDER_HAS_NO_PRIORITY_MEANING",
     primaryDisclosureCompletedPurchaseRequiresCompletionMaterial: true,
     retractedFlagStops: true,
     retractionHintAloneStops: false,
@@ -205,11 +201,11 @@ const routingMaterial = deepFreeze({
   },
   decisionOrder: {
     blockingPriority: [
-      { rule: "RETRACTION_OR_CONFLICT_OR_RIGHTS_OR_CREDENTIAL_OR_UNRESOLVED_CORRECTION_OR_DUAL_LISTED", result: "STOPPED_BLOCKED" },
-      { rule: "DUPLICATE", result: "STOPPED_BLOCKED" },
-      { rule: "STATE_SPECIFIC_QUALIFICATION_MAPPING_SOURCE_AND_EVENT_REQUIREMENTS", result: "STATE_BRANCH_OR_STOP" },
-      { rule: "UNKNOWN_OR_DUAL_LISTED_AFTER_DISCOVERED", result: "STOPPED_BLOCKED" },
-      { rule: "TRANSITION_NOT_IN_ALLOWED_TRANSITIONS", result: "STOPPED_BLOCKED" },
+      { condition: { any: [{ field: "retracted", equals: true }, { field: "conflicts", nonEmpty: true }, { field: "rightsApproved", equals: false }, { field: "credentialAvailable", equals: false }, { all: [{ field: "correctionPresent", equals: true }, { field: "correctionResolved", equals: false }] }, { field: "jurisdiction", equals: "DUAL_LISTED" }] }, result: "STOPPED_BLOCKED" },
+      { condition: { field: "duplicate", equals: true }, result: "STOPPED_BLOCKED" },
+      { condition: { field: "currentState", oneOf: ["DISCOVERED", "SOURCE_RETRIEVAL_REQUIRED", "ISSUER_MAPPING_REQUIRED", "ASSET_MAPPING_REQUIRED", "PRIMARY_DISCLOSURE_REQUIRED", "CORRECTION_REVIEW_REQUIRED", "CORROBORATION_REVIEW_REQUIRED", "ELIGIBILITY_REVIEW_REQUIRED"] }, result: "APPLY_ORDERED_STATE_BRANCHES" },
+      { condition: { all: [{ field: "currentState", notEquals: "DISCOVERED" }, { field: "jurisdiction", oneOf: ["UNKNOWN", "DUAL_LISTED"] }] }, result: "STOPPED_BLOCKED" },
+      { condition: { field: "transition", memberOf: "allowedTransitions", equals: false }, result: "STOPPED_BLOCKED" },
     ],
     stateBranches: [
       { currentState: "DISCOVERED", nextState: "SOURCE_RETRIEVAL_REQUIRED" },
@@ -227,21 +223,40 @@ const routingMaterial = deepFreeze({
       { currentState: "ELIGIBILITY_REVIEW_REQUIRED", next: "NON_AUTHORITATIVE_REVIEW_COMPLETE" },
     ],
     operationalPriority: [
-      { when: "duplicate", result: "NO_ACTION_DUPLICATE" },
-      { when: "retractedOrCorrectionPresent", result: "URGENT_CORRECTION_REVIEW" },
-      { when: "rightsNotApproved", result: "BLOCKED_RIGHTS" },
-      { when: "primaryUnavailableOrPreferredFamilyAbsent", result: "PRIMARY_SOURCE_MISSING" },
-      { when: "issuerOrAssetMappingMissing", result: "MAPPING_REQUIRED" },
-      { otherwise: "ROUTINE_DISCOVERY_REVIEW" },
+      { condition: { field: "duplicate", equals: true }, result: "NO_ACTION_DUPLICATE" },
+      { condition: { any: [{ field: "retracted", equals: true }, { field: "correctionPresent", equals: true }] }, result: "URGENT_CORRECTION_REVIEW" },
+      { condition: { field: "rightsApproved", equals: false }, result: "BLOCKED_RIGHTS" },
+      { condition: { any: [{ field: "primaryAvailable", equals: false }, { field: "preferredFamily", neitherSeenNorAvailable: true }] }, result: "PRIMARY_SOURCE_MISSING" },
+      { condition: { any: [{ field: "issuerMapped", equals: false }, { field: "assetMapped", equals: false }] }, result: "MAPPING_REQUIRED" },
+      { condition: { otherwise: true }, result: "ROUTINE_DISCOVERY_REVIEW" },
     ],
     sourceStrength: [
-      { ifSeen: "FILING_AUTHORITY", result: "FILING_PUBLICATION" },
-      { ifSeen: "REGULATORY_OR_EXCHANGE_DISCLOSURE", result: "REGULATORY_PUBLICATION" },
-      { ifSeen: "ISSUER_ATTRIBUTED_RELEASE", result: "ISSUER_ATTRIBUTED" },
-      { otherwise: "DISCOVERY_ONLY" },
+      { condition: { field: "seenFamilies", includes: "FILING_AUTHORITY" }, result: "FILING_PUBLICATION" },
+      { condition: { field: "seenFamilies", includes: "REGULATORY_OR_EXCHANGE_DISCLOSURE" }, result: "REGULATORY_PUBLICATION" },
+      { condition: { field: "seenFamilies", includes: "ISSUER_ATTRIBUTED_RELEASE" }, result: "ISSUER_ATTRIBUTED" },
+      { condition: { otherwise: true }, result: "DISCOVERY_ONLY" },
     ],
     outputCollections: { seenFamilies: "UTF16_CODE_UNIT_SORTED_SET", degradationReasons: "UTF16_CODE_UNIT_SORTED_SET", conflictReasons: "UTF16_CODE_UNIT_SORTED_SET", correctionFieldHints: "UTF16_CODE_UNIT_SORTED_SET", originBindings: "PRESERVE_VALIDATED_INPUT_ORDER" },
     error: "ALL_INVALID_INPUT_AND_GUARD_FAILURES_RETURN_NULL; PRECEDENCE_FOLLOWS_CHECKS_ABOVE",
+  },
+  degradation: {
+    acceptedReasons: ["PRIMARY_SOURCE_UNAVAILABLE", "SOURCE_QUALIFICATION_INCOMPLETE", "MAPPING_INCOMPLETE", "RIGHTS_UNAPPROVED", "CORRECTION_UNRESOLVED", "CONFLICTING_MATERIAL", "STALE_MATERIAL", "UNSUPPORTED_JURISDICTION", "INDEPENDENT_CORROBORATION_UNAVAILABLE", "CREDENTIAL_MISSING", "ACQUISITION_DISABLED", "DUPLICATE_MATERIAL"],
+    rules: [
+      { condition: { field: "duplicate", equals: true }, add: ["DUPLICATE_MATERIAL"] },
+      { condition: { field: "rightsApproved", equals: false }, add: ["RIGHTS_UNAPPROVED"] },
+      { condition: { field: "credentialAvailable", equals: false }, add: ["CREDENTIAL_MISSING"] },
+      { condition: { field: "qualificationComplete", equals: false }, add: ["SOURCE_QUALIFICATION_INCOMPLETE"] },
+      { condition: { any: [{ field: "issuerMapped", equals: false }, { field: "assetMapped", equals: false }] }, add: ["MAPPING_INCOMPLETE"] },
+      { condition: { any: [{ field: "primaryAvailable", equals: false }, { field: "preferredFamily", equals: "NEITHER_SEEN_NOR_AVAILABLE" }] }, add: ["PRIMARY_SOURCE_UNAVAILABLE"] },
+      { condition: { all: [{ field: "correctionPresent", equals: true }, { field: "correctionResolved", equals: false }] }, add: ["CORRECTION_UNRESOLVED"] },
+      { condition: { field: "stale", equals: true }, add: ["STALE_MATERIAL"] },
+      { condition: { field: "jurisdiction", oneOf: ["UNKNOWN", "DUAL_LISTED"] }, add: ["UNSUPPORTED_JURISDICTION"] },
+      { condition: { field: "conflicts", nonEmpty: true }, add: ["CONFLICTING_MATERIAL"] },
+      { condition: { all: [{ field: "eventHint", equals: "COMPLETED_PURCHASE" }, { any: [{ field: "completionMaterialPresent", equals: false }, { all: [{ field: "seenFamilies", excludes: "FILING_AUTHORITY" }, { field: "seenFamilies", excludes: "REGULATORY_OR_EXCHANGE_DISCLOSURE" }] }] }] }, add: ["PRIMARY_SOURCE_UNAVAILABLE"] },
+      { condition: { any: [{ field: "eventHint", equals: "RETRACTION_WITHDRAWAL" }, { field: "retracted", equals: true }] }, add: ["CORRECTION_UNRESOLVED"] },
+      { condition: { field: "nextState", oneOf: ["CORROBORATION_REVIEW_REQUIRED", "ELIGIBILITY_REVIEW_REQUIRED", "NON_AUTHORITATIVE_REVIEW_COMPLETE"] }, add: ["INDEPENDENT_CORROBORATION_UNAVAILABLE"] },
+    ],
+    output: "DEDUPLICATED_SET_SORTED_UTF16_CODE_UNITS; ACQUISITION_DISABLED_IS_ALWAYS_PRESENT",
   },
   resultContract: {
     status: "NON_AUTHORITATIVE_ROUTING_RESULT",
