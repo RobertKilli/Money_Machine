@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { EvidenceReviewQueueViewModel, EvidenceReviewQueueViewModelItem } from "@/domain/intelligence/event-intelligence-evidence-review-queue-view-model";
 
-type Props = Readonly<{ model: EvidenceReviewQueueViewModel }>;
+type Props = Readonly<{ model: EvidenceReviewQueueViewModel; presentation?: "DEFAULT" | "SYNTHETIC_OFFLINE_DEMO"; idPrefix?: string }>;
 
 const STATUS_OPTIONS = ["OPEN", "BLOCKED", "NO_ACTION", "RESOLVED_NON_AUTHORITATIVE", "SUPERSEDED", "RETRACTED"] as const;
 const PRIORITY_OPTIONS = ["URGENT_RETRACTION_REVIEW", "URGENT_CORRECTION_REVIEW", "CONFLICT_REVIEW", "BLOCKED_RIGHTS", "JURISDICTION_UNKNOWN", "MAPPING_REQUIRED", "PRIMARY_SOURCE_MISSING", "ROUTINE_DISCOVERY_REVIEW", "NO_ACTION_DUPLICATE"] as const;
@@ -101,14 +101,16 @@ function QueueItem({ item }: { item: EvidenceReviewQueueViewModelItem }) {
   </article>;
 }
 
-export function EvidenceReviewQueueWorkspace({ model }: Props) {
+export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", idPrefix }: Props) {
   const [status, setStatus] = useState("");
   const [priority, setPriority] = useState("");
   const [type, setType] = useState("");
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => filterEvidenceReviewItems(model.items, { status, priority, type, query }), [model.items, status, priority, type, query]);
+  const Root = presentation === "SYNTHETIC_OFFLINE_DEMO" ? "div" : "main";
+  const filterId = (name: string) => idPrefix ? `queue-${idPrefix}-${name}` : `queue-${name}`;
 
-  return <main className="mx-auto min-h-screen w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+  return <Root className={presentation === "SYNTHETIC_OFFLINE_DEMO" ? "w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8" : "mx-auto min-h-screen w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8"}>
     <header className="mb-8 flex flex-wrap items-start justify-between gap-5 border-b border-[var(--border)] pb-6">
       <div className="min-w-0 max-w-3xl">
         <p className="text-xs font-semibold tracking-[0.2em] text-[var(--accent)]">MONEY MACHINE / INTELLIGENCE</p>
@@ -117,10 +119,13 @@ export function EvidenceReviewQueueWorkspace({ model }: Props) {
       </div>
       <div className="flex min-w-0 flex-col items-start gap-3">
         <nav aria-label="Workspace navigation"><Link href="/" className="rounded px-1 py-1 text-sm text-[var(--muted)] underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Home</Link></nav>
-        <div className="flex flex-col items-start gap-2" aria-label="Production status">
+        {presentation === "SYNTHETIC_OFFLINE_DEMO" ? <div className="flex flex-col items-start gap-2" aria-label="Demo status">
+          <span className="rounded-full border border-amber-300/70 bg-amber-300/10 px-3 py-1.5 text-xs font-bold tracking-wide">SYNTETISK OFFLINE-DEMO</span>
+          <span className="max-w-56 text-xs leading-5 text-[var(--muted)]">Ingen live data eller godkjente events</span>
+        </div> : <div className="flex flex-col items-start gap-2" aria-label="Production status">
           <span className="rounded-full border border-sky-300/60 bg-sky-300/10 px-3 py-1.5 text-xs font-bold tracking-wide">DISCOVERY ONLY</span>
           <span className="rounded-full border border-amber-300/70 bg-amber-300/10 px-3 py-1.5 text-xs font-bold tracking-wide">ACQUISITION BLOCKED</span>
-        </div>
+        </div>}
       </div>
     </header>
 
@@ -149,10 +154,10 @@ export function EvidenceReviewQueueWorkspace({ model }: Props) {
       <fieldset className="mt-5 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4 sm:p-5">
         <legend className="px-2 text-sm font-semibold">Presentation filters</legend>
         <div className="grid min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="min-w-0"><label className="mb-1.5 block text-xs font-medium text-[var(--muted)]" htmlFor="queue-status">Status</label><select id="queue-status" value={status} onChange={e => setStatus(e.target.value)} className="w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><option value="">All statuses</option>{STATUS_OPTIONS.map(value => <option key={value} value={value}>{STATUS_LABELS[value]}</option>)}</select></div>
-          <div className="min-w-0"><label className="mb-1.5 block text-xs font-medium text-[var(--muted)]" htmlFor="queue-priority">Operational priority</label><select id="queue-priority" value={priority} onChange={e => setPriority(e.target.value)} className="w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><option value="">All priorities</option>{PRIORITY_OPTIONS.map(value => <option key={value} value={value}>{PRIORITY_LABELS[value]}</option>)}</select></div>
-          <div className="min-w-0"><label className="mb-1.5 block text-xs font-medium text-[var(--muted)]" htmlFor="queue-type">Review type</label><select id="queue-type" value={type} onChange={e => setType(e.target.value)} className="w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><option value="">All review types</option>{TYPE_OPTIONS.map(value => <option key={value} value={value}>{TYPE_LABELS[value]}</option>)}</select></div>
-          <div className="min-w-0"><label className="mb-1.5 block text-xs font-medium text-[var(--muted)]" htmlFor="queue-search">Search safe labels</label><input id="queue-search" type="search" maxLength={120} value={query} onChange={e => setQuery(e.target.value.slice(0, 120))} placeholder="Type, reason or source family" className="w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm placeholder:text-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]" /></div>
+          <div className="min-w-0"><label className="mb-1.5 block text-xs font-medium text-[var(--muted)]" htmlFor={filterId("status")}>Status</label><select id={filterId("status")} value={status} onChange={e => setStatus(e.target.value)} className="w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><option value="">All statuses</option>{STATUS_OPTIONS.map(value => <option key={value} value={value}>{STATUS_LABELS[value]}</option>)}</select></div>
+          <div className="min-w-0"><label className="mb-1.5 block text-xs font-medium text-[var(--muted)]" htmlFor={filterId("priority")}>Operational priority</label><select id={filterId("priority")} value={priority} onChange={e => setPriority(e.target.value)} className="w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><option value="">All priorities</option>{PRIORITY_OPTIONS.map(value => <option key={value} value={value}>{PRIORITY_LABELS[value]}</option>)}</select></div>
+          <div className="min-w-0"><label className="mb-1.5 block text-xs font-medium text-[var(--muted)]" htmlFor={filterId("type")}>Review type</label><select id={filterId("type")} value={type} onChange={e => setType(e.target.value)} className="w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><option value="">All review types</option>{TYPE_OPTIONS.map(value => <option key={value} value={value}>{TYPE_LABELS[value]}</option>)}</select></div>
+          <div className="min-w-0"><label className="mb-1.5 block text-xs font-medium text-[var(--muted)]" htmlFor={filterId("search")}>Search safe labels</label><input id={filterId("search")} type="search" maxLength={120} value={query} onChange={e => setQuery(e.target.value.slice(0, 120))} placeholder="Type, reason or source family" className="w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm placeholder:text-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]" /></div>
         </div>
         <p className="mt-3 text-xs leading-5 text-[var(--muted)]">Filters change only what is shown. Corrections and retractions are included by default; queue status and source material are never changed.</p>
       </fieldset>
@@ -162,5 +167,5 @@ export function EvidenceReviewQueueWorkspace({ model }: Props) {
     {model.state === "EMPTY" && <section role="status" className="mt-8 rounded-2xl border border-[var(--border)] p-8 text-center"><h2 className="text-lg font-semibold">No evidence-review items</h2><p className="mt-2 text-sm text-[var(--muted)]">{model.emptyState}</p></section>}
 
     <footer className="mt-10 border-t border-[var(--border)] pt-5 text-xs leading-5 text-[var(--muted)]">This workspace is not an event-authority, recommendation, signal or trading interface. A queue item records review work only; it does not verify its underlying claim.</footer>
-  </main>;
+  </Root>;
 }
