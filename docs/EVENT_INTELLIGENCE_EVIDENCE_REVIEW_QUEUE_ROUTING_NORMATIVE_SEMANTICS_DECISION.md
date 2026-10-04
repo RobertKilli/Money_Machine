@@ -104,3 +104,5 @@ The queue blockers remain unresolved and outside this decision:
 * Parent `routingMappings` precedence does not match the actual ordered branches in queue `classify`.
 
 This decision does not resolve source-portfolio material closure, issuer/listing policy content, authenticated external source lifecycle authority, policy application, manifest completeness, content identity, producer provenance, storage/read selection, or production approval. It changes no runtime or production configuration; all production selections remain null/empty, approvals remain `NOT_APPROVED`, and authority upgrade remains `UNSUPPORTED`.
+
+The design-only prerequisite for typed milestone and subject-lifecycle evidence is now specified in [the milestone/lifecycle evidence decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_MILESTONE_LIFECYCLE_EVIDENCE_DECISION.md). It does not implement issuers, evidence, or routing enforcement; runtime alignment remains blocked on the authority contracts described there.
