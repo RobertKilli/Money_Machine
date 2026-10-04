@@ -13,7 +13,7 @@ The material profiles are proposed identifiers from the parent policy-profile de
 
 ## Source-portfolio rule/material/conformance matrix
 
-The source-portfolio-routing decision currently combines source policy and routing tables. This material captures portfolio-relevant inputs and rules, while explicitly binding the same parent contract version as an upstream dependency for routing. It does not copy the full jurisdiction/event transition graph into this source-portfolio material; a separate routing semantic profile remains a prerequisite for complete closure.
+The source-portfolio-routing decision currently combines source policy and routing tables. This material captures portfolio-relevant inputs and rules, while explicitly binding the same parent contract version as an upstream dependency for routing. It does not copy the full jurisdiction/event transition graph into this source-portfolio material. A separate routing semantic profile is now defined in `EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_ROUTING_SEMANTIC_MATERIAL_CONTRACT`; its documented decision/evaluator gaps still prevent complete closure.
 
 | Rule ID / material | Tracked rule source | Conformance evidence |
 |---|---|---|
