@@ -44,10 +44,17 @@ export type EventIntelligenceQueueCompositionResult =
   | Readonly<{ status: "BLOCKED"; code: "COMPOSITION_INPUT_INVALID" | "COMPOSITION_CANDIDATE_UNTRUSTED" | "COMPOSITION_CUTOFF_MISMATCH" | "COMPOSITION_DISCOVERY_SET_INVALID" | "COMPOSITION_ROUTING_REJECTED" | "COMPOSITION_QUEUE_REJECTED" | "COMPOSITION_VIEW_MODEL_REJECTED" }>;
 
 const BLOCKED = (code: Extract<EventIntelligenceQueueCompositionResult, { status: "BLOCKED" }> ["code"]): EventIntelligenceQueueCompositionResult => Object.freeze({ status: "BLOCKED", code });
+const CANDIDATE_PUBLIC_KEYS = new WeakMap<object, ReadonlyMap<string, string>>();
 const cmp = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const fail = (): never => { throw new Error("COMPOSITION_INPUT_INVALID"); };
 const OBJECT_INTRINSICS = new Set(["constructor", "__defineGetter__", "__defineSetter__", "hasOwnProperty", "__lookupGetter__", "__lookupSetter__", "isPrototypeOf", "propertyIsEnumerable", "toString", "valueOf", "__proto__", "toLocaleString"]);
 type MaterialStats = { total: number; byMaterial: Map<string, number>; byRoot: Map<string, number>; byPair: Map<string, number> };
+
+/** Resolve a private candidate identity to its projected key only for a model produced by this composer. */
+export function getComposedCandidatePublicKey(model: EvidenceReviewQueueViewModel, candidateId: string): string | null {
+  if (!model || typeof candidateId !== "string") return null;
+  return CANDIDATE_PUBLIC_KEYS.get(model)?.get(candidateId) ?? null;
+}
 
 function exactObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || types.isProxy(value) || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return fail();
@@ -226,6 +233,18 @@ export function composeEventIntelligenceEvidenceReviewQueue(input: unknown): Eve
     const projected = adaptEvidenceReviewQueueSetToViewModel(getEvidenceReviewQueueContract(), sealed.queueSet);
     if (projected.status !== "PROJECTED") return BLOCKED("COMPOSITION_VIEW_MODEL_REJECTED");
     const model = projected.model;
+    if (sealed.queueSet.members.length !== model.items.length) return BLOCKED("COMPOSITION_VIEW_MODEL_REJECTED");
+    const candidatePublicKeys = new Map<string, string>();
+    const publicKeys = new Set<string>();
+    for (let index = 0; index < sealed.queueSet.members.length; index++) {
+      const member = sealed.queueSet.members[index];
+      const item = model.items[index];
+      if (!item) return fail();
+      if (candidatePublicKeys.has(member.item.candidateId) || publicKeys.has(item.publicKey)) return BLOCKED("COMPOSITION_VIEW_MODEL_REJECTED");
+      candidatePublicKeys.set(member.item.candidateId, item.publicKey);
+      publicKeys.add(item.publicKey);
+    }
+    CANDIDATE_PUBLIC_KEYS.set(model, candidatePublicKeys);
     const composition = freeze({
       version: EVENT_INTELLIGENCE_QUEUE_COMPOSITION_VERSION,
       status: "NON_AUTHORITATIVE_SYNTHETIC_COMPOSITION" as const,

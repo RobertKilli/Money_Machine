@@ -1,5 +1,6 @@
 import "server-only";
 
+import { getComposedCandidatePublicKey } from "@/application/intelligence/compose-event-intelligence-evidence-review-queue";
 import type { EvidenceReviewQueueViewModel, EvidenceReviewQueueViewModelItem } from "@/domain/intelligence/event-intelligence-evidence-review-queue-view-model";
 import type { OfflineReviewDemoFixture } from "@/application/intelligence/offline-review-demo-fixtures";
 
@@ -35,7 +36,9 @@ export function bindOfflineReviewDemoDetails(
     fixtureKeys.add(fixture.key);
     detailIds.add(detailId);
 
-    const matches = model.items.filter(item => item.reviewType === fixture.expectedReviewType);
+    const expectedPublicKey = getComposedCandidatePublicKey(model, fixture.candidate.candidateId);
+    if (!expectedPublicKey) return null;
+    const matches = model.items.filter(item => item.publicKey === expectedPublicKey && item.reviewType === fixture.expectedReviewType);
     if (matches.length !== 1) return null;
     const item = matches[0]!;
     if (publicKeys.has(item.publicKey)) return null;

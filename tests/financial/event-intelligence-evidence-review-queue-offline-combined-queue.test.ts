@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import * as compositionModule from "@/application/intelligence/compose-event-intelligence-evidence-review-queue";
 import { createOfflineReviewDemoFixtures } from "@/application/intelligence/offline-review-demo-fixtures";
 import { loadEventIntelligenceOfflineCombinedReviewQueue } from "@/application/intelligence/load-event-intelligence-offline-combined-review-queue";
-import { isAuthenticNewsDiscoveryCandidate } from "@/domain/intelligence/event-intelligence-news-discovery";
+import { createSyntheticNewsDiscoveryCandidate, isAuthenticNewsDiscoveryCandidate } from "@/domain/intelligence/event-intelligence-news-discovery";
 import { parseSyntheticRoutingMaterial } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
 import { bindOfflineReviewDemoDetails } from "@/application/intelligence/offline-review-demo-presentation";
 import { loadEvidenceReviewQueueViewModel } from "@/application/intelligence/load-evidence-review-queue-view-model";
@@ -116,6 +116,53 @@ describe("offline combined evidence review queue", () => {
       ["issuer-mapping", "ISSUER_MAPPING_REVIEW"],
     ]);
     expect(new Set(details?.map(detail => detail.detailId)).size).toBe(3);
+  });
+
+  it("rejects ambiguous, missing, and substituted candidate-to-view bindings", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const fixtures = createOfflineReviewDemoFixtures();
+    expect(fixtures).toHaveLength(3);
+    if (!fixtures) return;
+    const composed = compositionModule.composeEventIntelligenceEvidenceReviewQueue({
+      evaluationAsOf: "2026-10-03T12:00:00.000Z",
+      candidates: fixtures.map(fixture => ({ candidate: fixture.candidate, routingMaterial: fixture.routingMaterial })),
+    });
+    expect(composed.status).toBe("COMPOSED");
+    if (composed.status !== "COMPOSED") return;
+    expect(bindOfflineReviewDemoDetails(fixtures, composed.composition.viewModel)).not.toBeNull();
+    const rightsIndex = fixtures.findIndex(fixture => fixture.key === "rights-blocked");
+    const correctionFixture = fixtures.find(fixture => fixture.key === "unresolved-correction")!;
+    const substitutedFixtures = fixtures.map((fixture, index) => index === rightsIndex ? { ...fixture, candidate: correctionFixture.candidate } : fixture);
+    expect(bindOfflineReviewDemoDetails(substitutedFixtures, composed.composition.viewModel)).toBeNull();
+    const rights = fixtures.find(fixture => fixture.key === "rights-blocked")!;
+    const duplicateUrl = "https://issuer.test/releases/offline-demo-rights-second-candidate";
+    const duplicateRecord = {
+      ...rights.candidate.record,
+      providerRecordId: "offline-demo-rights-second-candidate",
+      canonicalSourceUrl: duplicateUrl,
+      publisher: { ...rights.candidate.record.publisher, publisherId: "synthetic-issuer-rights-second-candidate" },
+      origin: {
+        ...rights.candidate.record.origin,
+        originalPublisher: { ...rights.candidate.record.origin.originalPublisher!, publisherId: "synthetic-issuer-rights-second-candidate" },
+        originalPublicationId: "offline-demo-publication-rights-second-candidate",
+        originalSourceUrl: duplicateUrl,
+      },
+      sourceLocator: "article:offline-demo-rights-second-candidate",
+    };
+    const duplicateCandidate = createSyntheticNewsDiscoveryCandidate(duplicateRecord, "2026-10-03T12:00:00.000Z");
+    expect(duplicateCandidate).not.toBeNull();
+    if (!duplicateCandidate) return;
+    const withDuplicateType = compositionModule.composeEventIntelligenceEvidenceReviewQueue({
+      evaluationAsOf: "2026-10-03T12:00:00.000Z",
+      candidates: [
+        ...fixtures.map(fixture => ({ candidate: fixture.candidate, routingMaterial: fixture.routingMaterial })),
+        { candidate: duplicateCandidate, routingMaterial: { ...rights.routingMaterial, candidateId: duplicateCandidate.candidateId } },
+      ],
+    });
+    expect(withDuplicateType.status).toBe("COMPOSED");
+    if (withDuplicateType.status !== "COMPOSED") return;
+    expect(withDuplicateType.composition.viewModel.items.filter(item => item.reviewType === "RIGHTS_APPROVAL_REVIEW")).toHaveLength(2);
+    expect(bindOfflineReviewDemoDetails(fixtures, withDuplicateType.composition.viewModel)).toBeNull();
   });
 
   it("renders the actual combined queue through the read-only workspace and links the existing overview", async () => {
