@@ -35,4 +35,14 @@ describe("offline demo route environment boundary", () => {
     expect(notFoundSpy).toHaveBeenCalledOnce();
     expect(loaderSpy).not.toHaveBeenCalled();
   });
+
+  it("rejects outside development before awaiting or examining search parameters", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const then = vi.fn((resolve: (value: unknown) => void) => resolve({ scenario: "unknown" }));
+    const unawaitedSearchParams = { then } as unknown as Promise<{ scenario?: string | string[] }>;
+
+    await expect(invokeRouteWithUntrustedProps({ searchParams: unawaitedSearchParams })).rejects.toThrow("MOCK_NOT_FOUND");
+    expect(then).not.toHaveBeenCalled();
+    expect(loaderSpy).not.toHaveBeenCalled();
+  });
 });
