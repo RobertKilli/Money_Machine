@@ -20,6 +20,21 @@ Rights er en kandidatspesifikk blocker i denne compositionen, så den blandede k
 
 Den samlede ruten bruker ikke source-context-panelene og sender ingen discovery-, routing- eller queue-domainobjekter til klienten. Filtervalg endrer bare presentasjonen av den ene projiserte køen. Den faktiske verifikasjonen for denne utvidelsen står nedenfor.
 
+## Fast temporal replay
+
+I development finnes også `/intelligence/events/review/offline-demo/replay`, lenket fra demooversikten og den samlede køen. Siden bygger to uavhengige composition-resultater gjennom eksisterende discovery-factory, routing, queue-composition og view-model-projeksjon. Begge sidene av replayen viser sin faktiske cutoff, queue-status, composition-status, totalantall og separate read-only workspace.
+
+Inputsettene er lukket og definert i server-fixtures:
+
+- Tidligere observasjon: cutoff `2026-10-02T00:00:00.000Z`; issuer-mapping- og rights-kandidaten.
+- Senere observasjon: cutoff `2026-10-03T12:00:00.000Z`; de samme to faste recordene pluss unresolved correction-materiale. Correction er publisert `2026-10-02T08:00:00.000Z`, oppdaget `2026-10-02T08:01:00.000Z`, mottatt `2026-10-02T08:01:01.000Z` og registrert `2026-10-02T08:01:02.000Z`.
+
+Discovery-kontrollen krever at `recordedAt` ikke ligger etter `evaluatedAt`; routing-input krever også at mottaks- og correction-tilgjengelighetstid ikke ligger etter evaluation cutoff. Derfor forsøker ikke den tidligere episoden å opprette eller sende det senere correction-materialet. Dette beskriver replayens valgte tilgjengelige inputsett, ikke en generell point-in-time retrieval, et produksjonsklart as-of-filter eller persistence-semantikk. Kandidatene bygges på nytt for hvert tidspunkt, og hver episode får sin egen composition, view-model og kandidat-til-view binding. Public keys sammenlignes ikke mellom episodene.
+
+Den tidligere modellen forventes å vise rights `BLOCKED / BLOCKED_RIGHTS` og mapping `OPEN / MAPPING_REQUIRED`. Den senere modellen får i tillegg correction-review `BLOCKED / URGENT_CORRECTION_REVIEW` i queue-kontraktens runtime-rekkefølge. Correction-materialet har fortsatt ingen autentisert lifecycle-target: det etablerer ikke retraction, supersession, approval, event-authority eller progression. Alle rader er historical snapshots ved sine respektive cutoffs; «senere» betyr ikke current. Hvert workspace har egne filtertilstander og DOM-ID-er. Filtrering endrer bare lokal presentasjon.
+
+Dette er to faste syntetiske demonstrasjonsepisoder, ikke en generell snapshot-diff-motor. Ingen persisted snapshots, current-pointer, live retrieval, authority eller production-wiring introduseres.
+
 ## Verifikasjon
 
 ### Samlet kø-utvidelse

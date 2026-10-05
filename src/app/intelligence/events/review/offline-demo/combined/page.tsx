@@ -23,6 +23,7 @@ export default async function OfflineCombinedReviewQueuePage() {
       <h1 className="mt-2 text-2xl font-semibold">Samlet syntetisk review-kø</h1>
       <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--muted)]">Dette er én samlet kø fra én syntetisk composition. Den viser read-only review-behov, ikke godkjente events eller handelssignaler. Køens rekkefølge gjelder review-behov, ikke investeringsverdi.</p>
       <Link href={OFFLINE_DEMO_PATH} className="mt-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til demooversikten</Link>
+      <Link href={`${OFFLINE_DEMO_PATH}/replay`} className="mt-4 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Sammenlign to observasjonstidspunkter</Link>
     </header>
 
     {result.status === "UNAVAILABLE" ? <section role="status" className="rounded-2xl border border-amber-300/60 p-6">Den samlede demo-køen kunne ikke settes sammen. Ingen rader er laget utenom den eksisterende komposisjonen.</section> : <>

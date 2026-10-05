@@ -8,11 +8,17 @@ import {
 import type { SyntheticRoutingMaterial } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
 import type { EvidenceReviewQueueViewModelItem } from "@/domain/intelligence/event-intelligence-evidence-review-queue-view-model";
 
-export const OFFLINE_REVIEW_DEMO_EVALUATION_AS_OF = "2026-10-03T12:00:00.000Z";
+export const OFFLINE_REVIEW_DEMO_EARLIER_EVALUATION_AS_OF = "2026-10-02T00:00:00.000Z";
+export const OFFLINE_REVIEW_DEMO_LATER_EVALUATION_AS_OF = "2026-10-03T12:00:00.000Z";
+export const OFFLINE_REVIEW_DEMO_EVALUATION_AS_OF = OFFLINE_REVIEW_DEMO_LATER_EVALUATION_AS_OF;
 const PUBLISHED_AT = "2026-10-01T08:00:00.000Z";
 const DISCOVERED_AT = "2026-10-01T09:00:00.000Z";
 const RECEIVED_AT = "2026-10-01T09:00:01.000Z";
 const RECORDED_AT = "2026-10-01T09:00:02.000Z";
+const CORRECTION_PUBLISHED_AT = "2026-10-02T08:00:00.000Z";
+const CORRECTION_DISCOVERED_AT = "2026-10-02T08:01:00.000Z";
+const CORRECTION_RECEIVED_AT = "2026-10-02T08:01:01.000Z";
+const CORRECTION_RECORDED_AT = "2026-10-02T08:01:02.000Z";
 
 export type OfflineReviewDemoSourceMaterial = Readonly<{
   sourceLabel: string;
@@ -38,6 +44,13 @@ export type OfflineReviewDemoFixture = Readonly<{
   sourceMaterial: OfflineReviewDemoSourceMaterial;
   candidate: NewsDiscoveryCandidate;
   routingMaterial: SyntheticRoutingMaterial;
+}>;
+
+export type OfflineReviewDemoReplayEpisodeFixtures = Readonly<{
+  key: "EARLIER" | "LATER";
+  label: string;
+  evaluatedAsOf: string;
+  fixtures: readonly OfflineReviewDemoFixture[];
 }>;
 
 function newsRecord(options: Readonly<{
@@ -181,17 +194,23 @@ const FIXTURE_SPECS: readonly FixtureSpec[] = [
       sourceLabel: "Synthetic issuer investor-relations correction notice",
       sourceType: "ISSUER_IR",
       fixtureId: "offline-demo-correction",
-      receivedAt: RECEIVED_AT,
+      receivedAt: CORRECTION_RECEIVED_AT,
       title: "Synthetic Demo Company corrects an earlier notice",
       summary: "Synthetic correction notice; no underlying claim or lifecycle authority is established.",
       evidence: [
-        { label: "Publication time (UTC)", value: PUBLISHED_AT },
+        { label: "Publication time (UTC)", value: CORRECTION_PUBLISHED_AT },
         { label: "Lifecycle relationship", value: "Unresolved; no authenticated relation is established" },
       ],
       relevance: "The notice is visible for correction-lineage review, but it does not prove which earlier claim it concerns.",
       synthetic: true,
     },
-    record: newsRecord({ suffix: "correction", sourceType: "ISSUER_IR", jurisdiction: "US", category: "CORRECTION_OR_RETRACTION", headline: "Synthetic Demo Company corrects an earlier notice" }),
+    record: {
+      ...newsRecord({ suffix: "correction", sourceType: "ISSUER_IR", jurisdiction: "US", category: "CORRECTION_OR_RETRACTION", headline: "Synthetic Demo Company corrects an earlier notice" }),
+      publishedAt: CORRECTION_PUBLISHED_AT,
+      discoveredAt: CORRECTION_DISCOVERED_AT,
+      receivedAt: CORRECTION_RECEIVED_AT,
+      recordedAt: CORRECTION_RECORDED_AT,
+    },
     flags: { issuerMapped: true, assetMapped: true, primaryAvailable: true, qualificationComplete: true, rightsApproved: true, correctionPresent: true },
     eventHint: "CORRECTION_AMENDMENT",
   },
@@ -201,6 +220,7 @@ function scenarioRoutingMaterial(
   candidate: NewsDiscoveryCandidate,
   flags: FixtureSpec["flags"],
   eventHint: FixtureSpec["eventHint"],
+  evaluatedAsOf: string,
 ): SyntheticRoutingMaterial {
   const isAggregator = candidate.record.sourceType === "NEWS_AGGREGATOR";
   const jurisdiction = candidate.record.jurisdiction === "US" ? "US_SEC" : "UNKNOWN";
@@ -231,14 +251,17 @@ function scenarioRoutingMaterial(
     discoveredAt: candidate.record.discoveredAt,
     receivedAt: candidate.record.receivedAt,
     correctionAvailableAt: flags.correctionPresent ? candidate.record.publishedAt : null,
-    evaluationAsOf: OFFLINE_REVIEW_DEMO_EVALUATION_AS_OF,
+    evaluationAsOf: evaluatedAsOf,
   };
 }
 
-export function createOfflineReviewDemoFixtures(): readonly OfflineReviewDemoFixture[] | null {
+function createFixturesAt(
+  evaluatedAsOf: string,
+  keys: readonly OfflineReviewDemoFixture["key"][],
+): readonly OfflineReviewDemoFixture[] | null {
   const fixtures: OfflineReviewDemoFixture[] = [];
-  for (const specification of FIXTURE_SPECS) {
-    const candidate = createSyntheticNewsDiscoveryCandidate(specification.record, OFFLINE_REVIEW_DEMO_EVALUATION_AS_OF);
+  for (const specification of FIXTURE_SPECS.filter(item => keys.includes(item.key))) {
+    const candidate = createSyntheticNewsDiscoveryCandidate(specification.record, evaluatedAsOf);
     if (!candidate) return null;
     const sourceMaterial = Object.freeze({
       ...specification.sourceMaterial,
@@ -252,8 +275,24 @@ export function createOfflineReviewDemoFixtures(): readonly OfflineReviewDemoFix
       reviewGuidance: Object.freeze(specification.reviewGuidance),
       sourceMaterial,
       candidate,
-      routingMaterial: Object.freeze(scenarioRoutingMaterial(candidate, specification.flags, specification.eventHint)),
+      routingMaterial: Object.freeze(scenarioRoutingMaterial(candidate, specification.flags, specification.eventHint, evaluatedAsOf)),
     }));
   }
   return Object.freeze(fixtures);
+}
+
+/** The existing overview/single-scenario fixtures remain the complete later fixed set. */
+export function createOfflineReviewDemoFixtures(): readonly OfflineReviewDemoFixture[] | null {
+  return createFixturesAt(OFFLINE_REVIEW_DEMO_LATER_EVALUATION_AS_OF, ["issuer-mapping", "rights-blocked", "unresolved-correction"]);
+}
+
+/** Two explicitly selected input sets; this is fixture selection, not a general as-of retrieval API. */
+export function createOfflineReviewDemoReplayEpisodeFixtures(): readonly OfflineReviewDemoReplayEpisodeFixtures[] | null {
+  const earlier = createFixturesAt(OFFLINE_REVIEW_DEMO_EARLIER_EVALUATION_AS_OF, ["issuer-mapping", "rights-blocked"]);
+  const later = createFixturesAt(OFFLINE_REVIEW_DEMO_LATER_EVALUATION_AS_OF, ["issuer-mapping", "rights-blocked", "unresolved-correction"]);
+  if (!earlier || !later) return null;
+  return Object.freeze([
+    Object.freeze({ key: "EARLIER" as const, label: "Tidligere observasjon", evaluatedAsOf: OFFLINE_REVIEW_DEMO_EARLIER_EVALUATION_AS_OF, fixtures: earlier }),
+    Object.freeze({ key: "LATER" as const, label: "Senere observasjon", evaluatedAsOf: OFFLINE_REVIEW_DEMO_LATER_EVALUATION_AS_OF, fixtures: later }),
+  ]);
 }
