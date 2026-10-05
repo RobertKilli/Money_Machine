@@ -27,7 +27,7 @@ export default async function OfflineCombinedReviewQueuePage() {
       <section aria-label="Køoversikt" className="mb-6 grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--panel)] p-4 sm:grid-cols-3">
         <p className="text-sm"><span className="font-semibold">Composition:</span> {result.compositionStatus}</p>
         <p className="text-sm"><span className="font-semibold">Køstatus:</span> {result.model.state}</p>
-        <p className="text-sm"><span className="font-semibold">Viste kandidater:</span> {result.model.items.length}</p>
+        <p className="text-sm"><span className="font-semibold">Totalt antall kandidater:</span> {result.model.items.length}</p>
         <p className="text-sm sm:col-span-3"><span className="font-semibold">Felles cutoff (UTC):</span> <time dateTime={result.evaluatedAsOf}>{result.evaluatedAsOf}</time></p>
       </section>
       <EvidenceReviewQueueWorkspace model={result.model} presentation="SYNTHETIC_OFFLINE_DEMO" idPrefix="combined-offline-demo" />

@@ -14,6 +14,27 @@ afterEach(() => {
 });
 
 describe("offline combined evidence review queue", () => {
+  it("builds deterministic fixtures with isolated mutable routing material", () => {
+    const first = createOfflineReviewDemoFixtures();
+    const second = createOfflineReviewDemoFixtures();
+
+    expect(first).toHaveLength(3);
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+    for (const index of [0, 1, 2]) {
+      expect(first?.[index]?.candidate).not.toBe(second?.[index]?.candidate);
+      expect(first?.[index]?.routingMaterial).not.toBe(second?.[index]?.routingMaterial);
+      expect(first?.[index]?.routingMaterial.seenFamilies).not.toBe(second?.[index]?.routingMaterial.seenFamilies);
+      expect(first?.[index]?.sourceMaterial).not.toBe(second?.[index]?.sourceMaterial);
+      expect(first?.[index]?.sourceMaterial.evidence).not.toBe(second?.[index]?.sourceMaterial.evidence);
+    }
+
+    const firstFamilies = first?.[0]?.routingMaterial.seenFamilies as string[] | undefined;
+    firstFamilies?.push("FIXTURE_ISOLATION_SENTINEL");
+    expect(second?.[0]?.routingMaterial.seenFamilies).not.toContain("FIXTURE_ISOLATION_SENTINEL");
+    expect(createOfflineReviewDemoFixtures()).toEqual(second);
+  });
+
   it("sends all authentic fixture candidates through one real composition and one projected queue", async () => {
     vi.stubEnv("NODE_ENV", "development");
     const composeSpy = vi.spyOn(compositionModule, "composeEventIntelligenceEvidenceReviewQueue");
@@ -59,7 +80,7 @@ describe("offline combined evidence review queue", () => {
     expect(html).toContain("Samlet syntetisk review-kø");
     expect(html).toContain("NON_AUTHORITATIVE_SYNTHETIC_COMPOSITION");
     expect(html).toContain("HAS_REVIEW_ITEMS");
-    expect(html).toContain("Viste kandidater:");
+    expect(html).toContain("Totalt antall kandidater:");
     expect(html).toContain("2026-10-03T12:00:00.000Z");
     expect(html).toContain("Urgent correction review");
     expect(html).toContain("Blocked by rights approval");
