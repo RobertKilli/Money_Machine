@@ -27,7 +27,7 @@ I development finnes også `/intelligence/events/review/offline-demo/replay`, le
 Inputsettene er lukket og definert i server-fixtures:
 
 - Tidligere observasjon: cutoff `2026-10-02T00:00:00.000Z`; issuer-mapping- og rights-kandidaten.
-- Senere observasjon: cutoff `2026-10-03T12:00:00.000Z`; de samme to faste recordene pluss unresolved correction-materiale. Correction er publisert `2026-10-02T08:00:00.000Z`, oppdaget `2026-10-02T08:01:00.000Z`, mottatt `2026-10-02T08:01:01.000Z` og registrert `2026-10-02T08:01:02.000Z`.
+- Senere observasjon: cutoff `2026-10-03T12:00:00.000Z`; de samme to faste recordene pluss unresolved correction-materiale. Correction er publisert `2026-10-02T08:00:00.000Z`, oppdaget `2026-10-02T08:01:00.000Z`, mottatt og registrert `2026-10-02T08:01:01.000Z`.
 
 Discovery-kontrollen krever at `recordedAt` ikke ligger etter `evaluatedAt`; routing-input krever også at mottaks- og correction-tilgjengelighetstid ikke ligger etter evaluation cutoff. Derfor forsøker ikke den tidligere episoden å opprette eller sende det senere correction-materialet. Dette beskriver replayens valgte tilgjengelige inputsett, ikke en generell point-in-time retrieval, et produksjonsklart as-of-filter eller persistence-semantikk. Kandidatene bygges på nytt for hvert tidspunkt, og hver episode får sin egen composition, view-model og kandidat-til-view binding. Public keys sammenlignes ikke mellom episodene.
 

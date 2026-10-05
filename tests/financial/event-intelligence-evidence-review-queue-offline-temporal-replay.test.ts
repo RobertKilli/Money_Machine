@@ -16,6 +16,7 @@ import { createSyntheticNewsDiscoveryCandidate, isAuthenticNewsDiscoveryCandidat
 import { parseSyntheticRoutingMaterial } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
 import { EvidenceReviewQueueWorkspace } from "@/components/intelligence/evidence-review-queue-workspace";
 import { OfflineTemporalReplayEpisodeSection } from "@/components/intelligence/offline-temporal-replay-episode-section";
+import { bindOfflineReviewDemoDetails } from "@/application/intelligence/offline-review-demo-presentation";
 import ReplayPage from "@/app/intelligence/events/review/offline-demo/replay/page";
 import DemoPage from "@/app/intelligence/events/review/offline-demo/page";
 import CombinedPage from "@/app/intelligence/events/review/offline-demo/combined/page";
@@ -104,7 +105,7 @@ describe("fixed offline temporal replay", () => {
     expect(later.details.map(detail => detail.key)).toEqual(["issuer-mapping", "rights-blocked", "unresolved-correction"]);
   });
 
-  it("respects upstream rejection of a correction recorded after the earlier cutoff", () => {
+  it("isolates recordedAt cutoff rejection and accepts equality at the public discovery boundary", () => {
     const episodes = createOfflineReviewDemoReplayEpisodeFixtures();
     expect(episodes).toHaveLength(2);
     if (!episodes) return;
@@ -116,9 +117,26 @@ describe("fixed offline temporal replay", () => {
       publishedAt: "2026-10-02T08:00:00.000Z",
       discoveredAt: "2026-10-02T08:01:00.000Z",
       receivedAt: "2026-10-02T08:01:01.000Z",
-      recordedAt: "2026-10-02T08:01:02.000Z",
+      recordedAt: "2026-10-02T08:01:01.000Z",
     });
     expect(createSyntheticNewsDiscoveryCandidate(correction!.candidate.record, early.evaluatedAsOf)).toBeNull();
+    const validLater = createSyntheticNewsDiscoveryCandidate(correction!.candidate.record, later.evaluatedAsOf);
+    expect(validLater).not.toBeNull();
+    expect(isAuthenticNewsDiscoveryCandidate(validLater)).toBe(true);
+
+    // Keep the same valid record shape and make publication, discovery and receipt exactly
+    // available at the early cutoff; only recordedAt is outside that cutoff by one millisecond.
+    const recordedAfterCutoff = Object.freeze({
+      ...correction!.candidate.record,
+      publishedAt: early.evaluatedAsOf,
+      discoveredAt: early.evaluatedAsOf,
+      receivedAt: early.evaluatedAsOf,
+      recordedAt: "2026-10-02T00:00:00.001Z",
+    });
+    expect(isAuthenticNewsDiscoveryCandidate(createSyntheticNewsDiscoveryCandidate(recordedAfterCutoff, "2026-10-02T00:00:00.001Z"))).toBe(true);
+    expect(createSyntheticNewsDiscoveryCandidate(recordedAfterCutoff, early.evaluatedAsOf)).toBeNull();
+    const recordedAtCutoff = Object.freeze({ ...recordedAfterCutoff, recordedAt: early.evaluatedAsOf });
+    expect(isAuthenticNewsDiscoveryCandidate(createSyntheticNewsDiscoveryCandidate(recordedAtCutoff, early.evaluatedAsOf))).toBe(true);
   });
 
   it("keeps repeated loader runs deterministic, fixture data isolated, and WeakMap bindings episode-local", async () => {
@@ -130,7 +148,7 @@ describe("fixed offline temporal replay", () => {
     expect(firstInputSets[0]!.fixtures[0]!.candidate).not.toBe(secondInputSets[0]!.fixtures[0]!.candidate);
     expect(firstInputSets[0]!.fixtures[0]!.routingMaterial.seenFamilies).not.toBe(firstInputSets[1]!.fixtures[0]!.routingMaterial.seenFamilies);
     expect(firstInputSets[1]!.fixtures[0]!.routingMaterial.seenFamilies).not.toBe(secondInputSets[1]!.fixtures[0]!.routingMaterial.seenFamilies);
-    expect(firstInputSets.every(episode => episode.fixtures.every(fixture => Object.isFrozen(fixture) && Object.isFrozen(fixture.routingMaterial) && Object.isFrozen(fixture.sourceMaterial)))).toBe(true);
+    expect(firstInputSets.every(episode => episode.fixtures.every(fixture => Object.isFrozen(fixture) && Object.isFrozen(fixture.reviewGuidance) && Object.isFrozen(fixture.routingMaterial) && Object.isFrozen(fixture.sourceMaterial) && Object.isFrozen(fixture.sourceMaterial.evidence) && fixture.sourceMaterial.evidence.every(Object.isFrozen)))).toBe(true);
 
     const first = await loadEventIntelligenceOfflineTemporalReplay();
     const second = await loadEventIntelligenceOfflineTemporalReplay();
@@ -144,6 +162,22 @@ describe("fixed offline temporal replay", () => {
     expect(getComposedCandidatePublicKey(first.episodes[1]!.model, correctionId)).not.toBeNull();
     expect(first.episodes[0]!.details.every(detail => first.episodes[0]!.model.items.some(item => item.publicKey === detail.item.publicKey))).toBe(true);
     expect(first.episodes[1]!.details.every(detail => first.episodes[1]!.model.items.some(item => item.publicKey === detail.item.publicKey))).toBe(true);
+
+    const earlyFixtures = firstInputSets[0]!.fixtures;
+    const episodeLaterFixtures = firstInputSets[1]!.fixtures;
+    expect(bindOfflineReviewDemoDetails(earlyFixtures, first.episodes[0]!.model)).not.toBeNull();
+    expect(bindOfflineReviewDemoDetails([earlyFixtures[0]!, earlyFixtures[0]!], first.episodes[0]!.model)).toBeNull();
+    expect(bindOfflineReviewDemoDetails([earlyFixtures[0]!, episodeLaterFixtures[2]!], first.episodes[0]!.model)).toBeNull();
+    expect(bindOfflineReviewDemoDetails(earlyFixtures.slice(0, 1), first.episodes[0]!.model)).toBeNull();
+    const reordered = bindOfflineReviewDemoDetails([...episodeLaterFixtures].reverse(), first.episodes[1]!.model);
+    expect(reordered?.map(detail => [detail.key, detail.item.reviewType])).toEqual([
+      ["unresolved-correction", "CORRECTION_LINEAGE_REVIEW"],
+      ["rights-blocked", "RIGHTS_APPROVAL_REVIEW"],
+      ["issuer-mapping", "ISSUER_MAPPING_REVIEW"],
+    ]);
+    const copiedModel = JSON.parse(JSON.stringify(first.episodes[1]!.model)) as typeof first.episodes[number]["model"];
+    expect(getComposedCandidatePublicKey(copiedModel, correctionId)).toBeNull();
+    expect(bindOfflineReviewDemoDetails(episodeLaterFixtures, copiedModel)).toBeNull();
   });
 
   it("renders both workspaces with isolated ids, local links, and only degraded client props", async () => {
