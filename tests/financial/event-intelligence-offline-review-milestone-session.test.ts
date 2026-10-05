@@ -130,6 +130,18 @@ describe("bounded offline review session", () => {
     expect(evaluateOfflineReviewSession(c.session, CUTOFF)).toMatchObject({ status: "COMPLETED_PROCEED", outcome: "COMPLETED_PROCEED" });
   });
 
+  it("does not register a syntactically valid item rejected by the parent issuer", () => {
+    const c = create();
+    const validShape = rawEvidence(c.candidate, c.route, { evidenceId: "parent-reject-then-retry" });
+    const rejected = { ...validShape, routingContext: { ...validShape.routingContext, publicationAt: "2026-10-01T07:59:59.000Z" } };
+    expect(parseReviewMilestoneEvidence(rejected).status).toBe("VALID");
+    expect(issueOfflineReviewSessionEvidence(c.session, rejected)).toMatchObject({ status: "REJECTED", code: "EVIDENCE_INVALID" });
+    expect(evaluateOfflineReviewSession(c.session, CUTOFF)).toMatchObject({ status: "NO_REVIEW_EVIDENCE", includedAttestations: 0 });
+
+    expect(issueOfflineReviewSessionEvidence(c.session, rawEvidence(c.candidate, c.route, { evidenceId: "parent-reject-then-retry" })).status).toBe("ISSUED");
+    expect(evaluateOfflineReviewSession(c.session, CUTOFF)).toMatchObject({ status: "COMPLETED_PROCEED", includedAttestations: 1 });
+  });
+
   it("evaluates a legal linear correction from the session-owned ancestor chain", () => {
     const c = create();
     const root = issue(c.session, c.candidate, c.route, { evidenceId: "linear-root", outcome: "EVIDENCE_INSUFFICIENT", reasonCodes: ["MATERIAL_INSUFFICIENT"], issuedAt: "2026-10-03T10:30:00.000Z" });
@@ -143,6 +155,29 @@ describe("bounded offline review session", () => {
     issue(c.session, c.candidate, c.route, { evidenceId: "branch-a", correctsEvidenceId: "branch-root", issuedAt: "2026-10-03T10:30:00.000Z" }, root);
     issue(c.session, c.candidate, c.route, { evidenceId: "branch-b", correctsEvidenceId: "branch-root", issuedAt: "2026-10-03T11:00:00.000Z", outcome: "COMPLETED_STOP", reasonCodes: ["REVIEW_STOP_REQUIRED"] }, root);
     expect(evaluateOfflineReviewSession(c.session, CUTOFF)).toMatchObject({ status: "HELD", reason: "EVIDENCE_CONFLICT", includedAttestations: 3 });
+  });
+
+  it("keeps revoked roots, corrected descendants, and revoked branches held", () => {
+    const revokedRoot = create();
+    const root = issue(revokedRoot.session, revokedRoot.candidate, revokedRoot.route, { evidenceId: "revoked-root", outcome: "EVIDENCE_INSUFFICIENT", reasonCodes: ["MATERIAL_INSUFFICIENT"], issuedAt: "2026-10-03T10:30:00.000Z" });
+    issue(revokedRoot.session, revokedRoot.candidate, revokedRoot.route, { evidenceId: "root-correction", correctsEvidenceId: "revoked-root", issuedAt: "2026-10-03T11:30:00.000Z" }, root);
+    expect(revokeOfflineReviewSessionEvidence(revokedRoot.session, root, CUTOFF)).toMatchObject({ status: "REVOKED" });
+    expect(evaluateOfflineReviewSession(revokedRoot.session, CUTOFF)).toMatchObject({ status: "HELD", reason: "EVIDENCE_REVOKED", includedAttestations: 2 });
+    expect(revokeOfflineReviewSessionEvidence(revokedRoot.session, root, CUTOFF)).toMatchObject({ status: "REJECTED", code: "EVIDENCE_ALREADY_REVOKED" });
+    expect(evaluateOfflineReviewSession(revokedRoot.session, CUTOFF)).toMatchObject({ status: "HELD", includedAttestations: 2 });
+
+    const revokedChild = create();
+    const childRoot = issue(revokedChild.session, revokedChild.candidate, revokedChild.route, { evidenceId: "child-root", outcome: "EVIDENCE_INSUFFICIENT", reasonCodes: ["MATERIAL_INSUFFICIENT"], issuedAt: "2026-10-03T10:30:00.000Z" });
+    const childTip = issue(revokedChild.session, revokedChild.candidate, revokedChild.route, { evidenceId: "revoked-child", correctsEvidenceId: "child-root", issuedAt: "2026-10-03T11:30:00.000Z" }, childRoot);
+    expect(revokeOfflineReviewSessionEvidence(revokedChild.session, childTip, CUTOFF)).toMatchObject({ status: "REVOKED" });
+    expect(evaluateOfflineReviewSession(revokedChild.session, CUTOFF)).toMatchObject({ status: "HELD", reason: "EVIDENCE_REVOKED", includedAttestations: 2 });
+
+    const revokedBranch = create();
+    const branchRoot = issue(revokedBranch.session, revokedBranch.candidate, revokedBranch.route, { evidenceId: "branch-root-revoked", outcome: "EVIDENCE_INSUFFICIENT", reasonCodes: ["MATERIAL_INSUFFICIENT"], issuedAt: "2026-10-03T10:00:00.000Z" });
+    const branchA = issue(revokedBranch.session, revokedBranch.candidate, revokedBranch.route, { evidenceId: "branch-a-revoked", correctsEvidenceId: "branch-root-revoked", issuedAt: "2026-10-03T10:30:00.000Z" }, branchRoot);
+    issue(revokedBranch.session, revokedBranch.candidate, revokedBranch.route, { evidenceId: "branch-b-kept", correctsEvidenceId: "branch-root-revoked", issuedAt: "2026-10-03T11:00:00.000Z", outcome: "COMPLETED_STOP", reasonCodes: ["REVIEW_STOP_REQUIRED"] }, branchRoot);
+    expect(revokeOfflineReviewSessionEvidence(revokedBranch.session, branchA, CUTOFF)).toMatchObject({ status: "REVOKED" });
+    expect(evaluateOfflineReviewSession(revokedBranch.session, CUTOFF)).toMatchObject({ status: "HELD", reason: "EVIDENCE_REVOKED", includedAttestations: 3 });
   });
 
   it("includes evidence at cutoff, excludes later-issued operations, and rejects other routing cutoffs", () => {
@@ -163,6 +198,15 @@ describe("bounded offline review session", () => {
     issue(c.session, c.candidate, c.route, { evidenceId: "future-correction", correctsEvidenceId: "future-correction-root", issuedAt: "2026-10-03T12:00:00.001Z" }, root);
     expect(first).toMatchObject({ status: "HELD", includedAttestations: 1 });
     expect(evaluateOfflineReviewSession(c.session, CUTOFF)).toMatchObject({ status: "HELD", includedAttestations: 1 });
+  });
+
+  it("does not seal an evaluation cutoff against later caller-declared backdated operations", () => {
+    const c = create();
+    const earlier = evaluateOfflineReviewSession(c.session, CUTOFF);
+    expect(earlier).toMatchObject({ status: "NO_REVIEW_EVIDENCE", includedAttestations: 0 });
+    issue(c.session, c.candidate, c.route, { evidenceId: "declared-at-cutoff-after-evaluation", issuedAt: CUTOFF });
+    expect(earlier).toMatchObject({ status: "NO_REVIEW_EVIDENCE", includedAttestations: 0 });
+    expect(evaluateOfflineReviewSession(c.session, CUTOFF)).toMatchObject({ status: "COMPLETED_PROCEED", includedAttestations: 1 });
   });
 
   it("applies revocation only at or before the bound cutoff and does not rewrite a returned result", () => {

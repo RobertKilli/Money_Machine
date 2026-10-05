@@ -21,6 +21,7 @@ export function OfflineReviewSessionDemoView({ result }: { result: OfflineReview
           <li>Parent-verifieren binder evaluationCutoff til routing-resultatets evaluationAsOf. Tidligere og senere visninger bruker derfor separate, eksakt bundne sessions; dette er ikke generell historisk retrieval.</li>
           <li>Correction-kjeden er append-only. En senere utstedt korreksjon inngår først når dens cutoff-bundne session evalueres med et kompatibelt tidspunkt.</li>
           <li>RevokedAt er caller-levert syntetisk tid. Dette viser lokal cutoff-håndtering, ikke en betrodd revoker eller historisk authorization.</li>
+          <li>Cutoff er ikke forseglet: senere session-operasjoner kan oppgi tilbakedaterte syntetiske tider. Tidligere returnerte resultater endres ikke, men en ny evaluering kan gi et annet resultat.</li>
         </ul>
       </section>
 
