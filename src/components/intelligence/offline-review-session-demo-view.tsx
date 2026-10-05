@@ -1,5 +1,5 @@
 import type { OfflineReviewSessionDemoResult } from "@/application/intelligence/load-offline-review-session-demo";
-import Link from "next/link";
+import { OfflineReviewWorkbenchNavigation } from "@/components/intelligence/offline-review-workbench-navigation";
 
 export function OfflineReviewSessionDemoView({ result }: { result: OfflineReviewSessionDemoResult }) {
   return <main className="mx-auto min-h-screen w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
@@ -7,12 +7,8 @@ export function OfflineReviewSessionDemoView({ result }: { result: OfflineReview
       <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200">Syntetisk offline-demo · read-only</p>
       <h1 className="mt-2 text-2xl font-semibold sm:text-3xl">Review-session og milepælevidens</h1>
       <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--muted)]">Hver session eier et avgrenset, append-only minneinventar. Attestasjoner og tidspunkter er syntetiske; sessionen gir ingen faktisk reviewer-autorisasjon. COMPLETED_PROCEED fullfører bare den lokale review-milepælen. Routing, køblockers og approvals endres ikke.</p>
-      <nav aria-label="Demonstrasjonsnavigasjon" className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold">
-        <Link href="/intelligence/events/review/offline-demo" className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Til demooversikten</Link>
-        <Link href="/intelligence/events/review/offline-demo/queue-v2" className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Se V1/V2-køen</Link>
-        <Link href="/intelligence/events/review/offline-demo/review-readiness" className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Vurder lokal review readiness</Link>
-      </nav>
     </header>
+    <OfflineReviewWorkbenchNavigation activePage="review-session" />
 
     {result.status === "UNAVAILABLE" ? <section role="status" className="rounded-xl border border-amber-300/60 bg-[var(--panel)] p-5">Den syntetiske session-demoen kunne ikke settes sammen. Ingen evidens ble persistet.</section> : <>
       <section aria-label="Sessiongaranti og begrensninger" className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--panel)] p-5">

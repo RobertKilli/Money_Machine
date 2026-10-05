@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { EvidenceReviewQueueWorkspace } from "@/components/intelligence/evidence-review-queue-workspace";
 import { OfflineReviewDemoDetailSection } from "@/components/intelligence/offline-review-demo-detail-section";
+import { OfflineReviewWorkbenchNavigation } from "@/components/intelligence/offline-review-workbench-navigation";
 
 export const metadata = {
   title: "Syntetisk offline-demo | Evidence review queue",
@@ -43,10 +44,12 @@ export default async function OfflineEvidenceReviewDemoPage({
   return <div className="mx-auto min-h-screen w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
     <header className="mb-8 rounded-2xl border border-amber-300/70 bg-amber-300/10 p-5 sm:p-6">
       <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200">SYNTETISK OFFLINE-DEMO</p>
-      <h1 className="mt-2 text-2xl font-semibold">Ingen live nyheter eller godkjente events</h1>
-      <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--muted)]">Disse kandidatene er kun til read-only review. De er ikke godkjente events eller handelssignaler. Fast cutoff (UTC): <time dateTime={demo.status === "AVAILABLE" ? demo.evaluatedAsOf : "2026-10-03T12:00:00.000Z"}>{demo.status === "AVAILABLE" ? demo.evaluatedAsOf : "2026-10-03T12:00:00.000Z"}</time>.</p>
+      <h1 className="mt-2 text-2xl font-semibold">Offline review-arbeidsflate</h1>
+      <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--muted)]">Start i den samlede køen for å finne en kandidat, forstå hvorfor den trenger review, se hva som mangler og undersøke syntetisk kildekontekst. Tidsreplay viser hvordan to faste inputsett gir ulike køer; teknisk innsikt ligger samlet nedenfor. Alle data er faste og syntetiske. Review-status er ikke godkjenning eller handelssignal. Fast cutoff (UTC): <time dateTime={demo.status === "AVAILABLE" ? demo.evaluatedAsOf : "2026-10-03T12:00:00.000Z"}>{demo.status === "AVAILABLE" ? demo.evaluatedAsOf : "2026-10-03T12:00:00.000Z"}</time>.</p>
       <Link href="/" className="mt-4 inline-block rounded px-1 py-1 text-sm text-[var(--muted)] underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Home</Link>
     </header>
+
+    <OfflineReviewWorkbenchNavigation activePage="overview" />
 
     {demo.status === "UNAVAILABLE" ? <section role="status" className="rounded-2xl border border-amber-300/60 p-6">Demo-scenarioene kunne ikke settes sammen. Ingen syntetiske rader er laget utenom den eksisterende komposisjonen.</section> : <div className="space-y-8">
       {selectedScenario && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--panel)] p-4">
@@ -68,16 +71,6 @@ export default async function OfflineEvidenceReviewDemoPage({
           </Link>;
         })}
       </nav>
-
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--panel)] p-4">
-        <p className="text-sm text-[var(--muted)]">Se kandidatene samlet i én syntetisk kø.</p>
-        <Link href={`${OFFLINE_DEMO_PATH}/combined`} className="mt-2 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Samlet syntetisk review-kø</Link>
-        <Link href={`${OFFLINE_DEMO_PATH}/replay`} className="mt-2 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Sammenlign to observasjonstidspunkter</Link>
-        <Link href={`${OFFLINE_DEMO_PATH}/snapshot`} className="mt-2 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Demonstrer snapshot roundtrip</Link>
-        <Link href={`${OFFLINE_DEMO_PATH}/queue-v2`} className="mt-2 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Sammenlign opt-in queue V2</Link>
-        <Link href={`${OFFLINE_DEMO_PATH}/review-session`} className="mt-2 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Demonstrer isolerte review-sessions</Link>
-        <Link href={`${OFFLINE_DEMO_PATH}/review-readiness`} className="mt-2 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Vurder lokal review readiness</Link>
-      </div>
 
       {demo.scenarios.filter(scenario => !selectedScenario || scenario.key === selectedScenario.scenarioKey).map(scenario => {
         return <section key={scenario.key} id={`offline-demo-${scenario.key}`} aria-labelledby={`${scenario.detailId}-heading`} className="overflow-hidden rounded-2xl border border-[var(--border)]">

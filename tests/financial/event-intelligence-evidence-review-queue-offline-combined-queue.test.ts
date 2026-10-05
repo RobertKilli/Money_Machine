@@ -192,7 +192,7 @@ describe("offline combined evidence review queue", () => {
     expect(html).not.toContain("synthetic-company-mapping");
     expect(html).not.toContain("issuer.test/releases/offline-demo");
     expect(overviewHtml).toContain("href=\"/intelligence/events/review/offline-demo/combined\"");
-    expect(overviewHtml).toContain("Samlet syntetisk review-kø");
+    expect(overviewHtml).toContain("Samlet review-kø");
 
     const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(([, id]) => id);
     expect(new Set(ids).size).toBe(ids.length);

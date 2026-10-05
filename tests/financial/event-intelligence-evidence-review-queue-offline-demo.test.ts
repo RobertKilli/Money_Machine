@@ -1,3 +1,4 @@
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadEventIntelligenceOfflineReviewDemo } from "@/application/intelligence/load-event-intelligence-offline-review-demo";
@@ -83,8 +84,12 @@ describe("offline evidence-review demo composition and presentation", () => {
     const html = renderToStaticMarkup(await page());
 
     expect(html).toContain("SYNTETISK OFFLINE-DEMO");
-    expect(html).toContain("Ingen live nyheter eller godkjente events");
-    expect(html).toContain("Disse kandidatene er kun til read-only review");
+    expect(html).toContain("Offline review-arbeidsflate");
+    expect(html).toContain("Start i den samlede køen");
+    expect(html).toContain("Review-status er ikke godkjenning eller handelssignal");
+    expect(html).toContain("Hovedflyt");
+    expect(html).toContain("Teknisk innsikt");
+    expect(html).toMatch(/<a aria-current="page"[^>]*href="\/intelligence\/events\/review\/offline-demo"/);
     expect(html).toContain("Åpen issuer-mapping-review");
     expect(html).toContain("Blokkert: rights-gjennomgang");
     expect(html).toContain("Uavklart correction");
@@ -127,6 +132,26 @@ describe("offline evidence-review demo composition and presentation", () => {
     expect(sourceDetails.join(" ")).not.toMatch(/<button\b|<form\b|<input\b|<select\b|<a\b/i);
     expect(sourceDetails.join(" ")).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl|originBindings|fingerprint|queueSet/i);
     expect(html).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl/);
+  });
+
+  it("groups the fixed workbench destinations and marks one active page accessibly", async () => {
+    const { OfflineReviewWorkbenchNavigation } = await import("@/components/intelligence/offline-review-workbench-navigation");
+    const html = renderToStaticMarkup(createElement(OfflineReviewWorkbenchNavigation, { activePage: "replay" }));
+
+    for (const path of [
+      "/intelligence/events/review/offline-demo",
+      "/intelligence/events/review/offline-demo/combined",
+      "/intelligence/events/review/offline-demo/replay",
+      "/intelligence/events/review/offline-demo/snapshot",
+      "/intelligence/events/review/offline-demo/queue-v2",
+      "/intelligence/events/review/offline-demo/review-session",
+      "/intelligence/events/review/offline-demo/review-readiness",
+    ]) expect(html).toContain(`href="${path}"`);
+    expect(html).toContain('aria-label="Offline review-arbeidsflate"');
+    expect(html).toMatch(/<a aria-current="page"[^>]*href="\/intelligence\/events\/review\/offline-demo\/replay"/);
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(html).toContain("<details");
+    expect(html).toContain("<summary");
   });
 
   it("shows all scenarios by default with a fixed navigation link for each one", async () => {

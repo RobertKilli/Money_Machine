@@ -1,15 +1,12 @@
 import { notFound } from "next/navigation";
-import Link from "next/link";
 import { EvidenceReviewQueueWorkspace } from "@/components/intelligence/evidence-review-queue-workspace";
 import { EvidenceReviewQueueV2Workspace } from "@/components/intelligence/evidence-review-queue-v2-workspace";
+import { OfflineReviewWorkbenchNavigation } from "@/components/intelligence/offline-review-workbench-navigation";
 
 export const metadata = {
   title: "Queue V1/V2 comparison | Evidence review queue",
   description: "Side-by-side synthetic offline comparison of the opt-in queue V2 evaluator.",
 };
-
-const DEMO = "/intelligence/events/review/offline-demo";
-const COMBINED = `${DEMO}/combined`;
 
 function VersionSummary({ label, result }: { label: string; result: Readonly<{ compositionVersion: string; compositionStatus: string; queueStatus: string; presentationVersion: string; totalItems: number; queueVersion?: string }> }) {
   return <section aria-label={`${label} version and status`} className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--panel)] p-4">
@@ -36,13 +33,8 @@ export default async function OfflineQueueV2ComparisonPage() {
       <p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-200">READ-ONLY / SYNTETISK OFFLINE-DEMO</p>
       <h1 className="mt-2 text-2xl font-semibold">V1- og V2-kø side om side</h1>
       <p className="mt-3 max-w-4xl text-sm leading-6 text-[var(--muted)]">Begge separate compositioner bruker de samme tre autentiske syntetiske discovery-/routing-fixturene og cutoff. V2 er opt-in; eksisterende V1-flyter fortsetter uendret. Køprioritet beskriver review-behov, ikke investeringsrangering; OPEN er ikke godkjenning.</p>
-      <nav aria-label="Queue comparison navigation" className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold">
-        <Link href={DEMO} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til demooversikten</Link>
-        <Link href={COMBINED} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til samlet V1-kø</Link>
-        <Link href={`${DEMO}/review-session`} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Demonstrer isolerte review-sessions</Link>
-        <Link href={`${DEMO}/review-readiness`} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Vurder lokal review readiness</Link>
-      </nav>
     </header>
+    <OfflineReviewWorkbenchNavigation activePage="queue-v2" />
 
     {result.status === "UNAVAILABLE" ? <section role="status" className="rounded-2xl border border-amber-300/60 p-6">Sammenligningen kunne ikke fullføres gjennom de autentiske discovery-, routing- og kø-API-ene ({result.reason}).</section> : <>
       <section aria-label="Shared evaluation cutoff" className="mb-6 grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--panel)] p-4 sm:grid-cols-2">

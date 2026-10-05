@@ -1,10 +1,8 @@
 import "server-only";
 
-import Link from "next/link";
 import { EvidenceReviewQueueWorkspace } from "@/components/intelligence/evidence-review-queue-workspace";
 import type { OfflineSnapshotRoundtripResult } from "@/application/intelligence/load-event-intelligence-offline-snapshot-roundtrip";
-
-const DEMO = "/intelligence/events/review/offline-demo";
+import { OfflineReviewWorkbenchNavigation } from "@/components/intelligence/offline-review-workbench-navigation";
 
 export function OfflineSnapshotRoundtripView({ result }: { result: OfflineSnapshotRoundtripResult }) {
   return <main className="mx-auto min-h-screen w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
@@ -13,11 +11,8 @@ export function OfflineSnapshotRoundtripView({ result }: { result: OfflineSnapsh
       <h1 className="mt-2 text-2xl font-semibold">Snapshot encode og lokal verifikasjon</h1>
       <p className="mt-3 max-w-4xl text-sm leading-6 text-[var(--muted)]">En fast syntetisk replay-composition kodes med eksisterende snapshot-codec og verifiseres mot scope-materiale som ble etablert separat. Ingen fil, database eller storage brukes.</p>
       <p className="mt-3 max-w-4xl text-sm leading-6 text-[var(--muted)]">Byteintegritet viser at bytes samsvarer med digest fra dette lokale encode-trinnet. Scope-verifikasjon viser syntaktisk samsvar med lokal forventning. Ingen av delene er source authority, policy application eller approval. Dekodingen gjenoppretter ikke composition-/routing-binding eller provenance.</p>
-      <nav aria-label="Snapshot demo navigasjon" className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold">
-        <Link href={`${DEMO}/replay`} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til tidsreplay</Link>
-        <Link href={DEMO} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til demooversikten</Link>
-      </nav>
     </header>
+    <OfflineReviewWorkbenchNavigation activePage="snapshot" />
 
     {result.status === "UNAVAILABLE" ? <section role="status" className="rounded-2xl border border-amber-300/60 p-6">Den lokale snapshotdemonstrasjonen kunne ikke fullføres. Ingen payload vises.</section> : <>
       <section aria-label="Lokal snapshotstatus" className="grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--panel)] p-4 sm:grid-cols-2 lg:grid-cols-3">
