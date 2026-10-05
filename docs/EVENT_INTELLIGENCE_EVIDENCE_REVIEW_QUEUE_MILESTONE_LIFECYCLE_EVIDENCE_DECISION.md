@@ -1,6 +1,6 @@
 # Evidence review queue milestone and lifecycle evidence decision
 
-**Status:** design recommendation only. No evidence schema, issuer, runtime, parser, factory, persistence path, or approval is implemented by this document.
+**Status:** design recommendation for the broader lifecycle and authorization problem. A deliberately limited offline milestone-evidence syntax parser and synthetic issuer/verifier now exist; see [Offline milestone evidence](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_OFFLINE_MILESTONE_EVIDENCE.md). They do not implement the reviewer/source authorization, source-reference resolution, lifecycle relation, persistence, or routing activation described here.
 
 ## Decision
 
