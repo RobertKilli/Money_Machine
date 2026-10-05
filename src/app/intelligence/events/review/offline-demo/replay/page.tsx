@@ -9,6 +9,7 @@ export const metadata = {
 
 const OFFLINE_DEMO_PATH = "/intelligence/events/review/offline-demo";
 const COMBINED_PATH = `${OFFLINE_DEMO_PATH}/combined`;
+const SNAPSHOT_PATH = `${OFFLINE_DEMO_PATH}/snapshot`;
 
 export default async function OfflineTemporalReplayPage() {
   if (process.env.NODE_ENV !== "development") notFound();
@@ -25,6 +26,7 @@ export default async function OfflineTemporalReplayPage() {
       <nav aria-label="Temporal replay navigasjon" className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold">
         <Link href={COMBINED_PATH} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til samlet kø</Link>
         <Link href={OFFLINE_DEMO_PATH} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til demooversikten</Link>
+        <Link href={SNAPSHOT_PATH} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Demonstrer snapshot roundtrip</Link>
       </nav>
     </header>
 
