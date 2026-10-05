@@ -52,6 +52,8 @@ function dense(value: unknown, max: number): unknown[] {
 function freezeDeep<T>(value: T): T { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child); Object.freeze(value); } return value; }
 function plain(value: unknown): string { return JSON.stringify(value); }
 function validUtc(value: unknown): value is string { return typeof value === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value; }
+/** Shared canonical UTC predicate for bounded offline consumers of this evidence contract. */
+export function isCanonicalReviewMilestoneEvidenceTime(value: unknown): value is string { return validUtc(value); }
 function normalizeExpectedContext(value: unknown): ReviewMilestoneRoutingContext | null {
   try {
     const r = exact(value, ["decisionVersion", "decisionFingerprint", "routingResultId", "candidateId", "currentState", "nextState", "stageHistory", "evaluationAsOf", "publicationAt", "discoveredAt", "receivedAt"]);

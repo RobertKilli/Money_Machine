@@ -39,6 +39,7 @@ export default async function OfflineQueueV2ComparisonPage() {
       <nav aria-label="Queue comparison navigation" className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold">
         <Link href={DEMO} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til demooversikten</Link>
         <Link href={COMBINED} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til samlet V1-kø</Link>
+        <Link href={`${DEMO}/review-session`} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Demonstrer isolerte review-sessions</Link>
       </nav>
     </header>
 
