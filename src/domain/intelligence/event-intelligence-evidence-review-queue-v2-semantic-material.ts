@@ -21,6 +21,8 @@ export const EVIDENCE_REVIEW_QUEUE_V2_SEMANTIC_MATERIAL = Object.freeze({
   algorithmVersion: EVIDENCE_REVIEW_QUEUE_V2_ALGORITHM_VERSION,
   queueContractVersion: EVIDENCE_REVIEW_QUEUE_V2_VERSION,
   classifierOrder: contract.classifierOrder,
+  priorityMapping: contract.priorityMapping,
+  blockerMappings: contract.blockerMappings,
   conflictActionOrder: contract.conflictActionOrder,
   blockerPolicy: contract.blockerPolicy,
   priorityOrder: contract.priorityOrder,

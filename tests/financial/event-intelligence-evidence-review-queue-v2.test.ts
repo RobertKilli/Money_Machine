@@ -86,6 +86,9 @@ describe("opt-in evidence review queue v2", () => {
     expect(v2.requiredSourcePortfolioVersion).toBe("event-intelligence-source-portfolio-routing-decision/v1");
     expect(v2.algorithmVersion).toBe(EVIDENCE_REVIEW_QUEUE_V2_SEMANTIC_MATERIAL.algorithmVersion);
     expect(v2.classifierOrder).toEqual(EVIDENCE_REVIEW_QUEUE_V2_SEMANTIC_MATERIAL.classifierOrder);
+    expect(v2.priorityMapping).toEqual(EVIDENCE_REVIEW_QUEUE_V2_SEMANTIC_MATERIAL.priorityMapping);
+    expect(v2.blockerMappings).toEqual(v1.blockerMappings);
+    expect(v2.blockerMappings).toEqual(EVIDENCE_REVIEW_QUEUE_V2_SEMANTIC_MATERIAL.blockerMappings);
     expect(v2.classifierOrder).toContain("LIFECYCLE_REVIEW=DOCUMENTED_FALLBACK");
     expect(v2.conflictActionOrder.indexOf("LIFECYCLE_CONFLICT=REVIEW_LIFECYCLE")).toBeLessThan(v2.conflictActionOrder.indexOf("AMOUNT_CURRENCY_CONFLICT=REVIEW_SOURCE_CONFLICT"));
     expect(v2.blockerPolicy).toBe("ALL_ROUTING_BLOCKERS_INDEPENDENT_OF_SINGLE_CLASSIFICATION");
