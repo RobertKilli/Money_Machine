@@ -6,6 +6,7 @@ import {
   type NewsDiscoveryCandidate,
 } from "@/domain/intelligence/event-intelligence-news-discovery";
 import type { SyntheticRoutingMaterial } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
+import type { EvidenceReviewQueueViewModelItem } from "@/domain/intelligence/event-intelligence-evidence-review-queue-view-model";
 
 export const OFFLINE_REVIEW_DEMO_EVALUATION_AS_OF = "2026-10-03T12:00:00.000Z";
 const PUBLISHED_AT = "2026-10-01T08:00:00.000Z";
@@ -30,6 +31,7 @@ export type OfflineReviewDemoGuidance = Readonly<{ why: string; missing: string;
 
 export type OfflineReviewDemoFixture = Readonly<{
   key: OfflineReviewDemoScenarioKey;
+  expectedReviewType: EvidenceReviewQueueViewModelItem["reviewType"];
   label: string;
   description: string;
   reviewGuidance: OfflineReviewDemoGuidance;
@@ -111,6 +113,7 @@ type FixtureSpec = Omit<OfflineReviewDemoFixture, "candidate" | "routingMaterial
 const FIXTURE_SPECS: readonly FixtureSpec[] = [
   {
     key: "issuer-mapping",
+    expectedReviewType: "ISSUER_MAPPING_REVIEW",
     label: "Åpen issuer-mapping-review",
     description: "Syntetisk aggregator-kandidat; mapping mangler og kilden er fortsatt bare discovery-materiale.",
     reviewGuidance: {
@@ -138,6 +141,7 @@ const FIXTURE_SPECS: readonly FixtureSpec[] = [
   },
   {
     key: "rights-blocked",
+    expectedReviewType: "RIGHTS_APPROVAL_REVIEW",
     label: "Blokkert: rights-gjennomgang",
     description: "Syntetisk issuer-attributed fixture med manglende rights approval; dette er en blocker, ikke en godkjenningshandling.",
     reviewGuidance: {
@@ -165,6 +169,7 @@ const FIXTURE_SPECS: readonly FixtureSpec[] = [
   },
   {
     key: "unresolved-correction",
+    expectedReviewType: "CORRECTION_LINEAGE_REVIEW",
     label: "Uavklart correction – lineage krever gjennomgang",
     description: "Syntetisk correction-melding uten løst lineage; ingen retract- eller claim-authority påstås.",
     reviewGuidance: {
@@ -241,6 +246,7 @@ export function createOfflineReviewDemoFixtures(): readonly OfflineReviewDemoFix
     });
     fixtures.push(Object.freeze({
       key: specification.key,
+      expectedReviewType: specification.expectedReviewType,
       label: specification.label,
       description: specification.description,
       reviewGuidance: Object.freeze(specification.reviewGuidance),

@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { EvidenceReviewQueueViewModel, EvidenceReviewQueueViewModelItem } from "@/domain/intelligence/event-intelligence-evidence-review-queue-view-model";
 
-type Props = Readonly<{ model: EvidenceReviewQueueViewModel; presentation?: "DEFAULT" | "SYNTHETIC_OFFLINE_DEMO"; idPrefix?: string }>;
+type DetailLink = Readonly<{ itemPublicKey: string; fragmentId: string; linkText: string }>;
+type Props = Readonly<{ model: EvidenceReviewQueueViewModel; presentation?: "DEFAULT" | "SYNTHETIC_OFFLINE_DEMO"; idPrefix?: string; detailLinks?: readonly DetailLink[] }>;
 
 const STATUS_OPTIONS = ["OPEN", "BLOCKED", "NO_ACTION", "RESOLVED_NON_AUTHORITATIVE", "SUPERSEDED", "RETRACTED"] as const;
 const PRIORITY_OPTIONS = ["URGENT_RETRACTION_REVIEW", "URGENT_CORRECTION_REVIEW", "CONFLICT_REVIEW", "BLOCKED_RIGHTS", "JURISDICTION_UNKNOWN", "MAPPING_REQUIRED", "PRIMARY_SOURCE_MISSING", "ROUTINE_DISCOVERY_REVIEW", "NO_ACTION_DUPLICATE"] as const;
@@ -21,12 +22,16 @@ function matches(item: EvidenceReviewQueueViewModelItem, query: string): boolean
   return terms.includes(query);
 }
 
+function normalizeSearchQuery(query: string): string {
+  return query.slice(0, 120).replace(/[\p{Cc}\p{Cf}]/gu, "").trim().toLowerCase();
+}
+
 /** Presentation-only filtering; invalid selections degrade to unfiltered values. */
 export function filterEvidenceReviewItems(items: readonly EvidenceReviewQueueViewModelItem[], filters: EvidenceQueueFilters): readonly EvidenceReviewQueueViewModelItem[] {
   const status = typeof filters.status === "string" && STATUS_OPTIONS.some(value => value === filters.status) ? filters.status : "";
   const priority = typeof filters.priority === "string" && PRIORITY_OPTIONS.some(value => value === filters.priority) ? filters.priority : "";
   const type = typeof filters.type === "string" && TYPE_OPTIONS.some(value => value === filters.type) ? filters.type : "";
-  const query = typeof filters.query === "string" ? filters.query.slice(0, 120).replace(/[\p{Cc}\p{Cf}]/gu, "").trim().toLowerCase() : "";
+  const query = typeof filters.query === "string" ? normalizeSearchQuery(filters.query) : "";
   return items.filter(item => (!status || item.status === status) && (!priority || item.operationalPriority === priority) && (!type || item.reviewType === type) && matches(item, query));
 }
 
@@ -51,7 +56,7 @@ function Summary({ model }: Props) {
   </dl>;
 }
 
-function QueueItem({ item, idPrefix, presentation }: { item: EvidenceReviewQueueViewModelItem; idPrefix?: string; presentation: Props["presentation"] }) {
+function QueueItem({ item, idPrefix, presentation, detailLink }: { item: EvidenceReviewQueueViewModelItem; idPrefix?: string; presentation: Props["presentation"]; detailLink?: DetailLink }) {
   const emphasis = item.retracted ? "border-rose-400/70 bg-rose-400/10" : item.correctionPresent ? "border-amber-300/70 bg-amber-300/10" : "border-[var(--border)] bg-[var(--panel)]";
   const headingId = idPrefix ? `queue-${idPrefix}-item-${item.publicKey}` : `queue-item-${item.publicKey}`;
   const demoPresentation = presentation === "SYNTHETIC_OFFLINE_DEMO";
@@ -66,6 +71,8 @@ function QueueItem({ item, idPrefix, presentation }: { item: EvidenceReviewQueue
         <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs">{item.priorityLabel}</span>
       </div>
     </div>
+
+    {detailLink && <a href={`#${detailLink.fragmentId}`} aria-label={`Review explanation and synthetic source context for ${item.title}`} className="mt-3 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">{detailLink.linkText}</a>}
 
     <div className="mt-4 flex flex-wrap gap-2 text-xs">
       {item.historical && <span className="rounded-md border border-sky-300/50 px-2.5 py-1">Historical snapshot</span>}
@@ -103,12 +110,26 @@ function QueueItem({ item, idPrefix, presentation }: { item: EvidenceReviewQueue
   </article>;
 }
 
-export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", idPrefix }: Props) {
+export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", idPrefix, detailLinks }: Props) {
   const [status, setStatus] = useState("");
   const [priority, setPriority] = useState("");
   const [type, setType] = useState("");
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => filterEvidenceReviewItems(model.items, { status, priority, type, query }), [model.items, status, priority, type, query]);
+  const detailLinkByPublicKey = useMemo(() => new Map((presentation === "SYNTHETIC_OFFLINE_DEMO" ? detailLinks ?? [] : []).map(link => [link.itemPublicKey, link])), [detailLinks, presentation]);
+  const selectedStatus = STATUS_OPTIONS.find(value => value === status);
+  const selectedPriority = PRIORITY_OPTIONS.find(value => value === priority);
+  const selectedType = TYPE_OPTIONS.find(value => value === type);
+  const normalizedQuery = normalizeSearchQuery(query);
+  const activeFilterLabels = [
+    selectedStatus ? `Status: ${STATUS_LABELS[selectedStatus]}` : null,
+    selectedPriority ? `Operational priority: ${PRIORITY_LABELS[selectedPriority]}` : null,
+    selectedType ? `Review type: ${TYPE_LABELS[selectedType]}` : null,
+    normalizedQuery ? `Search: ${normalizedQuery}` : null,
+  ].filter((label): label is string => label !== null);
+  const hasActiveFilters = activeFilterLabels.length > 0;
+  const resetFilters = () => { setStatus(""); setPriority(""); setType(""); setQuery(""); };
+  const noDemoMatches = presentation === "SYNTHETIC_OFFLINE_DEMO" && model.state === "HAS_REVIEW_ITEMS" && filtered.length === 0;
   const Root = presentation === "SYNTHETIC_OFFLINE_DEMO" ? "div" : "main";
   const filterId = (name: string) => idPrefix ? `queue-${idPrefix}-${name}` : `queue-${name}`;
   const sectionId = (name: string) => idPrefix ? `queue-${idPrefix}-${name}` : name;
@@ -149,8 +170,8 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
       <p className="mt-5 text-sm leading-6">Before an event could be considered authoritative, a separately reviewed source must be retrieved, issuer and asset mappings resolved, corrections reconciled, and the corroboration and authority policies evaluated.</p>
     </section>}
 
-    {model.state === "HAS_REVIEW_ITEMS" && <section aria-labelledby={sectionId("items-heading")} className="mt-8">
-      <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">Candidates</p><h2 id={sectionId("items-heading")} className="mt-1 text-xl font-semibold">Evidence items</h2></div><p className="text-sm text-[var(--muted)]" aria-live="polite">{filtered.length} of {model.items.length} items shown</p></div>
+      {model.state === "HAS_REVIEW_ITEMS" && <section aria-labelledby={sectionId("items-heading")} className="mt-8">
+      <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">Candidates</p><h2 id={sectionId("items-heading")} tabIndex={detailLinks ? -1 : undefined} className="mt-1 text-xl font-semibold">Evidence items</h2></div><p className="text-sm text-[var(--muted)]" aria-live="polite">{filtered.length} of {model.items.length} items shown</p></div>
       <fieldset className="mt-5 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4 sm:p-5">
         <legend className="px-2 text-sm font-semibold">Presentation filters</legend>
         <div className="grid min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -160,8 +181,12 @@ export function EvidenceReviewQueueWorkspace({ model, presentation = "DEFAULT", 
           <div className="min-w-0"><label className="mb-1.5 block text-xs font-medium text-[var(--muted)]" htmlFor={filterId("search")}>Search safe labels</label><input id={filterId("search")} type="search" maxLength={120} value={query} onChange={e => setQuery(e.target.value.slice(0, 120))} placeholder="Type, reason or source family" className="w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm placeholder:text-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]" /></div>
         </div>
         <p className="mt-3 text-xs leading-5 text-[var(--muted)]">Filters change only what is shown. Corrections and retractions are included by default; queue status and source material are never changed.</p>
+        {presentation === "SYNTHETIC_OFFLINE_DEMO" && <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] pt-3">
+          <p className="text-xs leading-5 text-[var(--muted)]" aria-live="polite">{hasActiveFilters ? `Aktive filtre: ${activeFilterLabels.join(" · ")}` : "Ingen aktive filtre."}</p>
+          {hasActiveFilters && !noDemoMatches && <button type="button" onClick={resetFilters} className="rounded px-2 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Nullstill filtre</button>}
+        </div>}
       </fieldset>
-      {filtered.length === 0 ? <div role="status" className="mt-5 rounded-2xl border border-[var(--border)] p-8 text-center"><h3 className="font-semibold">No items match these filters</h3><p className="mt-2 text-sm text-[var(--muted)]">Clear or change the presentation filters to view the available cutoff-bound snapshots.</p></div> : <div className="mt-5 space-y-4">{filtered.map(item => <QueueItem key={item.publicKey} item={item} idPrefix={idPrefix} presentation={presentation} />)}</div>}
+      {filtered.length === 0 ? <div role="status" className="mt-5 rounded-2xl border border-[var(--border)] p-8 text-center"><h3 className="font-semibold">No items match these filters</h3><p className="mt-2 text-sm text-[var(--muted)]">Clear or change the presentation filters to view the available cutoff-bound snapshots.</p>{presentation === "SYNTHETIC_OFFLINE_DEMO" && <button type="button" onClick={resetFilters} className="mt-4 rounded px-2 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Nullstill filtre</button>}</div> : <div className="mt-5 space-y-4">{filtered.map(item => <QueueItem key={item.publicKey} item={item} idPrefix={idPrefix} presentation={presentation} detailLink={detailLinkByPublicKey.get(item.publicKey)} />)}</div>}
     </section>}
 
     {model.state === "EMPTY" && <section role="status" className="mt-8 rounded-2xl border border-[var(--border)] p-8 text-center"><h2 className="text-lg font-semibold">No evidence-review items</h2><p className="mt-2 text-sm text-[var(--muted)]">{model.emptyState}</p></section>}

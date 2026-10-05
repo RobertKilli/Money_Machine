@@ -1,3 +1,4 @@
+import { Children, createElement, isValidElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as compositionModule from "@/application/intelligence/compose-event-intelligence-evidence-review-queue";
@@ -5,8 +6,25 @@ import { createOfflineReviewDemoFixtures } from "@/application/intelligence/offl
 import { loadEventIntelligenceOfflineCombinedReviewQueue } from "@/application/intelligence/load-event-intelligence-offline-combined-review-queue";
 import { isAuthenticNewsDiscoveryCandidate } from "@/domain/intelligence/event-intelligence-news-discovery";
 import { parseSyntheticRoutingMaterial } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
+import { bindOfflineReviewDemoDetails } from "@/application/intelligence/offline-review-demo-presentation";
+import { loadEvidenceReviewQueueViewModel } from "@/application/intelligence/load-evidence-review-queue-view-model";
 import CombinedQueuePage from "@/app/intelligence/events/review/offline-demo/combined/page";
 import OfflineDemoPage from "@/app/intelligence/events/review/offline-demo/page";
+import { EvidenceReviewQueueWorkspace, filterEvidenceReviewItems } from "@/components/intelligence/evidence-review-queue-workspace";
+
+function findWorkspaceProps(node: ReactNode): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = [];
+  const visit = (child: ReactNode) => {
+    if (!isValidElement(child)) return;
+    if (child.type === EvidenceReviewQueueWorkspace) {
+      found.push(child.props as Record<string, unknown>);
+      return;
+    }
+    Children.forEach((child.props as { children?: ReactNode }).children, visit);
+  };
+  visit(node);
+  return found;
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -64,11 +82,40 @@ describe("offline combined evidence review queue", () => {
     expect(result.model.items[1]?.reasonLabels).toContain("Required source-use approval is missing");
     expect(result.model.items[2]?.reasonLabels).toContain("Issuer mapping is missing");
     expect(result.model.items.every(item => item.historical && item.evaluatedAsOf === result.evaluatedAsOf)).toBe(true);
+    expect(filterEvidenceReviewItems(result.model.items, { status: "OPEN" }).map(item => item.reviewType)).toEqual(["ISSUER_MAPPING_REVIEW"]);
     expect(JSON.stringify(result)).not.toMatch(/candidateId|routingResultId|canonicalSourceUrl|fingerprint|trust/i);
 
     const fixtures = createOfflineReviewDemoFixtures();
     expect(fixtures).toHaveLength(3);
     expect(new Set(fixtures?.map(fixture => fixture.candidate.record.canonicalSourceUrl)).size).toBe(3);
+    expect(result.details.map(detail => [detail.key, detail.item.reviewType])).toEqual([
+      ["issuer-mapping", "ISSUER_MAPPING_REVIEW"],
+      ["rights-blocked", "RIGHTS_APPROVAL_REVIEW"],
+      ["unresolved-correction", "CORRECTION_LINEAGE_REVIEW"],
+    ]);
+    expect(result.details.every(detail => Object.isFrozen(detail) && Object.isFrozen(detail.sourceMaterial) && Object.isFrozen(detail.item))).toBe(true);
+  });
+
+  it("binds each detail to its review type regardless of fixture input order", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const fixtures = createOfflineReviewDemoFixtures();
+    expect(fixtures).toHaveLength(3);
+    if (!fixtures) return;
+    const reversed = [...fixtures].reverse();
+    const composed = compositionModule.composeEventIntelligenceEvidenceReviewQueue({
+      evaluationAsOf: "2026-10-03T12:00:00.000Z",
+      candidates: reversed.map(fixture => ({ candidate: fixture.candidate, routingMaterial: fixture.routingMaterial })),
+    });
+    expect(composed.status).toBe("COMPOSED");
+    if (composed.status !== "COMPOSED") return;
+
+    const details = bindOfflineReviewDemoDetails(reversed, composed.composition.viewModel);
+    expect(details?.map(detail => [detail.key, detail.item.reviewType])).toEqual([
+      ["unresolved-correction", "CORRECTION_LINEAGE_REVIEW"],
+      ["rights-blocked", "RIGHTS_APPROVAL_REVIEW"],
+      ["issuer-mapping", "ISSUER_MAPPING_REVIEW"],
+    ]);
+    expect(new Set(details?.map(detail => detail.detailId)).size).toBe(3);
   });
 
   it("renders the actual combined queue through the read-only workspace and links the existing overview", async () => {
@@ -86,12 +133,40 @@ describe("offline combined evidence review queue", () => {
     expect(html).toContain("Blocked by rights approval");
     expect(html).toContain("Mapping review required");
     expect(html).toContain("Historical snapshot");
+    expect(html).toContain("Correction lineage requires review");
+    expect(html).toContain("Required source-use approval is missing");
+    expect(html).toContain("Issuer mapping is missing");
+    expect(html).toContain("Synthetic fixture material · read-only");
+    expect(html.match(/<details aria-label="Synthetic source context"/g)).toHaveLength(3);
     expect(html).toContain("href=\"/intelligence/events/review/offline-demo\"");
+    expect(html).toContain("href=\"#queue-combined-offline-demo-items-heading\"");
     expect(html).not.toContain("Approve");
     expect(html).not.toContain("Complete review");
     expect(html).not.toContain("synthetic-company-mapping");
     expect(html).not.toContain("issuer.test/releases/offline-demo");
     expect(overviewHtml).toContain("href=\"/intelligence/events/review/offline-demo/combined\"");
     expect(overviewHtml).toContain("Samlet syntetisk review-kø");
+
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(([, id]) => id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const fragments = [...html.matchAll(/href="#([^"]+)"/g)].map(([, fragment]) => fragment);
+    expect(fragments.length).toBeGreaterThanOrEqual(4);
+    for (const fragment of fragments) expect(ids).toContain(fragment);
+    for (const [, references] of html.matchAll(/\saria-labelledby="([^"]+)"/g)) {
+      for (const reference of references.split(/\s+/)) expect(ids).toContain(reference);
+    }
+    expect(html).toMatch(/id="offline-review-demo-detail-unresolved-correction" tabindex="-1"/);
+    expect(html).toMatch(/id="offline-review-demo-detail-rights-blocked" tabindex="-1"/);
+    expect(html).toMatch(/id="offline-review-demo-detail-issuer-mapping" tabindex="-1"/);
+
+    const workspaceProps = findWorkspaceProps(await CombinedQueuePage());
+    expect(workspaceProps).toHaveLength(1);
+    expect(Object.keys(workspaceProps[0]!).sort()).toEqual(["detailLinks", "idPrefix", "model", "presentation"]);
+    expect(JSON.stringify(workspaceProps[0])).not.toMatch(/sourceMaterial|fixtureId|candidateId|routingMaterial|canonicalSourceUrl|queueSet/i);
+
+    vi.stubEnv("NODE_ENV", "test");
+    const defaultWorkspace = renderToStaticMarkup(createElement(EvidenceReviewQueueWorkspace, { model: loadEvidenceReviewQueueViewModel() }));
+    expect(defaultWorkspace).not.toContain("Nullstill filtre");
+    expect(defaultWorkspace).not.toContain("Se forklaring og syntetisk kildekontekst");
   });
 });

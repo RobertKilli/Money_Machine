@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { EvidenceReviewQueueWorkspace } from "@/components/intelligence/evidence-review-queue-workspace";
+import { OfflineReviewDemoDetailSection } from "@/components/intelligence/offline-review-demo-detail-section";
 
 export const metadata = {
   title: "Syntetisk offline-demo | Evidence review queue",
@@ -55,7 +56,7 @@ export default async function OfflineEvidenceReviewDemoPage({
 
       <nav aria-label="Scenariooversikt" className="grid gap-3 md:grid-cols-3">
         {demo.scenarios.map(scenario => {
-          const item = scenario.model.items[0];
+          const item = scenario.item;
           const navigation = SCENARIO_NAVIGATION.find(entry => entry.scenarioKey === scenario.key);
           if (!navigation) return null;
           const isSelected = selectedScenario?.scenarioKey === scenario.key;
@@ -74,37 +75,8 @@ export default async function OfflineEvidenceReviewDemoPage({
       </div>
 
       {demo.scenarios.filter(scenario => !selectedScenario || scenario.key === selectedScenario.scenarioKey).map(scenario => {
-        const item = scenario.model.items[0];
-        return <section key={scenario.key} id={`offline-demo-${scenario.key}`} aria-labelledby={`offline-demo-heading-${scenario.key}`} className="overflow-hidden rounded-2xl border border-[var(--border)]">
-        <header className="border-b border-[var(--border)] bg-[var(--panel)] p-5 sm:p-6">
-          <h2 id={`offline-demo-heading-${scenario.key}`} className="text-lg font-semibold">{scenario.label}</h2>
-          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{scenario.description}</p>
-          <p className="mt-2 text-xs text-[var(--muted)]">Evaluert ved fast cutoff: {demo.evaluatedAsOf} UTC{item?.historical ? " · Historical snapshot" : ""}.</p>
-          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-            <div><dt className="font-semibold">Hvorfor er kandidaten her?</dt><dd className="mt-1 leading-6 text-[var(--muted)]">{scenario.reviewGuidance.why}</dd></div>
-            <div><dt className="font-semibold">Hva mangler?</dt><dd className="mt-1 leading-6 text-[var(--muted)]">{scenario.reviewGuidance.missing}</dd></div>
-            <div><dt className="font-semibold">Hva må undersøkes videre?</dt><dd className="mt-1 leading-6 text-[var(--muted)]">{scenario.reviewGuidance.investigate}</dd></div>
-          </dl>
-          <details aria-label="Synthetic source context" className="mt-5 rounded-xl border border-[var(--border)] bg-[var(--background)] p-4">
-            <summary className="w-fit cursor-pointer rounded px-1 py-1 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">
-              View synthetic source context
-            </summary>
-            <div className="mt-4 rounded-lg border border-amber-300/40 bg-amber-300/5 p-4">
-              <p className="text-xs font-bold uppercase tracking-wide text-amber-100">Synthetic fixture material · read-only</p>
-              <p className="mt-2 text-sm font-semibold">{scenario.sourceMaterial.sourceLabel} <span className="font-normal text-[var(--muted)]">({scenario.sourceMaterial.sourceType})</span></p>
-              <dl className="mt-4 grid min-w-0 gap-3 text-sm sm:grid-cols-2">
-                <div className="min-w-0"><dt className="text-xs text-[var(--muted)]">Fixture ID</dt><dd className="mt-1 break-all font-mono">{scenario.sourceMaterial.fixtureId}</dd></div>
-                <div className="min-w-0"><dt className="text-xs text-[var(--muted)]">Received (UTC)</dt><dd className="mt-1 break-all font-mono"><time dateTime={scenario.sourceMaterial.receivedAt}>{scenario.sourceMaterial.receivedAt}</time></dd></div>
-                <div className="min-w-0 sm:col-span-2"><dt className="text-xs text-[var(--muted)]">Synthetic title</dt><dd className="mt-1 break-words">{scenario.sourceMaterial.title}</dd></div>
-                <div className="min-w-0 sm:col-span-2"><dt className="text-xs text-[var(--muted)]">Fixture summary</dt><dd className="mt-1 break-words leading-6 text-[var(--muted)]">{scenario.sourceMaterial.summary}</dd></div>
-                {scenario.sourceMaterial.evidence.map(entry => <div className="min-w-0" key={entry.label}><dt className="text-xs text-[var(--muted)]">{entry.label}</dt><dd className="mt-1 break-words">{entry.value}</dd></div>)}
-                <div className="min-w-0 sm:col-span-2"><dt className="text-xs text-[var(--muted)]">Why it is relevant</dt><dd className="mt-1 break-words leading-6 text-[var(--muted)]">{scenario.sourceMaterial.relevance}</dd></div>
-              </dl>
-              <p className="mt-4 text-xs font-semibold">{scenario.sourceMaterial.synthetic ? "Synthetic/offline context only. This fixture is not a source of truth or proof of approval, rights, or lifecycle relationships." : ""}</p>
-            </div>
-          </details>
-          {item && <p className="mt-4 text-sm"><span className="font-semibold">Veiledende neste handling: </span><span className="text-[var(--muted)]">{item.nextActionLabel}</span></p>}
-        </header>
+        return <section key={scenario.key} id={`offline-demo-${scenario.key}`} aria-labelledby={`${scenario.detailId}-heading`} className="overflow-hidden rounded-2xl border border-[var(--border)]">
+        <OfflineReviewDemoDetailSection detail={scenario} />
         <EvidenceReviewQueueWorkspace model={scenario.model} presentation="SYNTHETIC_OFFLINE_DEMO" idPrefix={scenario.key} />
         </section>;
       })}

@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { EvidenceReviewQueueWorkspace } from "@/components/intelligence/evidence-review-queue-workspace";
+import { OfflineReviewDemoDetailSection } from "@/components/intelligence/offline-review-demo-detail-section";
 
 export const metadata = {
   title: "Samlet syntetisk review-kø | Evidence review queue",
@@ -8,6 +9,7 @@ export const metadata = {
 };
 
 const OFFLINE_DEMO_PATH = "/intelligence/events/review/offline-demo";
+const COMBINED_QUEUE_HEADING_ID = "queue-combined-offline-demo-items-heading";
 
 export default async function OfflineCombinedReviewQueuePage() {
   if (process.env.NODE_ENV !== "development") notFound();
@@ -30,7 +32,19 @@ export default async function OfflineCombinedReviewQueuePage() {
         <p className="text-sm"><span className="font-semibold">Totalt antall kandidater:</span> {result.model.items.length}</p>
         <p className="text-sm sm:col-span-3"><span className="font-semibold">Felles cutoff (UTC):</span> <time dateTime={result.evaluatedAsOf}>{result.evaluatedAsOf}</time></p>
       </section>
-      <EvidenceReviewQueueWorkspace model={result.model} presentation="SYNTHETIC_OFFLINE_DEMO" idPrefix="combined-offline-demo" />
+      <EvidenceReviewQueueWorkspace
+        model={result.model}
+        presentation="SYNTHETIC_OFFLINE_DEMO"
+        idPrefix="combined-offline-demo"
+        detailLinks={result.details.map(detail => ({
+          itemPublicKey: detail.item.publicKey,
+          fragmentId: detail.detailId,
+          linkText: "Se forklaring og syntetisk kildekontekst",
+        }))}
+      />
+      <section aria-label="Kandidatdetaljer" className="mt-8 space-y-5">
+        {result.details.map(detail => <OfflineReviewDemoDetailSection key={detail.key} detail={detail} backHref={`#${COMBINED_QUEUE_HEADING_ID}`} />)}
+      </section>
     </>}
 
     <footer className="mt-8 border-t border-[var(--border)] pt-5 text-sm text-[var(--muted)]">Syntetiske fixture-data er kun lokal presentasjonskontekst. De etablerer ikke kilde-, policy-, review- eller producer-authority.</footer>

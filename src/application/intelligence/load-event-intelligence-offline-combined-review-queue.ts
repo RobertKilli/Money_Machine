@@ -2,6 +2,7 @@ import "server-only";
 
 import { notFound } from "next/navigation";
 import type { EvidenceReviewQueueViewModel } from "@/domain/intelligence/event-intelligence-evidence-review-queue-view-model";
+import type { OfflineReviewDemoDetail } from "@/application/intelligence/offline-review-demo-presentation";
 
 export type OfflineCombinedReviewQueueResult = Readonly<
   | {
@@ -9,6 +10,7 @@ export type OfflineCombinedReviewQueueResult = Readonly<
       evaluatedAsOf: string;
       compositionStatus: "NON_AUTHORITATIVE_SYNTHETIC_COMPOSITION";
       model: EvidenceReviewQueueViewModel;
+      details: readonly OfflineReviewDemoDetail[];
     }
   | {
       status: "UNAVAILABLE";
@@ -20,9 +22,10 @@ export type OfflineCombinedReviewQueueResult = Readonly<
 export async function loadEventIntelligenceOfflineCombinedReviewQueue(): Promise<OfflineCombinedReviewQueueResult> {
   if (process.env.NODE_ENV !== "development") notFound();
 
-  const [fixturesModule, compositionModule] = await Promise.all([
+  const [fixturesModule, compositionModule, presentationModule] = await Promise.all([
     import("@/application/intelligence/offline-review-demo-fixtures"),
     import("@/application/intelligence/compose-event-intelligence-evidence-review-queue"),
+    import("@/application/intelligence/offline-review-demo-presentation"),
   ]);
   const fixtures = fixturesModule.createOfflineReviewDemoFixtures();
   if (!fixtures) return Object.freeze({ status: "UNAVAILABLE", reason: "CANDIDATE_REJECTED" });
@@ -32,11 +35,14 @@ export async function loadEventIntelligenceOfflineCombinedReviewQueue(): Promise
     candidates: fixtures.map(fixture => ({ candidate: fixture.candidate, routingMaterial: fixture.routingMaterial })),
   });
   if (composed.status !== "COMPOSED") return Object.freeze({ status: "UNAVAILABLE", reason: composed.code });
+  const details = presentationModule.bindOfflineReviewDemoDetails(fixtures, composed.composition.viewModel);
+  if (!details || details.length !== 3) return Object.freeze({ status: "UNAVAILABLE", reason: "COMPOSITION_VIEW_MODEL_REJECTED" });
 
   return Object.freeze({
     status: "AVAILABLE",
     evaluatedAsOf: composed.composition.evaluationAsOf,
     compositionStatus: composed.composition.status,
     model: composed.composition.viewModel,
+    details,
   });
 }
