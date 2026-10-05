@@ -59,6 +59,17 @@ These are fixed-contract parsers, not caller-configurable policy parsers. They r
 
 1. Define a separate routing semantic profile for the actual jurisdiction/event route order, state-transition graph, progression conditions, and source-family fallback. It must be versioned separately from source-portfolio material and have conformance cases against `evaluateSourcePortfolioRouting`.
 2. Reconcile the parent queue contract's `routingMappings` precedence labels with `classify`'s executable order (origin-group before unsupported corroboration/duplicate, terminal before final routine fallback) and its `conflictActionOrder` with executable `conflictAction` (lifecycle before amount/currency in runtime). Add independent cases for every branch/precedence interaction before claiming algorithm conformance. This static material is not a hash identity for code behavior.
+
+## Queue-v2 alignment (opt-in)
+
+The v1 material above is retained as historical v1 contract material, including its declared discrepancies; neither the v1 contract nor its parser is rewritten. The separate `event-intelligence-evidence-review-queue-contract/v2` and `event-intelligence-evidence-review-queue-classification-algorithm/v2` material document the existing runtime precedence as normative for opt-in v2:
+
+- `LIFECYCLE_CONFLICT` is selected before `AMOUNT_CURRENCY_CONFLICT` when both are present.
+- Classification is an ordered chain of predicates, including evidence flags and routing state, not a table keyed only by routing stage. It has an explicit lifecycle fallback.
+- Classification, blocker accumulation, priority assignment, and final queue sorting are separate operations.
+- Retraction/correction checks remain ahead of duplicate/no-action under the evaluator's existing predicates.
+
+The v2 API reuses the existing classifier and blocker implementation and supplies the version-specific conflict-action precedence. V2 is opt-in and does not update composition or production. The material records open boundaries for retraction semantics, claim/revision/source authority, `eventRoutes.required`, completed review milestones, and issuer authorization. Passing the selected public-API conformance examples does not prove full code equivalence or actual downstream policy application.
 3. Only after semantic closure, define material canonicalization/content identity and runtime policy-application evidence as separate slices. The policy profile/hash decision's proposed digest preimage is unchanged and not implemented here.
 
 No status here is `APPLIED`, `APPROVED`, `AUTHENTIC`, or producer-ready. Composition remains `NON_AUTHORITATIVE_SYNTHETIC_COMPOSITION`. Application evidence remains `VALID_SYNTAX_ONLY_NON_AUTHORITATIVE` with `MISSING_RUNTIME_RESULT_BINDING`. Existing codecs, scope identity, binding verifiers, production config, loaders, UI, routes, and composition are unchanged. Persistence/current-selection, approvals, rights/retention/deletion, authority upgrades, signal, and trading remain blocked.

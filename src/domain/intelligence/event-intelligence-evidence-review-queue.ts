@@ -207,16 +207,16 @@ function mappedPriority(result: RoutingEvaluation): ReviewPriority {
   if (result.operationalPriority === "NO_ACTION_DUPLICATE") return "NO_ACTION_DUPLICATE";
   return "ROUTINE_DISCOVERY_REVIEW";
 }
-function conflictAction(result: RoutingEvaluation): string {
+function conflictAction(result: RoutingEvaluation, precedence: readonly string[] = ["CORRECTION_LINEAGE_CONFLICT", "ISSUER_IDENTITY_CONFLICT", "LISTING_JURISDICTION_CONFLICT", "ASSET_REPRESENTATION_CONFLICT", "LIFECYCLE_CONFLICT", "AMOUNT_CURRENCY_CONFLICT", "PUBLICATION_TIME_CONFLICT", "SOURCE_MATERIAL_CONFLICT", "AUTHORITY_TIER_CONFLICT", "ORIGIN_GROUP_CONFLICT"]): string {
   const actions: Readonly<Record<string, string>> = Object.freeze({ CORRECTION_LINEAGE_CONFLICT: "REVIEW_CORRECTION_LINEAGE", ISSUER_IDENTITY_CONFLICT: "REVIEW_SOURCE_CONFLICT", LISTING_JURISDICTION_CONFLICT: "RESOLVE_JURISDICTION_SCOPE", ASSET_REPRESENTATION_CONFLICT: "REVIEW_SOURCE_CONFLICT", AMOUNT_CURRENCY_CONFLICT: "REVIEW_SOURCE_CONFLICT", LIFECYCLE_CONFLICT: "REVIEW_LIFECYCLE", PUBLICATION_TIME_CONFLICT: "REVIEW_SOURCE_CONFLICT", SOURCE_MATERIAL_CONFLICT: "REVIEW_SOURCE_CONFLICT", AUTHORITY_TIER_CONFLICT: "REVIEW_SOURCE_CONFLICT", ORIGIN_GROUP_CONFLICT: "REVIEW_ORIGIN_BINDING" });
-  const precedence = ["CORRECTION_LINEAGE_CONFLICT", "ISSUER_IDENTITY_CONFLICT", "LISTING_JURISDICTION_CONFLICT", "ASSET_REPRESENTATION_CONFLICT", "LIFECYCLE_CONFLICT", "AMOUNT_CURRENCY_CONFLICT", "PUBLICATION_TIME_CONFLICT", "SOURCE_MATERIAL_CONFLICT", "AUTHORITY_TIER_CONFLICT", "ORIGIN_GROUP_CONFLICT"];
   const selected = precedence.find(code => result.conflictReasons.includes(code));
   return (selected && actions[selected]) || "REVIEW_SOURCE_CONFLICT";
 }
-function classify(result: RoutingEvaluation): { itemType: ReviewItemType; status: ReviewQueueStatus; priority: ReviewPriority; nextAction: string } {
+type Classification = { itemType: ReviewItemType; status: ReviewQueueStatus; priority: ReviewPriority; nextAction: string };
+function classify(result: RoutingEvaluation, selectConflictAction = conflictAction): Classification {
   if (result.retracted || result.eventHint === "RETRACTION_WITHDRAWAL") return { itemType: "RETRACTION_REVIEW", status: "RETRACTED", priority: "URGENT_RETRACTION_REVIEW", nextAction: "REVIEW_RETRACTION" };
   if (result.correctionPresent && !result.correctionResolved || result.eventHint === "CORRECTION_AMENDMENT" && !result.correctionResolved || result.conflictReasons.includes("CORRECTION_LINEAGE_CONFLICT")) return { itemType: "CORRECTION_LINEAGE_REVIEW", status: "BLOCKED", priority: "URGENT_CORRECTION_REVIEW", nextAction: "REVIEW_CORRECTION_LINEAGE" };
-  if (result.conflictReasons.length) return { itemType: "SOURCE_CONFLICT_REVIEW", status: "BLOCKED", priority: "CONFLICT_REVIEW", nextAction: conflictAction(result) };
+  if (result.conflictReasons.length) return { itemType: "SOURCE_CONFLICT_REVIEW", status: "BLOCKED", priority: "CONFLICT_REVIEW", nextAction: selectConflictAction(result) };
   if (!result.rightsApproved) return { itemType: "RIGHTS_APPROVAL_REVIEW", status: "BLOCKED", priority: "BLOCKED_RIGHTS", nextAction: "OBTAIN_RIGHTS_APPROVAL" };
   if (result.jurisdiction === "UNKNOWN" || result.jurisdiction === "DUAL_LISTED") return { itemType: "JURISDICTION_REVIEW", status: "BLOCKED", priority: "JURISDICTION_UNKNOWN", nextAction: "RESOLVE_JURISDICTION_SCOPE" };
   if (!result.issuerMapped) return { itemType: "ISSUER_MAPPING_REVIEW", status: "OPEN", priority: "MAPPING_REQUIRED", nextAction: "RESOLVE_ISSUER_MAPPING" };
@@ -283,3 +283,129 @@ export function sealEvidenceReviewQueueSet(decision: unknown, routingResults: un
   } catch { return INVALID_SET; }
 }
 export function isAuthenticEvidenceReviewQueueSet(value: unknown): value is EvidenceReviewQueueSet { return !!value && typeof value === "object" && !types.isProxy(value) && SET_TRUST.has(value) && typeof SET_CANONICAL.get(value) === "string"; }
+
+/** Queue-v2 is an explicit, offline evaluator contract. It does not change the v1 API or production wiring. */
+export const EVIDENCE_REVIEW_QUEUE_V2_VERSION = "event-intelligence-evidence-review-queue-contract/v2" as const;
+const V2_CONTRACT_MATERIAL = Object.freeze({
+  contractVersion: EVIDENCE_REVIEW_QUEUE_V2_VERSION,
+  algorithmVersion: "event-intelligence-evidence-review-queue-classification-algorithm/v2" as const,
+  itemTypes: REVIEW_ITEM_TYPES,
+  statuses: REVIEW_QUEUE_STATUSES,
+  priorityOrder: REVIEW_PRIORITIES,
+  classifierOrder: Object.freeze([
+    "RETRACTION_REVIEW=RETRACTED_OR_RETRACTION_HINT",
+    "CORRECTION_LINEAGE_REVIEW=UNRESOLVED_CORRECTION_OR_CORRECTION_LINEAGE_CONFLICT",
+    "SOURCE_CONFLICT_REVIEW=ANY_REMAINING_CONFLICT",
+    "RIGHTS_APPROVAL_REVIEW=RIGHTS_MISSING",
+    "JURISDICTION_REVIEW=UNKNOWN_OR_DUAL_LISTED",
+    "ISSUER_MAPPING_REVIEW=ISSUER_MAPPING_MISSING",
+    "ASSET_MAPPING_REVIEW=ASSET_MAPPING_MISSING",
+    "PRIMARY_SOURCE_RETRIEVAL_REVIEW=PRIMARY_MISSING_OR_NO_NONAGGREGATOR_FAMILY",
+    "ORIGIN_GROUP_REVIEW=MULTIPLE_ORIGIN_GROUPS_OR_SYNDICATED_COPY",
+    "BLOCKED_UNSUPPORTED_CORROBORATION=CORROBORATION_OR_ELIGIBILITY_STAGE_WITH_UNSUPPORTED_CORROBORATION_AND_NOT_TERMINAL",
+    "DUPLICATE_NO_ACTION=DUPLICATE_WITHOUT_CORRECTION",
+    "NON_AUTHORITATIVE_REVIEW_COMPLETE=TERMINAL_CURRENT_OR_NEXT_STATE",
+    "ISSUER_MAPPING_REVIEW=CURRENT_ISSUER_MAPPING_STAGE",
+    "ASSET_MAPPING_REVIEW=CURRENT_ASSET_MAPPING_STAGE",
+    "PRIMARY_SOURCE_RETRIEVAL_REVIEW=CURRENT_DISCOVERY_OR_SOURCE_RETRIEVAL_OR_PRIMARY_DISCLOSURE_STAGE",
+    "LIFECYCLE_REVIEW=COMPLETED_PURCHASE_AND_STOPPED_NEXT_STATE",
+    "CORRECTION_LINEAGE_REVIEW=CORRECTION_STAGE_OR_PRESENT_CORRECTION",
+    "LIFECYCLE_REVIEW=CURRENT_OR_NEXT_STOPPED_STATE",
+    "LIFECYCLE_REVIEW=DOCUMENTED_FALLBACK",
+  ]),
+  conflictActionOrder: Object.freeze([
+    "CORRECTION_LINEAGE_CONFLICT=REVIEW_CORRECTION_LINEAGE",
+    "ISSUER_IDENTITY_CONFLICT=REVIEW_SOURCE_CONFLICT",
+    "LISTING_JURISDICTION_CONFLICT=RESOLVE_JURISDICTION_SCOPE",
+    "ASSET_REPRESENTATION_CONFLICT=REVIEW_SOURCE_CONFLICT",
+    "LIFECYCLE_CONFLICT=REVIEW_LIFECYCLE",
+    "AMOUNT_CURRENCY_CONFLICT=REVIEW_SOURCE_CONFLICT",
+    "PUBLICATION_TIME_CONFLICT=REVIEW_SOURCE_CONFLICT",
+    "SOURCE_MATERIAL_CONFLICT=REVIEW_SOURCE_CONFLICT",
+    "AUTHORITY_TIER_CONFLICT=REVIEW_SOURCE_CONFLICT",
+    "ORIGIN_GROUP_CONFLICT=REVIEW_ORIGIN_BINDING",
+  ]),
+  blockerPolicy: "ALL_ROUTING_BLOCKERS_INDEPENDENT_OF_SINGLE_CLASSIFICATION",
+  ordering: "PRIORITY_ORDER_THEN_PUBLICATION_ASC_THEN_CANDIDATE_ID_ASC_LEXICAL",
+  historicalPolicy: "ROUTING_EVALUATION_CUTOFF_WITHOUT_FUTURE_EVIDENCE",
+  boundaries: Object.freeze([
+    "RETRACTION_HINT_AND_RETRACTED_FLAG_REMAIN_DISTINCT_INPUTS",
+    "NO_CLAIM_RETRACTION_REVISION_SUPERSESSION_OR_SOURCE_WITHDRAWAL_AUTHORITY",
+    "EVENT_ROUTE_REQUIRED_SEMANTICS_REMAIN_OPEN",
+    "NO_COMPLETED_REVIEW_MILESTONE_OR_ISSUER_AUTHORIZATION",
+    "CONFORMANCE_DOES_NOT_PROVE_FULL_CODE_EQUIVALENCE_OR_LATER_POLICY_APPLICATION",
+    "NO_PRODUCTION_ACTIVATION_OR_PERSISTENCE",
+  ]),
+});
+export type EvidenceReviewQueueV2Contract = typeof V2_CONTRACT_MATERIAL;
+const V2_CONTRACT = freeze({ ...V2_CONTRACT_MATERIAL }) as EvidenceReviewQueueV2Contract;
+const V2_CONTRACT_TRUST = new WeakSet<object>([V2_CONTRACT]);
+export function getEvidenceReviewQueueV2Contract(): EvidenceReviewQueueV2Contract { return V2_CONTRACT; }
+export function isAuthenticEvidenceReviewQueueV2Contract(value: unknown): value is EvidenceReviewQueueV2Contract { return !!value && typeof value === "object" && V2_CONTRACT_TRUST.has(value); }
+
+export type EvidenceReviewQueueV2Member = Readonly<{
+  contractVersion: typeof EVIDENCE_REVIEW_QUEUE_V2_VERSION;
+  candidateId: string;
+  routingResultId: string;
+  currentState: RoutingEvaluation["currentState"];
+  nextState: RoutingEvaluation["nextState"];
+  evaluationAsOf: string;
+  publicationAt: string;
+  itemType: ReviewItemType;
+  status: ReviewQueueStatus;
+  priority: ReviewPriority;
+  requiredNextAction: string;
+  blockerCodes: readonly ReviewBlockerCode[];
+}>;
+export type EvidenceReviewQueueV2 = Readonly<{
+  contractVersion: typeof EVIDENCE_REVIEW_QUEUE_V2_VERSION;
+  decisionId: string;
+  decisionFingerprint: string;
+  evaluationAsOf: string;
+  status: "HAS_REVIEW_ITEMS";
+  memberCount: number;
+  members: readonly EvidenceReviewQueueV2Member[];
+  authorityIssued: false;
+  persistenceAllowed: false;
+}>;
+const V2_MEMBER_TRUST = new WeakSet<object>();
+const V2_QUEUE_TRUST = new WeakSet<object>();
+const V2_CONFLICT_PRECEDENCE = Object.freeze(["CORRECTION_LINEAGE_CONFLICT", "ISSUER_IDENTITY_CONFLICT", "LISTING_JURISDICTION_CONFLICT", "ASSET_REPRESENTATION_CONFLICT", "LIFECYCLE_CONFLICT", "AMOUNT_CURRENCY_CONFLICT", "PUBLICATION_TIME_CONFLICT", "SOURCE_MATERIAL_CONFLICT", "AUTHORITY_TIER_CONFLICT", "ORIGIN_GROUP_CONFLICT"]);
+function v2ConflictAction(result: RoutingEvaluation): string { return conflictAction(result, V2_CONFLICT_PRECEDENCE); }
+function isDenseRoutingList(value: unknown): value is readonly unknown[] {
+  if (!Array.isArray(value) || types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return false;
+  const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
+  if (!Number.isSafeInteger(length) || length < 1 || length > 512 || Reflect.ownKeys(value).length !== length + 1) return false;
+  for (let i = 0; i < length; i++) { const descriptor = Object.getOwnPropertyDescriptor(value, String(i)); if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return false; }
+  return true;
+}
+function compareV2Members(a: EvidenceReviewQueueV2Member, b: EvidenceReviewQueueV2Member): number {
+  return REVIEW_PRIORITIES.indexOf(a.priority) - REVIEW_PRIORITIES.indexOf(b.priority) || cmp(a.publicationAt, b.publicationAt) || cmp(a.candidateId, b.candidateId);
+}
+/** Evaluates one authenticated decision's authentic routing results under the opt-in v2 contract. */
+export function evaluateEvidenceReviewQueueV2(decision: unknown, routingResults: unknown): EvidenceReviewQueueV2 | null {
+  try {
+    if (!isAuthenticEvidenceReviewQueueV2Contract(V2_CONTRACT) || !isAuthenticSourcePortfolioDecision(decision) || !isDenseRoutingList(routingResults)) return null;
+    const length = Object.getOwnPropertyDescriptor(routingResults, "length")!.value as number;
+    const results: RoutingEvaluation[] = [];
+    for (let i = 0; i < length; i++) {
+      const descriptor = Object.getOwnPropertyDescriptor(routingResults, String(i));
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable || !isAuthenticRoutingEvaluation(descriptor.value) || !isRoutingEvaluationForDecision(decision, descriptor.value)) return null;
+      const result = descriptor.value as RoutingEvaluation;
+      if (result.status !== "NON_AUTHORITATIVE_ROUTING_RESULT" || result.authorityIssued || result.persistenceAllowed || result.signalEligible || result.tradingEligible || result.independentFactualOriginGroups !== 0 || result.independentFactualCorroboration !== "UNSUPPORTED" || !result.stageHistory.length || result.stageHistory.at(-1) !== result.nextState) return null;
+      results.push(result);
+    }
+    if (new Set(results.map(result => result.evaluationAsOf)).size !== 1 || new Set(results.map(result => result.candidateId)).size !== results.length) return null;
+    const members = results.map(result => {
+      const classified = classify(result, v2ConflictAction);
+      const member = freeze({ contractVersion: EVIDENCE_REVIEW_QUEUE_V2_VERSION, candidateId: result.candidateId, routingResultId: result.routingResultId, currentState: result.currentState, nextState: result.nextState, evaluationAsOf: result.evaluationAsOf, publicationAt: result.publicationAt, itemType: classified.itemType, status: classified.status, priority: classified.priority, requiredNextAction: classified.nextAction, blockerCodes: Object.freeze(blockersFor(result).map(blocker => blocker.code)) }) as EvidenceReviewQueueV2Member;
+      V2_MEMBER_TRUST.add(member);
+      return member;
+    }).sort(compareV2Members);
+    const queue = freeze({ contractVersion: EVIDENCE_REVIEW_QUEUE_V2_VERSION, decisionId: decision.decisionId, decisionFingerprint: decision.fingerprint, evaluationAsOf: results[0]!.evaluationAsOf, status: "HAS_REVIEW_ITEMS" as const, memberCount: members.length, members: Object.freeze(members), authorityIssued: false as const, persistenceAllowed: false as const }) as EvidenceReviewQueueV2;
+    V2_QUEUE_TRUST.add(queue);
+    return queue;
+  } catch { return null; }
+}
+export function isAuthenticEvidenceReviewQueueV2Member(value: unknown): value is EvidenceReviewQueueV2Member { return !!value && typeof value === "object" && !types.isProxy(value) && V2_MEMBER_TRUST.has(value); }
+export function isAuthenticEvidenceReviewQueueV2(value: unknown): value is EvidenceReviewQueueV2 { return !!value && typeof value === "object" && !types.isProxy(value) && V2_QUEUE_TRUST.has(value); }

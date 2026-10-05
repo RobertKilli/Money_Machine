@@ -68,6 +68,14 @@ The intended non-authoritative path is discovery â†’ source portfolio routing â†
 
 The composition checkpoint (stacked on the queue UI branch, parent `4724b9de8a29f6ce6b2f1e3d1cfb691fabd44663`) invokes this contract only after every synthetic candidate has passed discovery and routing validation. The queue sealer remains responsible for precedence, candidate uniqueness, and canonical ordering; the application layer does not calculate item status or priority. Queue items are converted through the existing view-model adapter, and no queue-set/domain trust is exposed.
 
+## Opt-in v2 precedence contract
+
+`getEvidenceReviewQueueV2Contract()` and `evaluateEvidenceReviewQueueV2(decision, routingResults)` provide an explicitly versioned offline evaluator (`event-intelligence-evidence-review-queue-contract/v2`). Callers must provide the existing authentic source-portfolio decision and authentic routing results. The returned v2 queue and members receive separate module-local trust; copied or serialized values do not inherit it. A v1 queue item or set is not a v2 result. Existing v1 exports, material, composition, demos, production behavior, wire profiles, and golden fixtures remain on v1.
+
+V2 retains the executable v1 outcomes for the precedence discrepancies and describes them explicitly: lifecycle conflict precedes amount/currency conflict when both exist; the classifier is an ordered chain of conditions (including evidence properties in addition to routing stage) with a documented lifecycle fallback. Classification, independently accumulated blockers, categorical item priority, and final queue sorting are separate rules. V2 sorts by priority rank, publication time ascending, then candidate ID lexically; this tie-break is only for this in-memory opt-in queue and is not a persistent identity.
+
+Correction/retraction handling remains ahead of duplicate/no-action under the existing conditions. This does not resolve the meaning of a retraction hint versus the retracted flag, claim retraction, revision supersession, source withdrawal, `eventRoutes.required`, completed review milestones, or issuer authorization. The v2 material and conformance tests document selected behavior; they do not prove complete implementation equivalence or later policy application. This evaluator adds no production activation, persistence, identity builder, policy resolver, or authority.
+
 The subsequent read-model decision chooses immutable snapshots of the safe serialized view-model as a future persistence strategy, not queue-domain objects. No schema, UoW, or loader is approved; old snapshots remain cutoff-bound and append-only, while current selection is a separate presentation query.
 # Snapshot provenance boundary
 
