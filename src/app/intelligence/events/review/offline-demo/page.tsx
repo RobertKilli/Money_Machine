@@ -68,6 +68,11 @@ export default async function OfflineEvidenceReviewDemoPage({
         })}
       </nav>
 
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--panel)] p-4">
+        <p className="text-sm text-[var(--muted)]">Se kandidatene samlet i én syntetisk kø.</p>
+        <Link href={`${OFFLINE_DEMO_PATH}/combined`} className="mt-2 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Samlet syntetisk review-kø</Link>
+      </div>
+
       {demo.scenarios.filter(scenario => !selectedScenario || scenario.key === selectedScenario.scenarioKey).map(scenario => {
         const item = scenario.model.items[0];
         return <section key={scenario.key} id={`offline-demo-${scenario.key}`} aria-labelledby={`offline-demo-heading-${scenario.key}`} className="overflow-hidden rounded-2xl border border-[var(--border)]">

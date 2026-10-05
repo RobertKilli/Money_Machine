@@ -12,6 +12,20 @@ Hvert scenario har også en tastaturbetjent **View synthetic source context**-se
 
 Kjente begrensninger i queue conflict-precedence, routing-mapping/classifier-alignment og retraction-semantikk er ikke endret. Demoen etablerer ikke issuer-/reviewer-authorization, milestone-evidence, provenance completeness eller producer-authority. Den samme view-modelen som eksisterende read-only workspace bruker, er eneste domain-data som sendes til klienten.
 
+## Samlet syntetisk review-kø
+
+I development er også `/intelligence/events/review/offline-demo/combined` tilgjengelig fra scenariooversikten. Den bygger de samme tre faste syntetiske fixture-kandidatene ved cutoff `2026-10-03T12:00:00.000Z` og sender dem samlet gjennom én eksisterende queue-composition og én view-model-projeksjon. Den viser composition-status, queue-status og antall fra den projiserte modellen i det eksisterende read-only workspace-et. Queueens runtime-sortering beholdes; rekkefølgen uttrykker review-behov, ikke investeringsverdi.
+
+Rights er en kandidatspesifikk blocker i denne compositionen, så den blandede køen kan vise correction, rights og mapping samtidig uten å omgå rights-gaten. Ved gjeldende fixtures forventes correction `BLOCKED / URGENT_CORRECTION_REVIEW`, rights `BLOCKED / BLOCKED_RIGHTS` og issuer mapping `OPEN / MAPPING_REQUIRED`; de er historical ved den felles cutoffen. Disse resultatene er fortsatt `NON_AUTHORITATIVE_SYNTHETIC_COMPOSITION`, og source-, policy-, review- eller producer-authority etableres ikke. Den vanlige review-ruten forblir blokkert utenfor development.
+
+Den samlede ruten bruker ikke source-context-panelene og sender ingen discovery-, routing- eller queue-domainobjekter til klienten. Filtervalg endrer bare presentasjonen av den ene projiserte køen. Den faktiske verifikasjonen for denne utvidelsen står nedenfor.
+
 ## Verifikasjon
+
+### Samlet kø-utvidelse
+
+De nye integrasjonstestene bekrefter én faktisk composition med tre autentiske syntetiske candidates og én view-model-projeksjon: correction `BLOCKED / URGENT_CORRECTION_REVIEW`, rights `BLOCKED / BLOCKED_RIGHTS` og issuer mapping `OPEN / MAPPING_REQUIRED`, i denne runtime-sorteringen. Alle tre er historical ved cutoffen. Route- og direkte-loader-gatene avviser miljøer utenfor eksakt `development` før fixture-builder eller composition. Full suite, typecheck og lint består. `npm ls --all` avslutter med kode 0 og viser manglende valgfrie plattformintegrasjoner; Vite viser den eksisterende extensionless-helper-advarselen.
+
+En egen lokal Edge headless-sesjon mot loopback bekreftet navigasjon fra oversikten til den samlede køen og tilbake, tre viste rader, status-/årsakstekster, felles cutoff, OPEN-filterets delmengde, filterets lokale tomtilstand og gjenoppretting av alle radene etter at filtrene ble tømt. Correction var synlig som standard. Ved 390 px var `scrollWidth` 390 px. Den vanlige review-ruten viste fortsatt blokkert tilstand. Nettverk utenfor loopback ble blokkert. `agent-browser`-CLI var ikke installert; interaksjonskontrollen ble gjort gjennom Edge DevTools Protocol. Dette var nettleserkontroll, ikke bare SSR/HTTP.
 
 Loader-/rute-gate og fixture-til-view-model-integrasjon testes med repoets Vitest-oppsett. Interaksjoner for workspace-filtrene ble kontrollert manuelt i en isolert Edge-nettleser i den foregående presentasjonsslicen. For kildematerialvisningen i denne oppdateringen bestod SSR-testene, og en lokal loopback-HTTP-kontroll ga 200 med alle tre disclosure-panelene, correction og historical-markering. Edge startet ikke headless i denne gjennomgangen, så tastaturinteraksjon og mobil-/desktop-layout for de nye panelene ble ikke visuelt kontrollert. Native `<summary>` er fokusérbar og støtter nettleserens standard tastaturaktivering. Vitest-miljøet er `node` og mangler DOM-/React-testadaptere; ingen nye dependencies ble lagt til. Full unit-suite, typecheck, lint, dependency-tree og security audit er kjørt for kildematerialoppdateringen.
