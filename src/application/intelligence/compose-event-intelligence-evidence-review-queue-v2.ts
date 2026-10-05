@@ -19,6 +19,7 @@ import {
   isAuthenticEvidenceReviewQueueV2,
   type EvidenceReviewQueueV2,
 } from "@/domain/intelligence/event-intelligence-evidence-review-queue";
+import type { SourcePortfolioDecision } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
 
 export const EVENT_INTELLIGENCE_QUEUE_V2_COMPOSITION_VERSION = "event-intelligence-evidence-review-queue-composition/v2" as const;
 export const EVENT_INTELLIGENCE_QUEUE_V2_COMPOSITION_LIMITS = Object.freeze({ candidates: 64, routingEvaluationsPerCandidate: 9 });
@@ -41,6 +42,7 @@ export type EventIntelligenceQueueV2CompositionResult =
   | Readonly<{ status: "BLOCKED"; code: "COMPOSITION_INPUT_INVALID" | "COMPOSITION_CANDIDATE_UNTRUSTED" | "COMPOSITION_CUTOFF_MISMATCH" | "COMPOSITION_DISCOVERY_SET_INVALID" | "COMPOSITION_ROUTING_REJECTED" | "COMPOSITION_QUEUE_REJECTED" }>;
 
 const TRUST = new WeakSet<object>();
+const COMPOSITION_BINDING = new WeakMap<object, Readonly<{ decision: SourcePortfolioDecision; members: readonly Readonly<{ candidate: NewsDiscoveryCandidate; routing: RoutingEvaluation }>[] }>>();
 const BLOCKED = (code: Extract<EventIntelligenceQueueV2CompositionResult, { status: "BLOCKED" }> ["code"]): EventIntelligenceQueueV2CompositionResult => Object.freeze({ status: "BLOCKED", code });
 const INTRINSICS = new Set(["constructor", "__defineGetter__", "__defineSetter__", "hasOwnProperty", "__lookupGetter__", "__lookupSetter__", "isPrototypeOf", "propertyIsEnumerable", "toString", "valueOf", "__proto__", "toLocaleString"]);
 const fail = (): never => { throw new Error("COMPOSITION_INPUT_INVALID"); };
@@ -176,6 +178,7 @@ export function composeEventIntelligenceEvidenceReviewQueueV2(input: unknown): E
     if (!queue || !isAuthenticEvidenceReviewQueueV2(queue) || queue.evaluationAsOf !== cutoff || queue.memberCount !== authentic.length || new Set(queue.members.map(member => member.candidateId)).size !== authentic.length || queue.members.some(member => !authentic.some(candidate => candidate.candidateId === member.candidateId))) return BLOCKED("COMPOSITION_QUEUE_REJECTED");
     const composition = freezeDeep({ version: EVENT_INTELLIGENCE_QUEUE_V2_COMPOSITION_VERSION, status: "NON_AUTHORITATIVE_SYNTHETIC_COMPOSITION" as const, evaluationAsOf: cutoff, candidateCount: authentic.length, queue });
     TRUST.add(composition);
+    COMPOSITION_BINDING.set(composition, Object.freeze({ decision, members: Object.freeze(originSet.members.map(member => Object.freeze({ candidate: member.candidate, routing: results.find(result => result.candidateId === member.candidate.candidateId)! }))) }));
     return Object.freeze({ status: "COMPOSED" as const, composition });
   } catch {
     return BLOCKED("COMPOSITION_INPUT_INVALID");
@@ -184,4 +187,15 @@ export function composeEventIntelligenceEvidenceReviewQueueV2(input: unknown): E
 
 export function isAuthenticEventIntelligenceQueueV2Composition(value: unknown): value is EventIntelligenceQueueV2Composition {
   return !!value && typeof value === "object" && !types.isProxy(value) && TRUST.has(value) && isAuthenticEvidenceReviewQueueV2((value as EventIntelligenceQueueV2Composition).queue);
+}
+
+/** Server-only exact fixture binding for offline consumers; IDs alone never restore this binding. */
+export function getEventIntelligenceQueueV2CompositionMemberBinding(compositionInput: unknown, candidateInput: unknown, routingInput?: unknown, decisionInput?: unknown): Readonly<{ candidate: NewsDiscoveryCandidate; routing: RoutingEvaluation; decision: SourcePortfolioDecision; member: EvidenceReviewQueueV2["members"][number] }> | null {
+  if (!isAuthenticEventIntelligenceQueueV2Composition(compositionInput)) return null;
+  const binding = COMPOSITION_BINDING.get(compositionInput);
+  if (!binding || (decisionInput !== undefined && binding.decision !== decisionInput)) return null;
+  const exact = binding.members.find(item => item.candidate === candidateInput && (routingInput === undefined || item.routing === routingInput));
+  if (!exact) return null;
+  const member = (compositionInput as EventIntelligenceQueueV2Composition).queue.members.find(item => item.candidateId === exact.candidate.candidateId && item.routingResultId === exact.routing.routingResultId);
+  return member ? Object.freeze({ ...exact, decision: binding.decision, member }) : null;
 }

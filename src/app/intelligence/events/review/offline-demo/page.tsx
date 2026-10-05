@@ -76,6 +76,7 @@ export default async function OfflineEvidenceReviewDemoPage({
         <Link href={`${OFFLINE_DEMO_PATH}/snapshot`} className="mt-2 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Demonstrer snapshot roundtrip</Link>
         <Link href={`${OFFLINE_DEMO_PATH}/queue-v2`} className="mt-2 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Sammenlign opt-in queue V2</Link>
         <Link href={`${OFFLINE_DEMO_PATH}/review-session`} className="mt-2 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Demonstrer isolerte review-sessions</Link>
+        <Link href={`${OFFLINE_DEMO_PATH}/review-readiness`} className="mt-2 ml-4 inline-block rounded px-1 py-1 text-sm font-semibold underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Vurder lokal review readiness</Link>
       </div>
 
       {demo.scenarios.filter(scenario => !selectedScenario || scenario.key === selectedScenario.scenarioKey).map(scenario => {

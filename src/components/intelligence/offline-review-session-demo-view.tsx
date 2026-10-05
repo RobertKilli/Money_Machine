@@ -10,6 +10,7 @@ export function OfflineReviewSessionDemoView({ result }: { result: OfflineReview
       <nav aria-label="Demonstrasjonsnavigasjon" className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold">
         <Link href="/intelligence/events/review/offline-demo" className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Til demooversikten</Link>
         <Link href="/intelligence/events/review/offline-demo/queue-v2" className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Se V1/V2-køen</Link>
+        <Link href="/intelligence/events/review/offline-demo/review-readiness" className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Vurder lokal review readiness</Link>
       </nav>
     </header>
 

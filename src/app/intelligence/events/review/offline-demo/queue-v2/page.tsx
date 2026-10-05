@@ -40,6 +40,7 @@ export default async function OfflineQueueV2ComparisonPage() {
         <Link href={DEMO} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til demooversikten</Link>
         <Link href={COMBINED} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Tilbake til samlet V1-kø</Link>
         <Link href={`${DEMO}/review-session`} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Demonstrer isolerte review-sessions</Link>
+        <Link href={`${DEMO}/review-readiness`} className="rounded px-1 py-1 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Vurder lokal review readiness</Link>
       </nav>
     </header>
 
