@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   evaluateSourcePortfolioRouting,
   getSourcePortfolioDecision,
+  isAuthenticRoutingEvaluation,
   type SyntheticRoutingMaterial,
 } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
 import {
@@ -10,8 +11,11 @@ import {
   evaluateEvidenceReviewQueueV2,
   getEvidenceReviewQueueContract,
   getEvidenceReviewQueueV2Contract,
+  isAuthenticEvidenceReviewItem,
   isAuthenticEvidenceReviewQueueV2,
   isAuthenticEvidenceReviewQueueV2Member,
+  isAuthenticEvidenceReviewQueueSet,
+  isAuthenticEvidenceReviewQueueV2Contract,
   projectRoutingResultToEvidenceReviewItem,
   sealEvidenceReviewQueueSet,
 } from "@/domain/intelligence/event-intelligence-evidence-review-queue";
@@ -79,6 +83,7 @@ describe("opt-in evidence review queue v2", () => {
     const v2 = getEvidenceReviewQueueV2Contract();
     expect(v1.contractVersion).toBe(EVIDENCE_REVIEW_QUEUE_VERSION);
     expect(v2.contractVersion).toBe(EVIDENCE_REVIEW_QUEUE_V2_VERSION);
+    expect(v2.requiredSourcePortfolioVersion).toBe("event-intelligence-source-portfolio-routing-decision/v1");
     expect(v2.algorithmVersion).toBe(EVIDENCE_REVIEW_QUEUE_V2_SEMANTIC_MATERIAL.algorithmVersion);
     expect(v2.classifierOrder).toEqual(EVIDENCE_REVIEW_QUEUE_V2_SEMANTIC_MATERIAL.classifierOrder);
     expect(v2.classifierOrder).toContain("LIFECYCLE_REVIEW=DOCUMENTED_FALLBACK");
@@ -149,11 +154,30 @@ describe("opt-in evidence review queue v2", () => {
     );
     expect(queue).toMatchObject({ contractVersion: EVIDENCE_REVIEW_QUEUE_V2_VERSION, evaluationAsOf: "2026-10-03T12:00:00.000Z", status: "HAS_REVIEW_ITEMS", memberCount: 3, authorityIssued: false, persistenceAllowed: false });
     expect(queue?.members.map(member => member.itemType)).toEqual(["CORRECTION_LINEAGE_REVIEW", "RIGHTS_APPROVAL_REVIEW", "ISSUER_MAPPING_REVIEW"]);
+    expect(queue?.members.map(member => [member.candidateId, member.itemType])).toEqual([
+      ["candidate:v2-a", "CORRECTION_LINEAGE_REVIEW"],
+      ["candidate:v2-r", "RIGHTS_APPROVAL_REVIEW"],
+      ["candidate:v2-z", "ISSUER_MAPPING_REVIEW"],
+    ]);
     expect(queue?.members.every(isAuthenticEvidenceReviewQueueV2Member)).toBe(true);
-    expect(evaluateEvidenceReviewQueueV2(decision, [
-      route({ candidateId: "candidate:v2-cutoff-a" })!,
-      route({ candidateId: "candidate:v2-cutoff-b", evaluationAsOf: "2026-10-04T00:00:00.000Z" })!,
-    ])).toBeNull();
+    const correctionRoute = route({ candidateId: "candidate:v2-a", eventHint: "CORRECTION_AMENDMENT", correctionPresent: true, correctionResolved: false, correctionAvailableAt: "2026-10-02T00:00:00.000Z" })!;
+    const rightsRoute = route({ candidateId: "candidate:v2-r", rightsApproved: false })!;
+    const mappingRoute = route({ candidateId: "candidate:v2-z", issuerMapped: false })!;
+    const reversed = evaluateEvidenceReviewQueueV2(decision, [mappingRoute, rightsRoute, correctionRoute]);
+    expect(reversed?.members.map(member => [member.candidateId, member.itemType])).toEqual(queue?.members.map(member => [member.candidateId, member.itemType]));
+    const tied = evaluate(
+      { candidateId: "candidate:v2-tie-z", issuerMapped: false, publicationAt: "2026-10-01T00:01:00.000Z", discoveredAt: "2026-10-01T00:02:00.000Z", receivedAt: "2026-10-01T00:03:00.000Z" },
+      { candidateId: "candidate:v2-tie-a", issuerMapped: false, publicationAt: "2026-10-01T00:01:00.000Z", discoveredAt: "2026-10-01T00:02:00.000Z", receivedAt: "2026-10-01T00:03:00.000Z" },
+      { candidateId: "candidate:v2-time-first", issuerMapped: false },
+    );
+    expect(tied?.members.map(member => member.candidateId)).toEqual(["candidate:v2-time-first", "candidate:v2-tie-a", "candidate:v2-tie-z"]);
+
+    const earlier = route({ candidateId: "candidate:v2-cutoff-a" });
+    const later = route({ candidateId: "candidate:v2-cutoff-b", evaluationAsOf: "2026-10-04T00:00:00.000Z" });
+    expect(isAuthenticRoutingEvaluation(earlier)).toBe(true);
+    expect(isAuthenticRoutingEvaluation(later)).toBe(true);
+    expect(earlier?.candidateId).not.toBe(later?.candidateId);
+    expect(evaluateEvidenceReviewQueueV2(decision, [earlier, later])).toBeNull();
   });
 
   it("rejects unauthenticated inputs, v1 results, duplicate members and copied/serialized v2 outputs", () => {
@@ -167,10 +191,18 @@ describe("opt-in evidence review queue v2", () => {
     expect(evaluateEvidenceReviewQueueV2(decision, [])).toBeNull();
     expect(evaluateEvidenceReviewQueueV2(decision, new Array(1))).toBeNull();
     expect(isAuthenticEvidenceReviewQueueV2(valid)).toBe(true);
+    expect(isAuthenticEvidenceReviewQueueV2Contract(getEvidenceReviewQueueV2Contract())).toBe(true);
+    expect(isAuthenticEvidenceReviewQueueV2Contract({ ...getEvidenceReviewQueueV2Contract() })).toBe(false);
     expect(isAuthenticEvidenceReviewQueueV2({ ...valid })).toBe(false);
     expect(isAuthenticEvidenceReviewQueueV2(JSON.parse(JSON.stringify(valid)))).toBe(false);
     expect(isAuthenticEvidenceReviewQueueV2(v1Set.status === "SEALED" ? v1Set.queueSet : null)).toBe(false);
     expect(isAuthenticEvidenceReviewQueueV2Member({ ...valid.members[0]! })).toBe(false);
+    expect(isAuthenticEvidenceReviewItem(valid.members[0])).toBe(false);
+    expect(isAuthenticEvidenceReviewQueueSet(valid)).toBe(false);
+    expect(Object.isFrozen(valid)).toBe(true);
+    expect(Object.isFrozen(valid.members)).toBe(true);
+    expect(Object.isFrozen(valid.members[0])).toBe(true);
+    expect(Object.isFrozen(valid.members[0]?.blockerCodes)).toBe(true);
   });
 
   it("keeps v1 output and version untouched while v2 is opt-in", () => {

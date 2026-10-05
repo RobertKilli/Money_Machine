@@ -5,6 +5,7 @@ import {
   isAuthenticRoutingEvaluation,
   isAuthenticSourcePortfolioDecision,
   isRoutingEvaluationForDecision,
+  SOURCE_PORTFOLIO_DECISION_VERSION,
   type RoutingEvaluation,
   type SourcePortfolioDecision,
   type SourceFamily,
@@ -289,6 +290,7 @@ export const EVIDENCE_REVIEW_QUEUE_V2_VERSION = "event-intelligence-evidence-rev
 const V2_CONTRACT_MATERIAL = Object.freeze({
   contractVersion: EVIDENCE_REVIEW_QUEUE_V2_VERSION,
   algorithmVersion: "event-intelligence-evidence-review-queue-classification-algorithm/v2" as const,
+  requiredSourcePortfolioVersion: SOURCE_PORTFOLIO_DECISION_VERSION,
   itemTypes: REVIEW_ITEM_TYPES,
   statuses: REVIEW_QUEUE_STATUSES,
   priorityOrder: REVIEW_PRIORITIES,
