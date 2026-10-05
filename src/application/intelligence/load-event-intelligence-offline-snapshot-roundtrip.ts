@@ -12,6 +12,7 @@ export type OfflineSnapshotRoundtripResult = Readonly<
       cutoff: string;
       byteLength: number;
       digest: string;
+      verifiedDigest: string;
       verificationStatus: "VERIFIED_LOCAL_SCOPE_BINDING_NON_AUTHORITATIVE";
       changedBytesCode: "DIGEST_MISMATCH";
       changedScopeCode: "SNAPSHOT_SCOPE_MISMATCH";
@@ -26,11 +27,13 @@ const CUTOFF = "2026-10-03T12:00:00.000Z";
 function createDemoScopeMaterial(
   sourcePortfolioContractVersion: string,
   queueContractVersion: string,
+  scopeMaterialVersion: string,
+  canonicalizationProfile: string,
   accessClassification: "INTERNAL_GENERAL" | "INTERNAL_RESTRICTED" = "INTERNAL_RESTRICTED",
 ) {
   return {
-    scopeMaterialVersion: "event-intelligence-evidence-review-queue-scope-material/v1",
-    canonicalizationProfile: "event-intelligence-evidence-review-queue-scope-canonical-json/v1",
+    scopeMaterialVersion,
+    canonicalizationProfile,
     reviewPurposePolicyVersion: "event-intelligence-review-purpose/v1",
     reviewPurpose: "CRYPTO_TREASURY_DISCLOSURE_REVIEW",
     jurisdictionUniverse: ["US_SEC", "GB_LSE"],
@@ -69,7 +72,12 @@ export async function loadEventIntelligenceOfflineSnapshotRoundtrip(): Promise<O
   if (!later || later.evaluatedAsOf !== CUTOFF) return unavailable();
 
   // Establish expected scope independently of the envelope before encoding.
-  const expectedMaterial = createDemoScopeMaterial(portfolioModule.SOURCE_PORTFOLIO_DECISION_VERSION, queueModule.EVIDENCE_REVIEW_QUEUE_VERSION);
+  const expectedMaterial = createDemoScopeMaterial(
+    portfolioModule.SOURCE_PORTFOLIO_DECISION_VERSION,
+    queueModule.EVIDENCE_REVIEW_QUEUE_VERSION,
+    scopeModule.EVIDENCE_QUEUE_SCOPE_MATERIAL_VERSION,
+    scopeModule.EVIDENCE_QUEUE_SCOPE_CANONICALIZATION_PROFILE,
+  );
   const expectedScope = scopeModule.buildEvidenceReviewQueueScopeIdentity(expectedMaterial);
   if (expectedScope.status !== "VALID_SYNTAX_ONLY") return unavailable();
 
@@ -88,7 +96,7 @@ export async function loadEventIntelligenceOfflineSnapshotRoundtrip(): Promise<O
     expectedScope.identity,
     expectedMaterial,
   );
-  if (verified.status !== "VERIFIED_LOCAL_SCOPE_BINDING_NON_AUTHORITATIVE") return unavailable();
+  if (verified.status !== "VERIFIED_LOCAL_SCOPE_BINDING_NON_AUTHORITATIVE" || verified.snapshotDigest !== encoded.value.sha256) return unavailable();
   const decodedModel = verified.envelope.payload;
   if (!isDeepStrictEqual(decodedModel, later.model)) return unavailable();
 
@@ -107,6 +115,8 @@ export async function loadEventIntelligenceOfflineSnapshotRoundtrip(): Promise<O
   const alternateScope = scopeModule.buildEvidenceReviewQueueScopeIdentity(createDemoScopeMaterial(
     portfolioModule.SOURCE_PORTFOLIO_DECISION_VERSION,
     queueModule.EVIDENCE_REVIEW_QUEUE_VERSION,
+    scopeModule.EVIDENCE_QUEUE_SCOPE_MATERIAL_VERSION,
+    scopeModule.EVIDENCE_QUEUE_SCOPE_CANONICALIZATION_PROFILE,
     "INTERNAL_GENERAL",
   ));
   if (alternateScope.status !== "VALID_SYNTAX_ONLY" || alternateScope.identity === expectedScope.identity) return unavailable();
@@ -135,6 +145,7 @@ export async function loadEventIntelligenceOfflineSnapshotRoundtrip(): Promise<O
     cutoff: encoded.value.envelope.snapshotCutoff,
     byteLength: encoded.value.canonicalBytes.byteLength,
     digest: encoded.value.sha256,
+    verifiedDigest: verified.snapshotDigest,
     verificationStatus: verified.status,
     changedBytesCode: changedBytesResult.codecCode,
     changedScopeCode: changedScopeResult.code,

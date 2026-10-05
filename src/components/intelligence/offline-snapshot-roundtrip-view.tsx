@@ -24,7 +24,8 @@ export function OfflineSnapshotRoundtripView({ result }: { result: OfflineSnapsh
         <p className="min-w-0 break-all text-sm"><span className="font-semibold">Format:</span> {result.formatVersion}</p>
         <p className="min-w-0 break-all text-sm"><span className="font-semibold">Cutoff (UTC):</span> <time dateTime={result.cutoff}>{result.cutoff}</time></p>
         <p className="min-w-0 break-all text-sm"><span className="font-semibold">Byteantall:</span> {result.byteLength}</p>
-        <p className="min-w-0 break-all font-mono text-xs sm:col-span-2"><span className="font-sans font-semibold">Beregnet SHA-256:</span> {result.digest}</p>
+        <p className="min-w-0 break-all font-mono text-xs"><span className="font-sans font-semibold">Encode-digest (SHA-256):</span> {result.digest}</p>
+        <p className="min-w-0 break-all font-mono text-xs"><span className="font-sans font-semibold">Verifierens digest:</span> {result.verifiedDigest}</p>
         <p role="status" className="min-w-0 break-all text-sm sm:col-span-2 lg:col-span-1"><span className="font-semibold">Lokal status:</span> {result.verificationStatus}</p>
       </section>
 

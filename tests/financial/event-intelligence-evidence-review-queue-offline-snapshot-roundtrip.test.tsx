@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadEventIntelligenceOfflineSnapshotRoundtrip } from "@/application/intelligence/load-event-intelligence-offline-snapshot-roundtrip";
 import { loadEventIntelligenceOfflineTemporalReplay } from "@/application/intelligence/load-event-intelligence-offline-temporal-replay";
-import { getComposedCandidatePublicKey } from "@/application/intelligence/compose-event-intelligence-evidence-review-queue";
+import { composeEventIntelligenceEvidenceReviewQueue, getComposedCandidatePublicKey } from "@/application/intelligence/compose-event-intelligence-evidence-review-queue";
 import { createOfflineReviewDemoFixtures } from "@/application/intelligence/offline-review-demo-fixtures";
 import { EvidenceReviewQueueWorkspace } from "@/components/intelligence/evidence-review-queue-workspace";
 import { OfflineSnapshotRoundtripView } from "@/components/intelligence/offline-snapshot-roundtrip-view";
@@ -53,6 +53,7 @@ describe("offline snapshot roundtrip demo", () => {
     ]);
     expect(result.model.state).toBe("HAS_REVIEW_ITEMS");
     expect(result.model.items).toHaveLength(3);
+    expect(result.verifiedDigest).toBe(result.digest);
   });
 
   it("returns only decoded presentation data and does not restore candidate binding or source-context links", async () => {
@@ -64,6 +65,12 @@ describe("offline snapshot roundtrip demo", () => {
     expect(getComposedCandidatePublicKey(result.model, candidateId)).toBeNull();
     const copied = JSON.parse(JSON.stringify(result.model)) as typeof result.model;
     expect(getComposedCandidatePublicKey(copied, candidateId)).toBeNull();
+    const fixture = createOfflineReviewDemoFixtures()!.find(entry => entry.key === "unresolved-correction")!;
+    const decodedCandidate = result.model.items[0] as unknown as typeof fixture.candidate;
+    expect(composeEventIntelligenceEvidenceReviewQueue({
+      evaluationAsOf: result.cutoff,
+      candidates: [{ candidate: decodedCandidate, routingMaterial: fixture.routingMaterial }],
+    })).toMatchObject({ status: "BLOCKED", code: "COMPOSITION_CANDIDATE_UNTRUSTED" });
     const props = workspaceProps(createElement(OfflineSnapshotRoundtripView, { result }));
     expect(props).toHaveLength(1);
     expect(Object.keys(props[0]!).sort()).toEqual(["idPrefix", "model", "presentation"]);
