@@ -24,7 +24,7 @@ function setup() {
   const reviewRoute = evaluateSourcePortfolioRouting(decision, material, first)!;
   const created = createOfflineReviewSession(fixture.candidate, reviewRoute, CONFIG);
   if (created.status !== "CREATED") throw Error(JSON.stringify(created));
-  return { fixture, decision, composition: composed.composition, binding, route: reviewRoute, session: created.session };
+  return { fixture, decision, composition: composed.composition, binding, first, route: reviewRoute, session: created.session };
 }
 
 function evidence(c: ReturnType<typeof setup>, id = "readiness-root", corrects: string | null = null) {
@@ -50,7 +50,63 @@ describe("offline review readiness references", () => {
     if (evaluated.status !== "EVALUATED") return;
     const result = assessOfflineReviewReadiness({ reference: evaluated.reference, session: c.session, candidate: c.fixture.candidate, routing: c.route, decision: c.decision, milestone: CONFIG.milestone, policy: POLICY, cutoff: CUTOFF, composition: c.composition });
     expect(result.status).toBe("ASSESSED");
-    if (result.status === "ASSESSED") expect(result.assessment).toMatchObject({ localReview: "COMPLETED_PROCEED", queueStatus: "BLOCKED", authorization: "NOT_ESTABLISHED", progression: "NOT_GRANTED" });
+    if (result.status === "ASSESSED") expect(result.assessment).toMatchObject({ localReview: "COMPLETED_PROCEED", queueStatus: "BLOCKED", authorization: "NOT_ESTABLISHED", progression: "NOT_GRANTED", routingRelation: "SEPARATE_AUTHENTIC_RESULTS", reviewApplicationToQueueContext: "NOT_ESTABLISHED", reviewRoutingContext: { cutoff: CUTOFF }, queueRoutingContext: { cutoff: CUTOFF } });
+    if (result.status === "ASSESSED") {
+      expect(result.assessment.reviewRoutingContext.nextState).toBe(c.route.nextState);
+      expect(result.assessment.queueRoutingContext.nextState).toBe(c.binding.routing.nextState);
+      expect(c.route).not.toBe(c.binding.routing);
+    }
+  });
+
+  it("keeps review route A distinct from queue route B and rejects an equal-ID route object copy", () => {
+    const c = setup();
+    const evidenceResult = issueOfflineReviewSessionEvidence(c.session, evidence(c));
+    expect(evidenceResult.status).toBe("ISSUED");
+    const evaluated = evaluateOfflineReviewSessionWithReference(c.session, CUTOFF);
+    expect(evaluated.status).toBe("EVALUATED");
+    if (evaluated.status !== "EVALUATED") return;
+    const equalIdOtherObject = evaluateSourcePortfolioRouting(c.decision, { ...c.fixture.routingMaterial, primaryAvailable: true, qualificationComplete: true, rightsApproved: true }, c.first)!;
+    expect(equalIdOtherObject).not.toBe(c.route);
+    expect(equalIdOtherObject.routingResultId).toBe(c.route.routingResultId);
+    const rejected = assessOfflineReviewReadiness({ reference: evaluated.reference, session: c.session, candidate: c.fixture.candidate, routing: equalIdOtherObject, decision: c.decision, milestone: CONFIG.milestone, policy: POLICY, cutoff: CUTOFF, composition: c.composition });
+    expect(rejected).toMatchObject({ status: "REJECTED", code: "EVALUATION_REFERENCE_REJECTED" });
+  });
+
+  it("rejects caller accessors before they can mutate the session between freshness checking and assessment", () => {
+    const c = setup();
+    const evaluated = evaluateOfflineReviewSessionWithReference(c.session, CUTOFF);
+    expect(evaluated.status).toBe("EVALUATED");
+    if (evaluated.status !== "EVALUATED") return;
+    const hook = vi.fn(() => issueOfflineReviewSessionEvidence(c.session, evidence(c)));
+    const input = {
+      reference: evaluated.reference,
+      session: c.session,
+      candidate: c.fixture.candidate,
+      routing: c.route,
+      decision: c.decision,
+      milestone: CONFIG.milestone,
+      policy: POLICY,
+      cutoff: CUTOFF,
+      get composition() { hook(); return c.composition; },
+    };
+    expect(assessOfflineReviewReadiness(input)).toMatchObject({ status: "REJECTED", code: "EVALUATION_REFERENCE_REJECTED" });
+    expect(hook).not.toHaveBeenCalled();
+    expect(validateFreshOfflineReviewSessionEvaluationReference(evaluated.reference, { session: c.session, candidate: c.fixture.candidate, routing: c.route, decision: c.decision, milestone: CONFIG.milestone, policy: POLICY, cutoff: CUTOFF }).status).toBe("FRESH");
+  });
+
+  it("rejects a valid review reference when candidate, decision, or V2 composition membership differs", () => {
+    const c = setup();
+    const evaluated = evaluateOfflineReviewSessionWithReference(c.session, CUTOFF);
+    expect(evaluated.status).toBe("EVALUATED");
+    if (evaluated.status !== "EVALUATED") return;
+    const common = { reference: evaluated.reference, session: c.session, candidate: c.fixture.candidate, routing: c.route, decision: c.decision, milestone: CONFIG.milestone, policy: POLICY, cutoff: CUTOFF };
+    const otherCandidate = createOfflineReviewDemoQueueV2Fixtures()!.fixtures.find(f => f.key === "issuer-mapping")!;
+    const otherRoute = evaluateSourcePortfolioRouting(c.decision, otherCandidate.routingMaterial)!;
+    expect(assessOfflineReviewReadiness({ ...common, candidate: otherCandidate.candidate, routing: otherRoute })).toMatchObject({ status: "REJECTED", code: "EVALUATION_REFERENCE_REJECTED" });
+    expect(assessOfflineReviewReadiness({ ...common, decision: { ...c.decision } })).toMatchObject({ status: "REJECTED", code: "EVALUATION_REFERENCE_REJECTED" });
+    const otherComposition = composeEventIntelligenceEvidenceReviewQueueV2({ evaluationAsOf: CUTOFF, candidates: [{ candidate: otherCandidate.candidate, routingMaterial: otherCandidate.routingMaterial }] });
+    expect(otherComposition.status).toBe("COMPOSED");
+    if (otherComposition.status === "COMPOSED") expect(assessOfflineReviewReadiness({ ...common, composition: otherComposition.composition })).toMatchObject({ status: "REJECTED", code: "COMPOSITION_BINDING_MISMATCH" });
   });
 
   it("invalidates a prior reference after a successful backdated operation but not after rejection", () => {

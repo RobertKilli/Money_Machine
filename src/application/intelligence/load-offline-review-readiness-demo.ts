@@ -2,7 +2,7 @@ import "server-only";
 import { notFound } from "next/navigation";
 
 export const OFFLINE_REVIEW_READINESS_DEMO_PATH = "/intelligence/events/review/offline-demo/review-readiness" as const;
-export type ReadinessDemoItem = Readonly<{ key: string; title: string; scenario: string; description: string; localReview: string; queueStatus: string; priority: string; blockers: readonly string[]; cutoff: string; stale: string; fresh: string; historical: true }>;
+export type ReadinessDemoItem = Readonly<{ key: string; title: string; scenario: string; description: string; localReview: string; reviewRouting: string; queueRouting: string; routingRelation: string; reviewApplication: "NOT_ESTABLISHED"; queueStatus: string; priority: string; blockers: readonly string[]; cutoff: string; stale: string; fresh: string; historical: true }>;
 export type ReadinessDemoResult = Readonly<{ status: "AVAILABLE"; items: readonly ReadinessDemoItem[] }> | Readonly<{ status: "UNAVAILABLE" }>;
 const UNAVAILABLE: ReadinessDemoResult = Object.freeze({ status: "UNAVAILABLE" });
 const CUTOFF = "2026-10-03T12:00:00.000Z";
@@ -73,7 +73,10 @@ export async function loadOfflineReviewReadinessDemo(): Promise<ReadinessDemoRes
     const assessment = (await import("@/application/intelligence/offline-review-readiness")).assessOfflineReviewReadiness({ reference: current.reference, session, candidate: fixture.candidate, routing: reviewRoute, decision, milestone: CONFIG.milestone, policy: POLICY, cutoff: CUTOFF, composition: composed.composition });
     if (assessment.status !== "ASSESSED") return UNAVAILABLE;
     const status = current.evaluation.status;
-    output.push(Object.freeze({ key: `${scenario.key}-${fixture.key}`, title: fixture.candidate.record.headline, scenario: scenario.scenario, description: scenario.description, localReview: assessment.assessment.localReview, queueStatus: binding.member.status, priority: binding.member.priority, blockers: Object.freeze([...binding.member.blockerCodes]), cutoff: CUTOFF, stale, fresh: `${freshCheck.status} / ${status}`, historical: true as const }));
+    const reviewContext = assessment.assessment.reviewRoutingContext;
+    const queueContext = assessment.assessment.queueRoutingContext;
+    const routingLabel = (context: typeof reviewContext) => `${context.currentState} → ${context.nextState} @ ${context.cutoff}`;
+    output.push(Object.freeze({ key: `${scenario.key}-${fixture.key}`, title: fixture.candidate.record.headline, scenario: scenario.scenario, description: scenario.description, localReview: assessment.assessment.localReview, reviewRouting: routingLabel(reviewContext), queueRouting: routingLabel(queueContext), routingRelation: assessment.assessment.routingRelation, reviewApplication: assessment.assessment.reviewApplicationToQueueContext, queueStatus: binding.member.status, priority: binding.member.priority, blockers: Object.freeze([...binding.member.blockerCodes]), cutoff: CUTOFF, stale, fresh: `${freshCheck.status} / ${status}`, historical: true as const }));
     }
   }
   return Object.freeze({ status: "AVAILABLE" as const, items: Object.freeze(output) });
