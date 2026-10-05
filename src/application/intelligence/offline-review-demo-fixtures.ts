@@ -32,7 +32,7 @@ export type OfflineReviewDemoSourceMaterial = Readonly<{
   synthetic: true;
 }>;
 
-export type OfflineReviewDemoScenarioKey = "issuer-mapping" | "rights-blocked" | "unresolved-correction";
+export type OfflineReviewDemoScenarioKey = "issuer-mapping" | "rights-blocked" | "unresolved-correction" | "queue-v2-conflict";
 export type OfflineReviewDemoGuidance = Readonly<{ why: string; missing: string; investigate: string }>;
 
 export type OfflineReviewDemoFixture = Readonly<{
@@ -119,6 +119,7 @@ type FixtureSpec = Omit<OfflineReviewDemoFixture, "candidate" | "routingMaterial
     qualificationComplete: boolean;
     rightsApproved: boolean;
     correctionPresent: boolean;
+    conflicts?: readonly string[];
   }>;
   eventHint: "PURCHASE_INTENT" | "CORRECTION_AMENDMENT";
 }>;
@@ -214,6 +215,34 @@ const FIXTURE_SPECS: readonly FixtureSpec[] = [
     flags: { issuerMapped: true, assetMapped: true, primaryAvailable: true, qualificationComplete: true, rightsApproved: true, correctionPresent: true },
     eventHint: "CORRECTION_AMENDMENT",
   },
+  {
+    key: "queue-v2-conflict",
+    expectedReviewType: "SOURCE_CONFLICT_REVIEW",
+    label: "Syntetisk lifecycle-/amount-konflikt",
+    description: "Avgrenset syntetisk routing-kollisjon for å vise faktisk V1/V2-klassifisering; den beskriver ikke autentisk økonomisk evidens.",
+    reviewGuidance: {
+      why: "Routing-materialet deklarerer både lifecycle- og amount/currency-konflikt, som begge krever review.",
+      missing: "Ingen av konfliktpåstandene er verifisert eller autoritative; begge blocker-familiene beholdes.",
+      investigate: "Sammenlign de syntetiske conflict-feltene og kontroller lifecycle-først-valget som review-handling, ikke som domeneutfall.",
+    },
+    sourceMaterial: {
+      sourceLabel: "Synthetic conflict fixture",
+      sourceType: "ISSUER_IR",
+      fixtureId: "offline-demo-queue-v2-conflict",
+      receivedAt: RECEIVED_AT,
+      title: "Synthetic Demo Company reviews a Bitcoin purchase",
+      summary: "Synthetic fixture; its routing conflict flags are demonstration inputs, not source evidence.",
+      evidence: [
+        { label: "Declared routing conflicts", value: "LIFECYCLE_CONFLICT; AMOUNT_CURRENCY_CONFLICT" },
+        { label: "Authority", value: "None; no conflict is verified" },
+      ],
+      relevance: "This fixture isolates precedence between two synthetic routing conflict flags.",
+      synthetic: true,
+    },
+    record: newsRecord({ suffix: "queue-v2-conflict", sourceType: "ISSUER_IR", jurisdiction: "US", category: "CORPORATE_CRYPTO_PURCHASE_INTENT", headline: "Synthetic Demo Company reviews a Bitcoin purchase" }),
+    flags: { issuerMapped: true, assetMapped: true, primaryAvailable: true, qualificationComplete: true, rightsApproved: true, correctionPresent: false, conflicts: ["AMOUNT_CURRENCY_CONFLICT", "LIFECYCLE_CONFLICT"] },
+    eventHint: "PURCHASE_INTENT",
+  },
 ];
 
 function scenarioRoutingMaterial(
@@ -244,7 +273,7 @@ function scenarioRoutingMaterial(
     correctionResolved: false,
     correctionFieldHints: flags.correctionPresent ? ["OTHER"] : [],
     retracted: false,
-    conflicts: [],
+    conflicts: [...(flags.conflicts ?? [])],
     stale: false,
     originBindings: [],
     publicationAt: candidate.record.publishedAt,
@@ -284,6 +313,14 @@ function createFixturesAt(
 /** The existing overview/single-scenario fixtures remain the complete later fixed set. */
 export function createOfflineReviewDemoFixtures(): readonly OfflineReviewDemoFixture[] | null {
   return createFixturesAt(OFFLINE_REVIEW_DEMO_LATER_EVALUATION_AS_OF, ["issuer-mapping", "rights-blocked", "unresolved-correction"]);
+}
+
+/** Fixed V2 integration inputs; the collision fixture is intentionally separate from existing V1 demos. */
+export function createOfflineReviewDemoQueueV2Fixtures(): Readonly<{ fixtures: readonly OfflineReviewDemoFixture[]; conflictFixture: OfflineReviewDemoFixture }> | null {
+  const fixtures = createFixturesAt(OFFLINE_REVIEW_DEMO_LATER_EVALUATION_AS_OF, ["issuer-mapping", "rights-blocked", "unresolved-correction"]);
+  const conflict = createFixturesAt(OFFLINE_REVIEW_DEMO_LATER_EVALUATION_AS_OF, ["queue-v2-conflict"]);
+  if (!fixtures || !conflict || conflict.length !== 1) return null;
+  return Object.freeze({ fixtures, conflictFixture: conflict[0]! });
 }
 
 /** Two explicitly selected input sets; this is fixture selection, not a general as-of retrieval API. */
