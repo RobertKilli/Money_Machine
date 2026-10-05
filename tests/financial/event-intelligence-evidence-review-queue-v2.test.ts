@@ -150,7 +150,10 @@ describe("opt-in evidence review queue v2", () => {
     expect(queue).toMatchObject({ contractVersion: EVIDENCE_REVIEW_QUEUE_V2_VERSION, evaluationAsOf: "2026-10-03T12:00:00.000Z", status: "HAS_REVIEW_ITEMS", memberCount: 3, authorityIssued: false, persistenceAllowed: false });
     expect(queue?.members.map(member => member.itemType)).toEqual(["CORRECTION_LINEAGE_REVIEW", "RIGHTS_APPROVAL_REVIEW", "ISSUER_MAPPING_REVIEW"]);
     expect(queue?.members.every(isAuthenticEvidenceReviewQueueV2Member)).toBe(true);
-    expect(evaluateEvidenceReviewQueueV2(decision, [...(route({ candidateId: "candidate:v2-a" }) ? [route({ candidateId: "candidate:v2-a" })!] : []), route({ candidateId: "candidate:v2-a", evaluationAsOf: "2026-10-04T00:00:00.000Z" })!])).toBeNull();
+    expect(evaluateEvidenceReviewQueueV2(decision, [
+      route({ candidateId: "candidate:v2-cutoff-a" })!,
+      route({ candidateId: "candidate:v2-cutoff-b", evaluationAsOf: "2026-10-04T00:00:00.000Z" })!,
+    ])).toBeNull();
   });
 
   it("rejects unauthenticated inputs, v1 results, duplicate members and copied/serialized v2 outputs", () => {
@@ -161,6 +164,8 @@ describe("opt-in evidence review queue v2", () => {
     expect(evaluateEvidenceReviewQueueV2({ ...decision }, [routing])).toBeNull();
     expect(evaluateEvidenceReviewQueueV2(decision, [v1Item])).toBeNull();
     expect(evaluateEvidenceReviewQueueV2(decision, [routing, routing])).toBeNull();
+    expect(evaluateEvidenceReviewQueueV2(decision, [])).toBeNull();
+    expect(evaluateEvidenceReviewQueueV2(decision, new Array(1))).toBeNull();
     expect(isAuthenticEvidenceReviewQueueV2(valid)).toBe(true);
     expect(isAuthenticEvidenceReviewQueueV2({ ...valid })).toBe(false);
     expect(isAuthenticEvidenceReviewQueueV2(JSON.parse(JSON.stringify(valid)))).toBe(false);
