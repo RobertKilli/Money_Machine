@@ -69,7 +69,7 @@ describe("offline review milestone evidence", () => {
     const { candidate, route } = context();
     const reference = issue(candidate, route, rawEvidence(candidate, route, { outcome, reasonCodes }));
     const result = validateOfflineReviewMilestoneEvidence(candidate, route, expectation(candidate, route), [reference]);
-    expect(result).toMatchObject({ status: "VALIDATED", outcome, milestoneCompleted: completed, interpretation, synthetic: true, authority: "NONE" });
+    expect(result).toMatchObject({ status: "VALIDATED", outcome, milestoneCompleted: completed, interpretation, inventoryScope: "SUPPLIED_AUTHENTIC_REFERENCES_ONLY", synthetic: true, authority: "NONE" });
     if (result.status === "VALIDATED") {
       expect("progressionAllowed" in result).toBe(false);
       expect("eventAuthority" in result).toBe(false);
@@ -98,6 +98,20 @@ describe("offline review milestone evidence", () => {
     expect(parseReviewMilestoneEvidence(sparse)).toMatchObject({ status: "INVALID", code: "SCHEMA_INVALID" });
     const accessor = rawEvidence(candidate, route); Object.defineProperty(accessor, "evidenceId", { enumerable: true, get() { throw new Error("caller hook"); } });
     expect(parseReviewMilestoneEvidence(accessor)).toMatchObject({ status: "INVALID", code: "SCHEMA_INVALID" });
+    const nestedAccessor = rawEvidence(candidate, route); Object.defineProperty(nestedAccessor.subject, "candidateId", { enumerable: true, get() { throw new Error("nested caller hook"); } });
+    expect(parseReviewMilestoneEvidence(nestedAccessor)).toMatchObject({ status: "INVALID", code: "SCHEMA_INVALID" });
+    const cyclic = rawEvidence(candidate, route); (cyclic.policy as Record<string, unknown>).cycle = cyclic;
+    expect(parseReviewMilestoneEvidence(cyclic)).toMatchObject({ status: "INVALID", code: "SCHEMA_INVALID" });
+  });
+
+  it("accepts the documented maximum bounded references and routing history", () => {
+    const { candidate, route } = context(); const raw = rawEvidence(candidate, route) as unknown as Record<string, unknown>;
+    raw.evidenceId = `e${"x".repeat(127)}`;
+    raw.correctsEvidenceId = `c${"x".repeat(127)}`;
+    raw.reasonCodes = ["REVIEW_COMPLETED", "MATERIAL_INSUFFICIENT", "AUTHORITY_UNAVAILABLE", "REVIEW_STOP_REQUIRED"];
+    const routingContext = raw.routingContext as Record<string, unknown>;
+    raw.routingContext = { ...routingContext, stageHistory: [...Array.from({ length: 14 }, () => "DISCOVERED" as const), route.currentState, route.nextState] };
+    expect(parseReviewMilestoneEvidence(raw)).toMatchObject({ status: "VALID" });
   });
 
   it("requires exact candidate revision and authenticated route identity at issuance and use", () => {
@@ -119,6 +133,8 @@ describe("offline review milestone evidence", () => {
     expect(validateOfflineReviewMilestoneEvidence(candidate, route, changedMilestone, [reference])).toMatchObject({ status: "REJECTED", code: "BINDING_MISMATCH" });
     const changedRoute = { ...expectation(candidate, route), routingContext: { ...expectation(candidate, route).routingContext, routingResultId: "e".repeat(64) } };
     expect(validateOfflineReviewMilestoneEvidence(candidate, route, changedRoute, [reference])).toMatchObject({ status: "REJECTED", code: "BINDING_MISMATCH" });
+    const changedCutoff = { ...expectation(candidate, route), evaluationCutoff: "2026-10-03T12:00:00.001Z" };
+    expect(validateOfflineReviewMilestoneEvidence(candidate, route, changedCutoff, [reference])).toMatchObject({ status: "REJECTED", code: "BINDING_MISMATCH" });
     const otherCandidate = createSyntheticNewsDiscoveryCandidate({ ...candidate.record, providerRecordId: "other-revision" }, candidate.evaluatedAt)!;
     const otherRoute = evaluateSourcePortfolioRouting(getSourcePortfolioDecision(), { ...context().fixture.routingMaterial, candidateId: otherCandidate.candidateId, primaryAvailable: true, qualificationComplete: true, rightsApproved: true })!;
     expect(validateOfflineReviewMilestoneEvidence(otherCandidate, otherRoute, expectation(candidate, route), [reference])).toMatchObject({ status: "REJECTED", code: "BINDING_MISMATCH" });
@@ -163,14 +179,36 @@ describe("offline review milestone evidence", () => {
     expect(priorResult).toMatchObject({ status: "VALIDATED", outcome: "EVIDENCE_INSUFFICIENT", milestoneCompleted: false });
     const independent = issue(candidate, route, rawEvidence(candidate, route, { issuedAt: "2026-10-03T11:59:00.000Z" }));
     expect(validateOfflineReviewMilestoneEvidence(candidate, route, expected, [earlier, independent])).toMatchObject({ status: "HELD", code: "EVIDENCE_CONFLICT", outcome: "EVIDENCE_INSUFFICIENT", milestoneCompleted: false });
+
+    const equivalentFirst = evaluateSourcePortfolioRouting(getSourcePortfolioDecision(), { ...context().fixture.routingMaterial, primaryAvailable: true, qualificationComplete: true, rightsApproved: true })!;
+    const equivalentRoute = evaluateSourcePortfolioRouting(getSourcePortfolioDecision(), { ...context().fixture.routingMaterial, primaryAvailable: true, qualificationComplete: true, rightsApproved: true }, equivalentFirst)!;
+    expect(equivalentRoute.routingResultId).toBe(route.routingResultId);
+    const crossContextCorrection = issueOfflineReviewMilestoneEvidence(candidate, equivalentRoute, rawEvidence(candidate, equivalentRoute, { issuedAt: "2026-10-03T11:55:00.000Z", correctsEvidenceId: earlier.evidence.evidenceId }), earlier);
+    expect(crossContextCorrection).toMatchObject({ status: "REJECTED", code: "CORRECTION_TARGET_INVALID" });
   });
 
-  it("simulates revocation for new use without rewriting the historical validation result", () => {
+  it("limits conflict claims to the authentic references supplied by the caller", () => {
+    const { candidate, route } = context();
+    const first = issue(candidate, route, rawEvidence(candidate, route, { issuedAt: "2026-10-03T11:40:00.000Z" }));
+    issue(candidate, route, rawEvidence(candidate, route, { issuedAt: "2026-10-03T11:50:00.000Z", outcome: "COMPLETED_STOP", reasonCodes: ["REVIEW_STOP_REQUIRED"] }));
+    // The verifier has no complete issuance ledger. It can validate only the supplied reference set.
+    expect(validateOfflineReviewMilestoneEvidence(candidate, route, expectation(candidate, route), [first])).toMatchObject({ status: "VALIDATED", inventoryScope: "SUPPLIED_AUTHENTIC_REFERENCES_ONLY" });
+  });
+
+  it("applies simulated revocation at its timestamp without rewriting prior results", () => {
     const { candidate, route } = context(); const reference = issue(candidate, route);
     const historical = validateOfflineReviewMilestoneEvidence(candidate, route, expectation(candidate, route), [reference]);
-    expect(revokeOfflineReviewMilestoneEvidence(reference)).toMatchObject({ status: "REVOKED" });
+    expect(revokeOfflineReviewMilestoneEvidence(reference, "2026-10-03T11:59:59.999Z")).toMatchObject({ status: "REVOKED", revokedAt: "2026-10-03T11:59:59.999Z" });
     expect(validateOfflineReviewMilestoneEvidence(candidate, route, expectation(candidate, route), [reference])).toMatchObject({ status: "REJECTED", code: "EVIDENCE_REVOKED" });
     expect(historical).toMatchObject({ status: "VALIDATED", outcome: "COMPLETED_PROCEED" });
+  });
+
+  it("does not backdate a simulated revocation discovered after the evaluation cutoff", () => {
+    const { candidate, route } = context(); const reference = issue(candidate, route);
+    expect(revokeOfflineReviewMilestoneEvidence(reference, "2026-10-03T12:00:00.001Z")).toMatchObject({ status: "REVOKED" });
+    expect(validateOfflineReviewMilestoneEvidence(candidate, route, expectation(candidate, route), [reference])).toMatchObject({ status: "VALIDATED", outcome: "COMPLETED_PROCEED" });
+    expect(revokeOfflineReviewMilestoneEvidence(reference, "2026-10-03T12:00:00.002Z")).toBeNull();
+    expect(revokeOfflineReviewMilestoneEvidence({}, "2026-10-03T11:00:00.000Z")).toBeNull();
   });
 
   it("keeps unrelated routing blockers and transition output untouched after local proceed", () => {

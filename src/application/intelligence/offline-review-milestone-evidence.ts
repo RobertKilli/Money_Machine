@@ -20,16 +20,17 @@ export type IssueOfflineReviewMilestoneEvidenceResult =
   | Readonly<{ status: "ISSUED"; reference: IssuedOfflineReviewMilestoneEvidence }>
   | Readonly<{ status: "REJECTED"; code: "ROUTING_CONTEXT_UNAUTHENTIC" | "ROUTING_CONTEXT_UNSUPPORTED" | "SUBJECT_BINDING_MISMATCH" | "EVIDENCE_INVALID" | "ISSUER_CONTEXT_UNSUPPORTED" | "CORRECTION_TARGET_INVALID" }>;
 export type OfflineReviewMilestoneValidation =
-  | Readonly<{ status: "VALIDATED"; outcome: ReviewMilestoneOutcome; milestoneCompleted: boolean; interpretation: "MILESTONE_PROCEEDED_LOCALLY" | "MILESTONE_STOPPED_LOCALLY" | "MILESTONE_HELD"; synthetic: true; authority: "NONE" }>
-  | Readonly<{ status: "HELD"; code: "EVIDENCE_CONFLICT"; outcome: "EVIDENCE_INSUFFICIENT"; milestoneCompleted: false; interpretation: "MILESTONE_HELD"; synthetic: true; authority: "NONE" }>
+  | Readonly<{ status: "VALIDATED"; outcome: ReviewMilestoneOutcome; milestoneCompleted: boolean; interpretation: "MILESTONE_PROCEEDED_LOCALLY" | "MILESTONE_STOPPED_LOCALLY" | "MILESTONE_HELD"; inventoryScope: "SUPPLIED_AUTHENTIC_REFERENCES_ONLY"; synthetic: true; authority: "NONE" }>
+  | Readonly<{ status: "HELD"; code: "EVIDENCE_CONFLICT"; outcome: "EVIDENCE_INSUFFICIENT"; milestoneCompleted: false; interpretation: "MILESTONE_HELD"; inventoryScope: "SUPPLIED_AUTHENTIC_REFERENCES_ONLY"; synthetic: true; authority: "NONE" }>
   | Readonly<{ status: "REJECTED"; code: "INPUT_INVALID" | "ROUTING_CONTEXT_UNAUTHENTIC" | "ROUTING_CONTEXT_UNSUPPORTED" | "EXPECTATION_INVALID" | "EVIDENCE_UNAUTHENTIC" | "BINDING_MISMATCH" | "EVIDENCE_MISSING" | "FUTURE_EVIDENCE" | "CORRECTION_INVALID" | "EVIDENCE_REVOKED" }>;
 
 const ISSUED_TRUST = new WeakSet<object>();
 const ISSUED_BINDING = new WeakMap<object, Readonly<{ candidate: NewsDiscoveryCandidate; routing: RoutingEvaluation; decision: SourcePortfolioDecision }>>();
-const REVOKED = new WeakSet<object>();
+const REVOKED_AT = new WeakMap<object, string>();
 const INVALID_ISSUE = (code: Extract<IssueOfflineReviewMilestoneEvidenceResult, { status: "REJECTED" }>["code"]): IssueOfflineReviewMilestoneEvidenceResult => Object.freeze({ status: "REJECTED", code });
 const INVALID_USE = (code: Extract<OfflineReviewMilestoneValidation, { status: "REJECTED" }>["code"]): OfflineReviewMilestoneValidation => Object.freeze({ status: "REJECTED", code });
-const HOLD_CONFLICT: OfflineReviewMilestoneValidation = Object.freeze({ status: "HELD", code: "EVIDENCE_CONFLICT", outcome: "EVIDENCE_INSUFFICIENT", milestoneCompleted: false, interpretation: "MILESTONE_HELD", synthetic: true, authority: "NONE" });
+const INVENTORY_SCOPE = "SUPPLIED_AUTHENTIC_REFERENCES_ONLY" as const;
+const HOLD_CONFLICT: OfflineReviewMilestoneValidation = Object.freeze({ status: "HELD", code: "EVIDENCE_CONFLICT", outcome: "EVIDENCE_INSUFFICIENT", milestoneCompleted: false, interpretation: "MILESTONE_HELD", inventoryScope: INVENTORY_SCOPE, synthetic: true, authority: "NONE" });
 const fail = (): never => { throw new Error("INPUT_INVALID"); };
 const INTRINSICS = new Set(["constructor", "__defineGetter__", "__defineSetter__", "hasOwnProperty", "__lookupGetter__", "__lookupSetter__", "isPrototypeOf", "propertyIsEnumerable", "toString", "valueOf", "__proto__", "toLocaleString"]);
 
@@ -114,7 +115,10 @@ export function issueOfflineReviewMilestoneEvidence(candidateInput: unknown, rou
     if (evidence.subject.candidateId !== candidate.candidateId || evidence.subject.revisionFingerprint !== candidate.fingerprint || plain(evidence.routingContext) !== plain(context) || evidence.evaluationCutoff !== routing.evaluationAsOf) return INVALID_ISSUE("SUBJECT_BINDING_MISMATCH");
     if (evidence.correctsEvidenceId !== null) {
       if (!isAuthenticIssuedOfflineReviewMilestoneEvidence(correctsInput)) return INVALID_ISSUE("CORRECTION_TARGET_INVALID");
-      const prior = (correctsInput as IssuedOfflineReviewMilestoneEvidence).evidence;
+      const priorReference = correctsInput as IssuedOfflineReviewMilestoneEvidence;
+      const priorBinding = ISSUED_BINDING.get(priorReference);
+      if (!priorBinding || priorBinding.candidate !== candidate || priorBinding.routing !== routing || priorBinding.decision !== decision) return INVALID_ISSUE("CORRECTION_TARGET_INVALID");
+      const prior = priorReference.evidence;
       if (prior.evidenceId !== evidence.correctsEvidenceId || prior.issuedAt >= evidence.issuedAt || !sameCorrectionBinding(prior, evidence)) return INVALID_ISSUE("CORRECTION_TARGET_INVALID");
     } else if (correctsInput !== undefined) return INVALID_ISSUE("CORRECTION_TARGET_INVALID");
     const reference = freezeDeep({ kind: "SYNTHETIC_NON_AUTHORITATIVE_REVIEW_EVIDENCE" as const, evidence });
@@ -128,10 +132,12 @@ export function isAuthenticIssuedOfflineReviewMilestoneEvidence(value: unknown):
 }
 
 /** Test/reference-only append-only revocation simulation. It has no production registry semantics. */
-export function revokeOfflineReviewMilestoneEvidence(reference: unknown): Readonly<{ status: "REVOKED"; evidenceId: string }> | null {
-  if (!isAuthenticIssuedOfflineReviewMilestoneEvidence(reference)) return null;
-  REVOKED.add(reference);
-  return Object.freeze({ status: "REVOKED", evidenceId: reference.evidence.evidenceId });
+export function revokeOfflineReviewMilestoneEvidence(reference: unknown, revokedAt: string): Readonly<{ status: "REVOKED"; evidenceId: string; revokedAt: string }> | null {
+  if (!isAuthenticIssuedOfflineReviewMilestoneEvidence(reference) || !validUtc(revokedAt)) return null;
+  const prior = REVOKED_AT.get(reference);
+  if (prior !== undefined) return prior === revokedAt ? Object.freeze({ status: "REVOKED", evidenceId: reference.evidence.evidenceId, revokedAt: prior }) : null;
+  REVOKED_AT.set(reference, revokedAt);
+  return Object.freeze({ status: "REVOKED", evidenceId: reference.evidence.evidenceId, revokedAt });
 }
 
 export type OfflineReviewMilestoneExpectation = Readonly<{
@@ -165,7 +171,7 @@ export function validateOfflineReviewMilestoneEvidence(candidateInput: unknown, 
     if (records.some(record => !isAuthenticIssuedOfflineReviewMilestoneEvidence(record))) return INVALID_USE("EVIDENCE_UNAUTHENTIC");
     if (!records.length) return INVALID_USE("EVIDENCE_MISSING");
     const refs = records as IssuedOfflineReviewMilestoneEvidence[];
-    if (refs.some(ref => REVOKED.has(ref))) return INVALID_USE("EVIDENCE_REVOKED");
+    if (refs.some(ref => { const revokedAt = REVOKED_AT.get(ref); return revokedAt !== undefined && revokedAt <= (expected.evaluationCutoff as string); })) return INVALID_USE("EVIDENCE_REVOKED");
     const matching: IssuedOfflineReviewMilestoneEvidence[] = [];
     for (const ref of refs) {
       const binding = ISSUED_BINDING.get(ref);
@@ -191,7 +197,7 @@ export function validateOfflineReviewMilestoneEvidence(candidateInput: unknown, 
     const chosen = tips[0]!.evidence;
     if (chosen.correctsEvidenceId === null && matching.length !== 1) return HOLD_CONFLICT;
     const completed = chosen.outcome !== "EVIDENCE_INSUFFICIENT";
-    return Object.freeze({ status: "VALIDATED" as const, outcome: chosen.outcome, milestoneCompleted: completed, interpretation: chosen.outcome === "COMPLETED_PROCEED" ? "MILESTONE_PROCEEDED_LOCALLY" as const : chosen.outcome === "COMPLETED_STOP" ? "MILESTONE_STOPPED_LOCALLY" as const : "MILESTONE_HELD" as const, synthetic: true as const, authority: "NONE" as const });
+    return Object.freeze({ status: "VALIDATED" as const, outcome: chosen.outcome, milestoneCompleted: completed, interpretation: chosen.outcome === "COMPLETED_PROCEED" ? "MILESTONE_PROCEEDED_LOCALLY" as const : chosen.outcome === "COMPLETED_STOP" ? "MILESTONE_STOPPED_LOCALLY" as const : "MILESTONE_HELD" as const, inventoryScope: INVENTORY_SCOPE, synthetic: true as const, authority: "NONE" as const });
   } catch { return INVALID_USE("INPUT_INVALID"); }
 }
 
