@@ -45,7 +45,9 @@ describe("Next lint glob security remediation", () => {
         expect(found.map(path => relative(base, path).replaceAll("\\", "/")).sort(), test.pattern).toEqual(test.expected.map(path => path.replace(/^\.\//, "").replace(/\/$/, "")).sort());
       }
       const roots = getRootDirs({ cwd: base, settings: { next: { rootDir: [join(base, "apps/web"), join(base, "apps/admin")] } } });
-      expect(roots).toEqual([join(base, "apps/web"), join(base, "apps/admin")]);
+      // Next normalizes rootDir input to POSIX separators before fast-glob;
+      // fast-glob therefore returns slash-normalized absolute paths on Windows too.
+      expect(roots).toEqual([join(base, "apps/web"), join(base, "apps/admin")].map(path => path.replaceAll("\\", "/")));
       expect(getRootDirs({ cwd: base, settings: {} })).toEqual([base]);
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
