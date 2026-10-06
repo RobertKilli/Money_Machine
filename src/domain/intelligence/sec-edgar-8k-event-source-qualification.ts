@@ -111,6 +111,25 @@ export function createSecEdgar8kRequestPlan(q:unknown,input:SecEdgar8kRequestPla
      const url=`https://${profile.hostname}${path}`;const result=freeze({method:"GET" as const,url,profileId:input.profileId,responseKind:profile.responseKind,allowedContentTypes:profile.allowedContentTypes,cik:input.cik,accession:input.accession,form:input.form as "8-K"|"8-K/A",userAgentIdentityRef:input.userAgentIdentityRef,timeoutMs:input.timeoutMs,maxResponseBytes:input.maxResponseBytes,pageCount:input.pageCount,fileCount:input.fileCount,attempts:input.attempts,redirectHostPolicy:"SAME_ALLOWLISTED_HOST_ONLY" as const,rawBodyLogging:"FORBIDDEN" as const});planTrusted.add(result);planQualification.set(result,q);return result;
   }catch{return null;}
 }
+/** Derive a later stage only from the exact authentic first-stage plan; callers cannot supply its qualification. */
+export function deriveSecEdgar8kRequestPlanFromSubmissions(base: unknown, profileId: SecEdgar8kProfileId, documentFilename: string | null, now: string): SecEdgar8kRequestPlan | null {
+  try {
+    if (!isAuthenticSecEdgar8kRequestPlan(base) || (base as SecEdgar8kRequestPlan).profileId !== "COMPANY_SUBMISSIONS_JSON" || !iso(now)) return null;
+    const source = base as SecEdgar8kRequestPlan;
+    const qualification = planQualification.get(source);
+    if (!qualification || !isAuthenticSecEdgar8kQualification(qualification)) return null;
+    const endpoint = SEC_EDGAR_8K_ENDPOINT_PROFILES.find((entry) => entry.profileId === profileId);
+    if (!endpoint || !["FILING_INDEX", "SUBMISSIONS_HISTORY_JSON"].includes(profileId)) return null;
+    return createSecEdgar8kRequestPlan(qualification, {
+      profileId, form: source.form, cik: source.cik, accession: source.accession,
+      documentFilename, userAgentIdentityRef: source.userAgentIdentityRef, now,
+      timeoutMs: Math.min(source.timeoutMs, qualification.requestPolicy.timeoutMsMax),
+      maxResponseBytes: Math.min(source.maxResponseBytes, qualification.requestPolicy.responseBytesMax),
+      pageCount: 1, fileCount: 1, attempts: 1, redirectHost: endpoint.hostname,
+      approvals: qualification.approvals.map((entry) => entry.usage),
+    });
+  } catch { return null; }
+}
 const SEC_EDGAR_8K_PROFILES=new Set<SecEdgar8kProfileId>(["COMPANY_SUBMISSIONS_JSON","SUBMISSIONS_HISTORY_JSON","FILING_INDEX","PRIMARY_DOCUMENT","EXHIBIT_DOCUMENT"]);
 export const isAuthenticSecEdgar8kRequestPlan=(v:unknown):v is SecEdgar8kRequestPlan=>!!v&&typeof v==="object"&&planTrusted.has(v);
 /** Recheck source qualification freshness and the runtime-pinned fingerprint at the transport boundary. */

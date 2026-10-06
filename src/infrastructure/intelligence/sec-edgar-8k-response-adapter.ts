@@ -3,6 +3,7 @@ import "server-only";
 import { TextDecoder } from "node:util";
 import { SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE, type SecEdgar8kTransportExchange } from "@/infrastructure/intelligence/sec-edgar-8k-node-transport";
 import { consumeSecEdgar8kExchangeBodiesForAdapter } from "@/infrastructure/intelligence/sec-edgar-8k-node-transport";
+import type { SecEdgar8kRequestPlan } from "@/domain/intelligence/sec-edgar-8k-event-source-qualification";
 
 export type SecEdgar8kResponseAdapterCode =
   | "SEC_RESPONSE_EXCHANGE_UNAUTHENTIC"
@@ -180,6 +181,65 @@ function freezeDeep<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+export type SecEdgar8kManifestStageResult = Readonly<{ status: "READY_FOR_INDEX" } | { status: "HISTORY_REQUIRED"; filename: string } | { status: "BLOCKED"; code: SecEdgar8kResponseAdapterCode }>;
+const manifestBlocked = (code: SecEdgar8kResponseAdapterCode): SecEdgar8kManifestStageResult => Object.freeze({ status: "BLOCKED", code });
+function inspectSingleJsonExchange(exchange: SecEdgar8kTransportExchange, expectedProfile: "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON"):
+  | { status: "OK"; value: unknown; plan: SecEdgar8kRequestPlan }
+  | { status: "BLOCKED"; code: SecEdgar8kResponseAdapterCode } {
+  const responses = consumeSecEdgar8kExchangeBodiesForAdapter(exchange);
+  if (!responses || responses.length !== 1) return { status: "BLOCKED", code: "SEC_RESPONSE_EXCHANGE_UNAUTHENTIC" };
+  const response = responses[0]!;
+  const observation = exchange.observations[0];
+  if (response.plan.profileId !== expectedProfile || observation?.profileId !== expectedProfile || observation.url !== response.plan.url || observation.statusCode !== 200 || observation.contentType !== "application/json" || observation.byteLength !== response.bytes.length || response.bytes.length > SCOPE.maxResponseBytes || response.plan.cik !== SCOPE.cik || response.plan.accession !== SCOPE.accession) {
+    response.bytes.fill(0);
+    return { status: "BLOCKED", code: "SEC_RESPONSE_PLAN_INVALID" };
+  }
+  const value = parseJson(response.bytes);
+  response.bytes.fill(0);
+  if (value === null) return { status: "BLOCKED", code: "SEC_RESPONSE_BODY_INVALID" };
+  return { status: "OK", value, plan: response.plan };
+}
+
+/** Internal staged preflight. It exposes only the single safe manifest filename needed by the server transport. */
+export function inspectSecEdgar8kSubmissionsStage(exchange: SecEdgar8kTransportExchange): SecEdgar8kManifestStageResult {
+  const result = inspectSingleJsonExchange(exchange, "COMPANY_SUBMISSIONS_JSON");
+  if (result.status !== "OK") return manifestBlocked(result.code);
+  const current = result.value;
+  if (parallelArraysUnequal(current)) return manifestBlocked("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH");
+  const parsed = submissions(current);
+  if (!parsed) return manifestBlocked("SEC_SUBMISSIONS_SCHEMA_INVALID");
+  if (parsed.cik !== SCOPE.cik) return manifestBlocked("SEC_SUBMISSIONS_CIK_MISMATCH");
+  const selected = parsed.rows.filter((row) => row.accession === SCOPE.accession);
+  if (selected.length > 1) return manifestBlocked("SEC_FILING_IDENTITY_MISMATCH");
+  if (selected.length === 1) {
+    const row = selected[0]!;
+    if (row.form !== SCOPE.form || row.filingDate !== SCOPE.filingDate || row.primaryDocument !== SCOPE.primaryDocument) return manifestBlocked("SEC_FILING_IDENTITY_MISMATCH");
+    return Object.freeze({ status: "READY_FOR_INDEX" });
+  }
+  const candidates = parsed.files.filter((file) => file.filingFrom <= SCOPE.filingDate && file.filingTo >= SCOPE.filingDate);
+  if (candidates.length > 1) return manifestBlocked("SEC_HISTORY_FILE_AMBIGUOUS");
+  if (candidates.length === 0) return manifestBlocked("SEC_TARGET_ACCESSION_NOT_FOUND");
+  return Object.freeze({ status: "HISTORY_REQUIRED", filename: candidates[0]!.name });
+}
+
+/** Reject historical payloads before the filing index can be requested. */
+export function validateSecEdgar8kHistoryStage(exchange: SecEdgar8kTransportExchange, selectedFilename: string): SecEdgar8kManifestStageResult {
+  if (!/^CIK0000789019-submissions-[0-9]+\.json$/.test(selectedFilename)) return manifestBlocked("SEC_HISTORY_FILE_NOT_REFERENCED");
+  const result = inspectSingleJsonExchange(exchange, "SUBMISSIONS_HISTORY_JSON");
+  if (result.status !== "OK") return manifestBlocked(result.code);
+  const actualFilename = new URL(result.plan.url).pathname.split("/").at(-1);
+  if (actualFilename !== selectedFilename) return manifestBlocked("SEC_HISTORY_FILE_NOT_REFERENCED");
+  if (parallelArraysUnequal(result.value)) return manifestBlocked("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH");
+  const history = submissions(result.value, true);
+  if (!history) return manifestBlocked("SEC_SUBMISSIONS_SCHEMA_INVALID");
+  if (history.cik !== null && history.cik !== SCOPE.cik) return manifestBlocked("SEC_SUBMISSIONS_CIK_MISMATCH");
+  const selected = history.rows.filter((row) => row.accession === SCOPE.accession);
+  if (selected.length !== 1) return manifestBlocked("SEC_TARGET_ACCESSION_NOT_FOUND");
+  const row = selected[0]!;
+  if (row.form !== SCOPE.form || row.filingDate !== SCOPE.filingDate || row.primaryDocument !== SCOPE.primaryDocument) return manifestBlocked("SEC_FILING_IDENTITY_MISMATCH");
+  return Object.freeze({ status: "READY_FOR_INDEX" });
 }
 
 /** Parse only bodies held by an authentic server transport exchange; raw payload never leaves this server-only adapter. */

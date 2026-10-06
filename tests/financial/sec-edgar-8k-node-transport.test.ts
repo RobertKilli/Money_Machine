@@ -6,6 +6,7 @@ import type { IncomingMessage } from "node:http";
 const mocks = vi.hoisted(() => ({
   authenticPlan: vi.fn(() => true),
   currentlyQualified: vi.fn(() => true),
+  derivePlan: vi.fn((base: Record<string, unknown>, profileId: string, filename: string | null) => ({ ...base, profileId, responseKind: profileId === "FILING_INDEX" ? "HTML" : "JSON", allowedContentTypes: profileId === "FILING_INDEX" ? ["text/html"] : ["application/json"], url: profileId === "SUBMISSIONS_HISTORY_JSON" ? `https://data.sec.gov/submissions/${filename}` : "https://www.sec.gov/Archives/edgar/data/789019/000119312523255762/0001193125-23-255762-index.htm" })),
   request: vi.fn(),
   authorizations: [] as Record<string, unknown>[],
   requestTimes: [] as number[],
@@ -20,6 +21,7 @@ vi.mock("@/domain/intelligence/sec-edgar-8k-event-source-qualification", () => (
   ],
   isAuthenticSecEdgar8kRequestPlan: mocks.authenticPlan,
   isCurrentlyQualifiedSecEdgar8kRequestPlan: mocks.currentlyQualified,
+  deriveSecEdgar8kRequestPlanFromSubmissions: mocks.derivePlan,
 }));
 vi.mock("@/infrastructure/intelligence/sec-edgar-8k-local-smoke-authorization", () => ({ SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS: mocks.authorizations }));
 
@@ -93,6 +95,7 @@ function installResponse(options: Parameters<typeof fakeResponse>[0] = {}) {
 function installBodySequence(bodies: string[], contentTypes: string[] = []) {
   let index = 0;
   mocks.request.mockImplementation((requestOptions: RequestOptions, callback: (response: IncomingMessage) => void) => {
+    mocks.requestTimes.push(performance.now());
     const body = bodies[index] ?? "";
     const contentType = contentTypes[index] ?? (requestOptions.hostname === "www.sec.gov" ? "text/html; charset=utf-8" : "application/json; charset=utf-8");
     index++;
@@ -173,7 +176,7 @@ describe("SEC EDGAR bounded local smoke transport", () => {
 
   it("orchestrates request-plan to metadata evidence but cannot cross the empty operational authorization gate", async () => {
     mocks.authorizations.splice(0);
-    expect(await runSecEdgar8kLocalSmoke({ plans, operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_AUTHORIZATION_REQUIRED" });
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_AUTHORIZATION_REQUIRED" });
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
@@ -268,6 +271,123 @@ describe("SEC EDGAR bounded local smoke transport", () => {
     expect(await acquireSecEdgar8kLocalSmokeExchange({ plans: [plans[0], historyPlan, plans[1]], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_HISTORY_PREFLIGHT_REQUIRED" });
     expect(mocks.request).not.toHaveBeenCalled();
   });
+
+  it("runs the recent-manifest branch in order under a single authorization", async () => {
+    installBodySequence([JSON.stringify(recentSubmission()), filingIndex()]);
+    const result = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(result.status).toBe("VERIFIED");
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+    expect(mocks.request.mock.calls.map((call) => (call[0] as RequestOptions).path)).toEqual([
+      "/submissions/CIK0000789019.json",
+      "/Archives/edgar/data/789019/000119312523255762/0001193125-23-255762-index.htm",
+    ]);
+  }, 15000);
+
+  it("selects and validates one manifest history file before requesting the filing index", async () => {
+    const current = recentSubmission();
+    const recent = (current.filings as Record<string, unknown>).recent as Record<string, string[]>;
+    for (const values of Object.values(recent)) values.splice(0, values.length);
+    const history = { cik: "789019", accessionNumber: ["0001193125-23-255762"], form: ["8-K"], filingDate: ["2023-10-13"], acceptanceDateTime: [accepted], primaryDocument: ["d537928d8k.htm"] };
+    installBodySequence([JSON.stringify(current), JSON.stringify(history), filingIndex()]);
+    const result = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(result.status).toBe("VERIFIED");
+    expect(mocks.request).toHaveBeenCalledTimes(3);
+    expect(mocks.request.mock.calls.map((call) => (call[0] as RequestOptions).path)).toEqual([
+      "/submissions/CIK0000789019.json", "/submissions/CIK0000789019-submissions-001.json",
+      "/Archives/edgar/data/789019/000119312523255762/0001193125-23-255762-index.htm",
+    ]);
+  }, 20000);
+
+  it("stops before index on ambiguous/missing history and invalid history identity", async () => {
+    const current = recentSubmission();
+    const filings = current.filings as Record<string, unknown>;
+    const recent = filings.recent as Record<string, string[]>;
+    for (const values of Object.values(recent)) values.splice(0, values.length);
+    (filings.files as Record<string, unknown>[]).push({ name: "CIK0000789019-submissions-002.json", filingCount: 2, filingFrom: "2023-10-12", filingTo: "2023-10-14" });
+    installBodySequence([JSON.stringify(current)]);
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_HISTORY_FILE_AMBIGUOUS" });
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+
+    mocks.request.mockReset();
+    freshPermit();
+    const noAccession = { cik: "789019", accessionNumber: ["0001193125-23-255761"], form: ["8-K"], filingDate: ["2023-10-13"], acceptanceDateTime: [accepted], primaryDocument: ["d537928d8k.htm"] };
+    installBodySequence([JSON.stringify(recentSubmission().filings ? (() => { const c = recentSubmission(); for (const a of Object.values((c.filings as Record<string, unknown>).recent as Record<string,string[]>)) a.splice(0,a.length); return c; })() : {}), JSON.stringify(noAccession)]);
+    const missing = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(missing).toEqual({ status: "BLOCKED", code: "SEC_TARGET_ACCESSION_NOT_FOUND" });
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+  }, 20000);
+
+  it("revalidates authorization between stages and leaves concurrent runs isolated", async () => {
+    const current = recentSubmission();
+    for (const values of Object.values((current.filings as Record<string, unknown>).recent as Record<string, string[]>)) values.splice(0, values.length);
+    const history = { cik: "789019", accessionNumber: ["0001193125-23-255762"], form: ["8-K"], filingDate: ["2023-10-13"], acceptanceDateTime: [accepted], primaryDocument: ["d537928d8k.htm"] };
+    installBodySequence([JSON.stringify(current), JSON.stringify(history), filingIndex()]);
+    const permit = mocks.authorizations[0]!;
+    const originalEnd = mocks.request.getMockImplementation()!;
+    mocks.request.mockImplementation((options: RequestOptions, callback: (response: IncomingMessage) => void) => {
+      const request = originalEnd(options, callback);
+      if (mocks.request.mock.calls.length === 1) (permit as Record<string, unknown>).expiresAt = "2020-01-01T00:00:00.000Z";
+      return request;
+    });
+    const expired = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(expired).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_AUTHORIZATION_REQUIRED" });
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+  }, 15000);
+
+  it("rejects invalid manifest paths and conflicting history identity before filing-index retrieval", async () => {
+    const current = recentSubmission();
+    for (const values of Object.values((current.filings as Record<string, unknown>).recent as Record<string, string[]>)) values.splice(0, values.length);
+    (current.filings as Record<string, unknown>).files = [{ name: "CIK0000789019-submissions-../1.json", filingCount: 1, filingFrom: "2023-10-13", filingTo: "2023-10-13" }];
+    installBodySequence([JSON.stringify(current)]);
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_SCHEMA_INVALID" });
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+
+    mocks.request.mockReset();
+    freshPermit();
+    const validCurrent = recentSubmission();
+    for (const values of Object.values((validCurrent.filings as Record<string, unknown>).recent as Record<string, string[]>)) values.splice(0, values.length);
+    const conflict = { cik: "789019", accessionNumber: ["0001193125-23-255762"], form: ["8-K"], filingDate: ["2023-10-14"], acceptanceDateTime: [accepted], primaryDocument: ["d537928d8k.htm"] };
+    installBodySequence([JSON.stringify(validCurrent), JSON.stringify(conflict)]);
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_FILING_IDENTITY_MISMATCH" });
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+  }, 20000);
+
+  it("aborts between manifest and history stages and keeps separate concurrent permits isolated", async () => {
+    const controller = new AbortController();
+    const current = recentSubmission();
+    for (const values of Object.values((current.filings as Record<string, unknown>).recent as Record<string, string[]>)) values.splice(0, values.length);
+    const history = { cik: "789019", accessionNumber: ["0001193125-23-255762"], form: ["8-K"], filingDate: ["2023-10-13"], acceptanceDateTime: [accepted], primaryDocument: ["d537928d8k.htm"] };
+    let sequence = 0;
+    mocks.request.mockImplementation((_options: RequestOptions, callback: (response: IncomingMessage) => void) => {
+      const body = sequence++ === 0 ? JSON.stringify(current) : JSON.stringify(history);
+      const request = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
+      request.destroy = vi.fn();
+      request.end = () => {
+        const { response } = fakeResponse({ body });
+        callback(response);
+        queueMicrotask(() => { response.emit("data", Buffer.from(body)); response.emit("end"); if (sequence === 1) controller.abort(); });
+      };
+      return request;
+    });
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact, signal: controller.signal })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_ABORTED" });
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+
+    mocks.request.mockReset();
+    freshPermit();
+    mocks.authorizations.push({ ...scope });
+    const currentA = recentSubmission();
+    const currentB = recentSubmission({ cik: "789019", name: "SECOND SYNTHETIC RUN" });
+    const bodyQueue = [JSON.stringify(currentA), JSON.stringify(currentB), filingIndex(), filingIndex()];
+    installBodySequence(bodyQueue);
+    const [a, b] = await Promise.all([
+      runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact }),
+      runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact }),
+    ]);
+    expect(a.status).toBe("VERIFIED");
+    expect(b.status).toBe("VERIFIED");
+    expect(mocks.request).toHaveBeenCalledTimes(4);
+    expect(mocks.requestTimes.every((time, index, all) => index === 0 || time - all[index - 1]! >= 1000)).toBe(true);
+  }, 25000);
 
   it("rejects unequal parallel arrays, conflicting source identity, unsafe document paths and copied exchanges", async () => {
     const unequal = recentSubmission();

@@ -4,7 +4,7 @@ import type { IncomingMessage } from "node:http";
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { types as utilTypes } from "node:util";
-import { SEC_EDGAR_8K_ENDPOINT_PROFILES, isAuthenticSecEdgar8kRequestPlan, isCurrentlyQualifiedSecEdgar8kRequestPlan, type SecEdgar8kRequestPlan } from "@/domain/intelligence/sec-edgar-8k-event-source-qualification";
+import { SEC_EDGAR_8K_ENDPOINT_PROFILES, deriveSecEdgar8kRequestPlanFromSubmissions, isAuthenticSecEdgar8kRequestPlan, isCurrentlyQualifiedSecEdgar8kRequestPlan, type SecEdgar8kRequestPlan } from "@/domain/intelligence/sec-edgar-8k-event-source-qualification";
 import { SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS } from "./sec-edgar-8k-local-smoke-authorization";
 
 export type SecEdgar8kTransportFailureCode = "SEC_SMOKE_AUTHORIZATION_REQUIRED" | "SEC_SMOKE_AUTHORIZATION_ALREADY_USED" | "SEC_SMOKE_OPERATOR_CONTACT_REQUIRED" | "SEC_SMOKE_REQUEST_PLAN_INVALID" | "SEC_SMOKE_SOURCE_NOT_CURRENTLY_QUALIFIED" | "SEC_SMOKE_HISTORY_PREFLIGHT_REQUIRED" | "SEC_SMOKE_RUN_LIMIT_EXCEEDED" | "SEC_SMOKE_REDIRECT_REJECTED" | "SEC_SMOKE_HTTP_STATUS_REJECTED" | "SEC_SMOKE_CONTENT_TYPE_REJECTED" | "SEC_SMOKE_RESPONSE_TOO_LARGE" | "SEC_SMOKE_TIMEOUT" | "SEC_SMOKE_ABORTED" | "SEC_SMOKE_NETWORK_ERROR";
@@ -13,6 +13,8 @@ export type SecEdgar8kTransportExchange = Readonly<{ status: "COMPLETED"; observ
 export type SecEdgar8kTransportResult =
   | Readonly<{ status: "BLOCKED"; code: SecEdgar8kTransportFailureCode }>
   | SecEdgar8kTransportExchange;
+type StagedAdapterCode = import("./sec-edgar-8k-response-adapter").SecEdgar8kResponseAdapterCode;
+export type SecEdgar8kStagedResult = SecEdgar8kTransportResult | Readonly<{ status: "BLOCKED"; code: StagedAdapterCode }>;
 
 export const SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE = Object.freeze({
   company: "Microsoft Corporation",
@@ -104,6 +106,21 @@ const privateExchangeBodies = new WeakMap<object, readonly Readonly<{ plan: SecE
 const privateExchangeExpiryTimers = new WeakMap<object, NodeJS.Timeout>();
 const PRIVATE_BODY_TTL_MS = 60_000;
 
+function retainExchange(responses: readonly Readonly<{ plan: SecEdgar8kRequestPlan; response: ResponseValue }>[]): SecEdgar8kTransportExchange {
+  const exchange = Object.freeze({ status: "COMPLETED" as const, observations: Object.freeze(responses.map(({ plan, response }) => Object.freeze({ profileId: plan.profileId, url: plan.url, statusCode: response.statusCode, contentType: response.contentType, byteLength: response.byteLength, sha256: response.sha256, redirects: response.redirects }))) });
+  const bodies = Object.freeze(responses.map(({ plan, response }) => Object.freeze({ plan, bytes: response.bytes })));
+  privateExchangeBodies.set(exchange, bodies);
+  const expiry = setTimeout(() => {
+    const retained = privateExchangeBodies.get(exchange);
+    if (retained) for (const response of retained) response.bytes.fill(0);
+    privateExchangeBodies.delete(exchange);
+    privateExchangeExpiryTimers.delete(exchange);
+  }, PRIVATE_BODY_TTL_MS);
+  expiry.unref();
+  privateExchangeExpiryTimers.set(exchange, expiry);
+  return exchange;
+}
+
 function nativeAbortSignal(value: unknown): value is AbortSignal {
   try { return typeof AbortSignal !== "undefined" && value instanceof AbortSignal && !utilTypes.isProxy(value) && Object.getPrototypeOf(value) === AbortSignal.prototype; } catch { return false; }
 }
@@ -181,6 +198,83 @@ function requestOnce(plan: SecEdgar8kRequestPlan, userAgent: string, requestPort
     if (signal?.aborted) return onAbort();
     request.end();
   }), minimumIntervalMs, stillAuthorized, signal);
+}
+
+/** Manifest-first staged run. The caller supplies only the authentic submissions plan; later plans are derived privately. */
+export async function acquireSecEdgar8kManifestFirstExchange(input: Readonly<{ initialPlan: unknown; operatorContact: unknown; signal?: AbortSignal }>): Promise<SecEdgar8kStagedResult> {
+  if (!input || typeof input !== "object" || utilTypes.isProxy(input)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+  let signal: unknown;
+  try {
+    const keys = Reflect.ownKeys(input);
+    if (Object.getPrototypeOf(input) !== Object.prototype || keys.some((key) => typeof key !== "string" || !["initialPlan", "operatorContact", "signal"].includes(key))) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+    for (const key of keys) { const descriptor = Object.getOwnPropertyDescriptor(input, key); if (!descriptor || !("value" in descriptor) || descriptor.get || descriptor.set) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID"); }
+    if (!("initialPlan" in input) || !("operatorContact" in input)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+    signal = Object.getOwnPropertyDescriptor(input, "signal")?.value;
+  } catch { return failure("SEC_SMOKE_REQUEST_PLAN_INVALID"); }
+  if (signal !== undefined && !nativeAbortSignal(signal)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+  if (signal?.aborted) return failure("SEC_SMOKE_ABORTED");
+  const initialPlan = input.initialPlan;
+  if (!validPlan(initialPlan) || initialPlan.profileId !== "COMPANY_SUBMISSIONS_JSON") return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+  if (!isCurrentlyQualifiedSecEdgar8kRequestPlan(initialPlan, new Date().toISOString())) return failure("SEC_SMOKE_SOURCE_NOT_CURRENTLY_QUALIFIED");
+  if (typeof input.operatorContact !== "string" || !CONTACT.test(input.operatorContact)) return failure("SEC_SMOKE_OPERATOR_CONTACT_REQUIRED");
+  const authorizationCandidates = SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.filter((candidate) =>
+    candidate.cik === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik && candidate.accession === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession && candidate.form === "8-K" &&
+    candidate.operatorContact === input.operatorContact && candidate.maxRequests === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests &&
+    candidate.minimumIntervalMs >= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs && Date.now() < Date.parse(candidate.expiresAt) &&
+    candidate.userAgentIdentityRef === initialPlan.userAgentIdentityRef && ["COMPANY_SUBMISSIONS_JSON", "SUBMISSIONS_HISTORY_JSON", "FILING_INDEX"].every((profile) => candidate.profileIds.includes(profile as "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON" | "FILING_INDEX"))
+  );
+  if (authorizationCandidates.length === 0) return failure("SEC_SMOKE_AUTHORIZATION_REQUIRED");
+  const authorization = authorizationCandidates.find((candidate) => !usedAuthorizations.has(candidate));
+  if (!authorization) return failure("SEC_SMOKE_AUTHORIZATION_ALREADY_USED");
+  usedAuthorizations.add(authorization); // one consumption for the whole run, never one per stage
+
+  const userAgent = `MoneyMachine/1.0 (${authorization.operatorContact})`;
+  const observations: { plan: SecEdgar8kRequestPlan; response: ResponseValue }[] = [];
+  let transferred = false;
+  let requestCount = 0;
+  const authorizedNow = (plan: SecEdgar8kRequestPlan) => Date.now() < Date.parse(authorization.expiresAt) &&
+    SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.includes(authorization) && authorization.profileIds.includes(plan.profileId as "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON" | "FILING_INDEX") &&
+    plan.userAgentIdentityRef === authorization.userAgentIdentityRef && isCurrentlyQualifiedSecEdgar8kRequestPlan(plan, new Date().toISOString());
+  const requestStage = async (plan: SecEdgar8kRequestPlan): Promise<SecEdgar8kTransportFailureCode | null> => {
+    if (requestCount >= authorization.maxRequests || requestCount >= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests) return "SEC_SMOKE_RUN_LIMIT_EXCEEDED";
+    if (!validPlan(plan)) return "SEC_SMOKE_REQUEST_PLAN_INVALID";
+    if (!authorizedNow(plan)) return "SEC_SMOKE_AUTHORIZATION_REQUIRED";
+    requestCount++;
+    try {
+      const response = await requestOnce(plan, userAgent, httpsRequest, requestCount, authorization.minimumIntervalMs, () => authorizedNow(plan), signal as AbortSignal | undefined);
+      observations.push({ plan, response });
+      return null;
+    } catch (error) {
+      return error && typeof error === "object" && "code" in error && typeof (error as { code?: unknown }).code === "string" ? (error as { code: SecEdgar8kTransportFailureCode }).code : "SEC_SMOKE_NETWORK_ERROR";
+    }
+  };
+  const probe = (entry: { plan: SecEdgar8kRequestPlan; response: ResponseValue }) => retainExchange([{ plan: entry.plan, response: Object.freeze({ ...entry.response, bytes: Buffer.from(entry.response.bytes) }) }]);
+  try {
+    const firstError = await requestStage(initialPlan);
+    if (firstError) return failure(firstError);
+    const { inspectSecEdgar8kSubmissionsStage, validateSecEdgar8kHistoryStage } = await import("./sec-edgar-8k-response-adapter");
+    const manifest = inspectSecEdgar8kSubmissionsStage(probe(observations[0]!));
+    if (manifest.status === "BLOCKED") return Object.freeze({ status: "BLOCKED", code: manifest.code });
+    let historyFilename: string | null = null;
+    if (manifest.status === "HISTORY_REQUIRED") {
+      historyFilename = manifest.filename;
+      const historyPlan = deriveSecEdgar8kRequestPlanFromSubmissions(initialPlan, "SUBMISSIONS_HISTORY_JSON", historyFilename, new Date().toISOString());
+      if (!historyPlan || !validPlan(historyPlan)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+      const historyError = await requestStage(historyPlan);
+      if (historyError) return failure(historyError);
+      const history = validateSecEdgar8kHistoryStage(probe(observations.at(-1)!), historyFilename);
+      if (history.status !== "READY_FOR_INDEX") return Object.freeze({ status: "BLOCKED", code: history.status === "BLOCKED" ? history.code : "SEC_HISTORY_FILE_NOT_REFERENCED" });
+    }
+    const indexPlan = deriveSecEdgar8kRequestPlanFromSubmissions(initialPlan, "FILING_INDEX", null, new Date().toISOString());
+    if (!indexPlan || !validPlan(indexPlan)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+    const indexError = await requestStage(indexPlan);
+    if (indexError) return failure(indexError);
+    const exchange = retainExchange(observations);
+    transferred = true;
+    return exchange;
+  } finally {
+    if (!transferred) for (const entry of observations) entry.response.bytes.fill(0);
+  }
 }
 
 /** No retries, no raw-body return/logging, and no request until a pinned permit exists. */
@@ -271,7 +365,7 @@ export const SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN = Object.freeze({
     Object.freeze({ profileId: "COMPANY_SUBMISSIONS_JSON", url: "https://data.sec.gov/submissions/CIK0000789019.json", purpose: "Current filing metadata; reconcile the selected accession and form." }),
     Object.freeze({ profileId: "FILING_INDEX", url: "https://www.sec.gov/Archives/edgar/data/789019/000119312523255762/0001193125-23-255762-index.htm", purpose: "One selected filing index, not a crawl." }),
   ]),
-  conditionalHistoryRequest: Object.freeze({ profileId: "SUBMISSIONS_HISTORY_JSON", rule: "Only if the selected accession is absent from recent: first inspect the current submissions manifest and identify exactly one CIK-owned history filename whose inclusive filingFrom/filingTo range covers 2023-10-13. Never guess or enumerate. Current batch transport blocks a three-request history plan until staged manifest-first orchestration exists." }),
-  missing: Object.freeze(["SEC_EDGAR_8K_QUALIFICATION_NOT_PINNED", "LOCAL_SMOKE_AUTHORIZATION_REGISTRY_EMPTY", "REAL_OPERATOR_CONTACT_NOT_SUPPLIED", "NO_LIVE_SEC_RESPONSE_HAS_BEEN_RECONCILED", "HISTORY_BRANCH_REQUIRES_MANIFEST_FIRST_STAGED_TRANSPORT"]),
+  conditionalHistoryRequest: Object.freeze({ profileId: "SUBMISSIONS_HISTORY_JSON", rule: "Only after the current submissions manifest is validated and the selected accession is absent from recent, the server selects exactly one CIK-owned history filename whose inclusive filingFrom/filingTo range covers 2023-10-13. That response must validate and contain the exact filing before the filing index is requested. No filename guessing, fan-out, caller-supplied history path, retries, or budget reset." }),
+  missing: Object.freeze(["SEC_EDGAR_8K_QUALIFICATION_NOT_PINNED", "LOCAL_SMOKE_AUTHORIZATION_REGISTRY_EMPTY", "REAL_OPERATOR_CONTACT_NOT_SUPPLIED", "NO_LIVE_SEC_RESPONSE_HAS_BEEN_RECONCILED"]),
   networkRequests: 0,
 });
