@@ -212,3 +212,26 @@ supersede the previous local audit blocker, not the historical Oct 3 evidence.
 No commit, push, merge or live provider request has occurred. The local adapter
 approach must be reviewed explicitly as a maintenance tradeoff. The larger
 source-to-persistence-to-UI milestone remains unfinished.
+
+## Current Coinbase use-terms recheck — 2026-10-06 11:22 UTC
+
+**Execution remains BLOCKED by use terms.** The official [Coinbase Market Data
+Terms of Use](https://www.coinbase.com/legal/market_data), last updated
+2026-08-07, define Market Data broadly to include data Coinbase makes available,
+including exchange order and transaction information. Their general license is
+for personal or research purposes for the user/entity's officers and employees,
+and does not permit building an application for other end users. Without prior
+express written Coinbase consent, the terms also prohibit using Market Data or
+Derived Works to develop, validate, benchmark or improve an algorithm or other
+automated system. Money Machine's proposed automated market-data processing is
+within that stated restriction. This finding concerns the fixed public
+ETH-USD product/candles/stats smoke profiles documented above; it does not
+assume that public unauthenticated endpoints create a separate usage right.
+
+This is a documentation-only status update: no Coinbase endpoint was queried,
+no terms were accepted, no authorization was issued, and the `LOCAL_SMOKE` and
+`PRODUCTION` authorization registries remain empty. The implemented transport
+and request profiles are retained unchanged. A future Coinbase use requires a
+separate written permission that expressly covers Money Machine's automated
+algorithm/system use and intended audience; this review does not grant that
+permission.
