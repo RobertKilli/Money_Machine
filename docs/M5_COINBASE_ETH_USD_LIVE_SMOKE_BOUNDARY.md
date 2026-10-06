@@ -1,8 +1,6 @@
 # Coinbase Exchange ETH-USD live smoke boundary
 
-Boundary review completed; subsequent [Node transport work](M5_COINBASE_NODE_SMOKE_TRANSPORT.md)
-is implemented locally, with commit blocked by the current npm audit gate.
-Execution remains **BLOCKED_BACKEND_UNAPPROVED**.
+Status: **READY FOR TECHNICAL REVIEW**, execution **BLOCKED_BACKEND_UNAPPROVED**.
 Authority status: `NON_AUTHORITATIVE_MARKET_SMOKE`. This slice made **zero Coinbase
 market-data requests**, read **zero credentials**, and performed **zero persistence
 operations**. All response observations in tests are synthetic.
@@ -29,9 +27,8 @@ This adds no approval-registry or production-readiness change. CoinGecko Demo
 smoke retains its separate credential requirements. Coinbase contracts contain
 zero credential references and expose no environment or credential resolver.
 Caller headers, credential options and unknown config fields are rejected before
-rate lease, DNS or HTTP. The native adapter sends only internally fixed Host,
-Accept, Accept-Encoding and a nonsensitive versioned User-Agent; callers cannot
-supply headers.
+rate lease, DNS or HTTP. Only fixed `accept: application/json` and
+`accept-encoding: identity` transport headers are permitted.
 
 ## Request profiles and limits
 
@@ -49,12 +46,10 @@ Coinbase's bucket-origin semantics. Unknown query fields and paths are rejected.
 Local budget: at most 3 requests, 1 per endpoint profile, 1 page each, 512 KiB per
 response (524,288 bytes), 1,536 KiB maximum planned total, 5,000 ms per request,
 zero retries and no Retry-After waiting. The current executable count is zero.
-The original port-level HTTP boundary and batch runner remain fake-port-tested
-plumbing. The separate native Node composition now implements operational wiring
-behind the empty authority registry. It enforces a stricter **single 5,000 ms
-total execution deadline**, covering all three sequential profiles, including
-lease, DNS, connection, TLS, headers, body and parsing. The contract's per-request
-ceiling remains unchanged. No live DNS or HTTP verification has occurred.
+The port-level HTTP boundary handles one response per invocation; its separate
+infrastructure batch runner accepts only authentic immutable plans and enforces
+aggregate count/byte caps sequentially, once per profile. It is tested only with
+fake ports and is not wired to CLI/execute. Real DNS/HTTP wiring is not installed.
 The local lease is required even for public profiles and does not represent
 Coinbase's shared IP-wide token bucket. Its reservation handle is released once
 on success, error, deadline or caller cancellation, including late completion.
@@ -80,12 +75,8 @@ parsed. Opaque transport errors are never inspected for message/code getters;
 only internally branded safe error codes are preserved. Ports are snapshotted
 before awaiting and are trusted infrastructure interfaces. Actual socket lookup,
 TLS SNI, Host, proxy exclusion and redirect behavior remain obligations of the
-original port interface: fake-port assertions prove that interface contract.
-The new [Node adapter](M5_COINBASE_NODE_SMOKE_TRANSPORT.md) implements pinned
-IPv4/IPv6 lookup, bundled trust roots and an internal proxy-free agent; tests
-inspect its actual native request options and model events without sockets.
-Neither test path proves live DNS/TLS/provider behavior. No raw
-response/header/cookie/error is returned.
+future adapter: fake-port assertions prove the interface contract, not real Node
+transport behavior. No raw response/header/cookie/error is returned.
 
 Strict UTF-8 decoding and a bounded lossless JSON parser reject duplicate keys,
 bad syntax, BOM, unpaired surrogate escapes, excessive nesting/node count and
@@ -145,9 +136,8 @@ network work. No runnable production authorization is created.
 
 Next operative step after review is **one separately authorized live smoke** to
 observe the current ETH-USD product and a tiny candle/stats sample. That step must
-approve applicable terms/use, introduce a short-lived registry-pinned authorization,
-complete CLI reference resolution and explicitly authorize one live execution of
-the implemented Node adapter behind the authority guard. It must not
+approve applicable terms/use, pin a reviewed authorization and separately install
+and verify real pinned DNS/HTTP wiring behind the operational authority guard. It must not
 qualify or persist the source. This implementation is not permission for that step.
 
 ## Official source review

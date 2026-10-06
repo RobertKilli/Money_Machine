@@ -1,0 +1,31 @@
+{
+  "contractVersion": "event-intelligence-news-discovery-production/v1",
+  "status": "BLOCKED_BACKEND_UNAPPROVED",
+  "selectedProviders": [],
+  "selectedSources": [],
+  "operations": {
+    "acquisition": "BLOCKED",
+    "normalizedDiscoveryPersistence": "BLOCKED",
+    "rawContentStorage": "BLOCKED",
+    "persistence": "BLOCKED",
+    "issuerAssetMapping": "BLOCKED",
+    "corroboration": "BLOCKED",
+    "eventAuthority": "BLOCKED",
+    "scheduler": "BLOCKED",
+    "signalGeneration": "BLOCKED",
+    "trading": "BLOCKED"
+  },
+  "usageApprovals": [
+    { "usage": "RAW_ACQUISITION", "approval": "NOT_APPROVED" },
+    { "usage": "RAW_ARTIFACT_STORAGE", "approval": "NOT_APPROVED" },
+    { "usage": "NORMALIZED_CLAIM_STORAGE", "approval": "NOT_APPROVED" },
+    { "usage": "AUTHORITY_ISSUANCE", "approval": "NOT_APPROVED" },
+    { "usage": "REDISTRIBUTION", "approval": "NOT_APPROVED" },
+    { "usage": "COMMERCIAL_USE", "approval": "NOT_APPROVED" },
+    { "usage": "SIGNAL_RESEARCH", "approval": "NOT_APPROVED" }
+  ],
+  "storageApproval": "NOT_APPROVED",
+  "retentionApproval": "NOT_APPROVED",
+  "redistributionApproval": "NOT_APPROVED",
+  "commercialApproval": "NOT_APPROVED"
+}

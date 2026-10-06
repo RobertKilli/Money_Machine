@@ -1,9 +1,11 @@
 # Coinbase Node smoke transport
 
-Checkpoint status: **BLOCKED_UPSTREAM / CHECKPOINT_ONLY**, **not READY_FOR_REVIEW**.
-The explicitly authorized checkpoint preserves implementation work. It must not
-be merged until an official compatible dependency chain makes
-`npm audit --audit-level=high` exit 0 and the remaining final verification passes.
+Current local status: **AUDIT_REMEDIATION_VERIFIED / APPROACH_REVIEW_REQUIRED**.
+This uncommitted preparation has a clean full audit through the narrow local
+Next root-glob adapter described in `NEXT_LINT_GLOB_REMEDIATION.md`. This is a
+proposed alternative to the original upstream-only remediation, requiring review;
+it is not an upstream patch, merge permission or live-data authorization.
+The original checkpoint history and prior blocker evidence are retained below.
 
 Execution: **BLOCKED_BACKEND_UNAPPROVED**. Both Coinbase authorization registries
 remain empty. The native adapter is implemented and tested with fake primitives;
@@ -186,3 +188,27 @@ CA replaces default CA selection, and `rootCertificates` exposes the bundled
 roots. IANA registry exclusions inform a conservative local allow policy.
 Existing reviewed Coinbase endpoint/rate/terms references remain in the
 [smoke-boundary document](M5_COINBASE_ETH_USD_LIVE_SMOKE_BOUNDARY.md).
+
+## Current-main preparation — 2026-10-06
+
+The existing transport/composition/CLI implementation from `723d77c5cfc1409dc3451cb7adb52f67c4dcfe82` was applied as an uncommitted patch to main `1c555ff87d8213fe4ccbc686fba6be3c0981dbb1` in an isolated worktree. The original branch remains unchanged. This is preparation for technical review, not a completed live-data/UI milestone or merge authorization. No authorization registry was changed. No provider request, credential access or persistence occurred.
+
+The baseline `npm audit` still reports five high package findings through `eslint-config-next → @next/eslint-plugin-next → fast-glob → micromatch → braces`. These are one transitive advisory, not five independent product defects. Current registry metadata for eslint-config-next/plugin 16.3.8 still includes fast-glob 3.3.1; braces latest is 3.0.3. GitHub advisory GHSA-vfj7-8cjw-p6xm lists no patched version. A compatible official dependency update has therefore not been identified. No downgrade, package override, audit exclusion or security waiver is applied.
+
+The next bounded live-data candidate is this public Coinbase Exchange ETH-USD smoke (three fixed GET profiles, at most two daily buckets, one run, no retries, in-memory observations only). Operational authority remains absent, and this checkpoint creates neither persistence nor UI integration. Event-source acquisition is a separate next path: SEC filing evidence first, broad GDELT discovery later; NewsAPI and issuer/exchange feeds remain deferred.
+
+## Latest local remediation — 2026-10-06
+
+Full audit now exits zero with zero findings. The vulnerable glob dependency
+chain is removed through a Next-scoped local adapter; upstream rule code and
+all 113 effective lint rules/options remain unchanged. Fresh npm ci, dependency
+graph validation, compatibility regressions, typecheck and lint pass. Full unit
+suite: 1,624 passed / 35 skipped. Local uncommitted Next production build passes;
+18 client JS bundles contain no private transport-test or lint-adapter markers.
+CLI dry-run works, and execute without a pinned authority still blocks with zero
+provider requests. Both approval registries remain empty. These observations
+supersede the previous local audit blocker, not the historical Oct 3 evidence.
+
+No commit, push, merge or live provider request has occurred. The local adapter
+approach must be reviewed explicitly as a maintenance tradeoff. The larger
+source-to-persistence-to-UI milestone remains unfinished.

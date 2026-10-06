@@ -157,3 +157,27 @@ Cryptoasset mapping remains exclusively on the existing
 scope. That lineage cannot stand in for SEC event-source provenance. See
 [`SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md`](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_DECISION.md).
 The SEC decision keeps its filing/document/package/receipt/lineage scope separate from this asset-mapping authority. It does not select a byte-storage backend, and artifact persistence/readback remains blocked.
+
+## News discovery mentions
+
+[News discovery](EVENT_INTELLIGENCE_NEWS_DISCOVERY_CONTRACT.md) creates only
+synthetic mentioned-entity/asset candidates. Attributed issuers, parent or
+subsidiary names and tickers cannot mint these mapping authorities. ETH/WETH
+and native/wrapped/bridged mentions are separate candidates, without canonical
+IDs. Existing mapping constructors reject discovery results through their
+private SEC source/claim and mapping trust gates. A future discovery workflow
+must retrieve legitimate source evidence and use these existing mappings;
+there is no discovery-specific issuer merge or asset registry.
+# Portfolio routing boundary
+
+Source routing treats missing issuer and asset mapping as explicit queue blockers. Tickers, listing labels, parent/subsidiary names, and ETH/WETH mentions do not create or bypass the runtime-authentic mapping authorities described here. No mapping is selected or persisted by the routing decision.
+
+Missing issuer and asset mappings may become distinct evidence-review blockers. Queue projection does not create or satisfy mapping authority.
+
+The downstream queue view model preserves these as separate safe labels and does not serialize candidate mapping IDs or mint mapping trust.
+# Composition integration note
+
+The synthetic evidence-review composition consumes only the routing contract's simulated mapping flags and never creates an issuer or asset mapping authority. A composed or non-authoritative-review-complete item remains unusable as mapping input. Production mapping approval and registry state are unchanged.
+# Queue snapshot reference boundary
+
+Applied M5 asset-mapping revision identity may be referenced only by its exact eight-column family-specific key and only within M5 mapping scope. It does not establish event asset mapping authority or queue snapshot storage approval. See [scope/provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md).

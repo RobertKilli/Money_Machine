@@ -1,0 +1,12 @@
+{
+  "name": "@money-machine/next-root-glob",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Narrow directory glob compatibility adapter for the Next ESLint plugin",
+  "main": "index.cjs",
+  "license": "MIT",
+  "dependencies": {
+    "tinyglobby": "0.2.17",
+    "picomatch": "4.0.4"
+  }
+}

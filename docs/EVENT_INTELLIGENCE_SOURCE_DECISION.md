@@ -123,3 +123,24 @@ externally verified event fact. Discovery copies and syndicated issuer
 releases do not add independent authority. Eligibility remains a candidate
 only; the result cannot be persisted or treated as an authoritative event.
 See [EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY](EVENT_INTELLIGENCE_CORROBORATION_AUTHORITY_POLICY.md).
+
+## Fixture news discovery boundary
+
+The separate [news discovery contract](EVENT_INTELLIGENCE_NEWS_DISCOVERY_CONTRACT.md)
+reuses these source IDs without enabling a selected stack. NewsAPI and GDELT
+remain `DISCOVERY_ONLY`. Issuer IR, issuer-attributed newswire and
+exchange/regulator feed candidates require later source-specific review;
+their fixture results are also discovery-only. The official reference register
+distinguishes published plans/dataset permissions from unknown article rights
+and local approvals. No terms, subscription or API key is accepted or used.
+Discovery origin groups do not add independent authorities, and no headline
+or intention is converted to a completed event. Existing qualification,
+approval and readiness decisions are unchanged.
+# Source portfolio routing decision
+
+The sibling decision `event-intelligence-source-portfolio-routing-decision/v1` groups sources by discovery, issuer-attributed release, jurisdictional regulatory/exchange publication, filing publication, and unsupported independent factual corroboration. It specifies jurisdiction/event routing and origin deduplication only; it does not enable sources or change any qualification/approval registry. Independent factual corroboration remains unsupported. Production requests, storage, persistence, authority, signal, and trading remain blocked. See `EVENT_INTELLIGENCE_SOURCE_PORTFOLIO_ROUTING_DECISION.md`.
+
+Evidence review queue snapshots are downstream of source routing and remain non-authoritative. Queue priority only orders manual review and cannot qualify a source or create corroboration, event authority, signal, or trade. The separate view-model contract permits a one-way, allowlisted, serializable projection of sealed snapshots; raw queue items and internal fingerprints are not presentation data.
+# Composition integration note
+
+The in-memory composition checkpoint uses only the already reviewed discovery, source-routing, queue, and view-model boundaries. It does not qualify or select a source, grant rights, or change production readiness. Integration with provider/source checkpoints is a later review on updated `main`.

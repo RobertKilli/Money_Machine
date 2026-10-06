@@ -912,16 +912,43 @@ The [independent final review](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_FINAL_R
 The separate [Coinbase smoke boundary](M5_COINBASE_ETH_USD_LIVE_SMOKE_BOUNDARY.md)
 adds strict request planning, same-runtime descriptive authorization, lossless
 synthetic response observations and a bounded fake-port-tested HTTP boundary.
-The [native Node composition](M5_COINBASE_NODE_SMOKE_TRANSPORT.md) adds bounded
-A/AAAA resolution, deterministic public-address selection, pinned lookup and
-fixed TLS/SNI/Host using a dedicated internal HTTPS agent. Identity-only JSON
-streaming, a local per-execution lease and one monotonic five-second deadline
-cover the three sequential profiles. Node options/events are verified with
-private compiler-injected fakes; live DNS/TLS/Coinbase have not been verified.
-The application imports the native adapter only after the private authority gate;
-CLI execute references are resolved through the blocked composition, with no
-fallback authority. Dry-run creates no operational resources.
 Both authorization registries are empty; execute has zero network side effects
 and remains BLOCKED_BACKEND_UNAPPROVED. No credentials, persistence, ETH/WETH
 mapping, source qualification or production readiness is added. CoinGecko Demo
 smoke and approval policies are unchanged.
+
+## Event intelligence news discovery
+
+[News discovery](EVENT_INTELLIGENCE_NEWS_DISCOVERY_CONTRACT.md) adds a separate
+server-only `event-intelligence-news-discovery/v1` fixture boundary. Results are
+`NON_AUTHORITATIVE_DISCOVERY_CANDIDATE`, never SEC document, issuer, asset or
+event authorities. Source descriptor, provider replay and receipt identities
+are separated. A sealed discovery-origin set groups explicitly declared
+syndication while contributing zero independent corroboration origins.
+Correction/retraction links retain immutable originals. Mentioned issuers,
+tickers and native/wrapped/bridged assets require the existing mapping
+boundaries before authoritative retrieval and lifecycle/corroboration review.
+Discovery cannot skip those stages or create signals/trades. Production has
+empty provider/source stacks and all operations/usage approvals blocked. No
+transport, credentials, persistence, migration or scheduler is added. The
+baseline braces security audit prevents READY_FOR_REVIEW; a preserved Git
+checkpoint does not waive that gate.
+# Event intelligence source routing boundary
+
+`event-intelligence-source-portfolio-routing-decision/v1` defines a side-effect-free routing policy over source families. It does not integrate the sibling source qualification checkpoints. Routing ends at `NON_AUTHORITATIVE_REVIEW_COMPLETE` or `STOPPED_BLOCKED`; it has no event-authority, signal, trade, network, credential, or persistence port. Production routes and source registries remain empty, with every approval blocked. See `EVENT_INTELLIGENCE_SOURCE_PORTFOLIO_ROUTING_DECISION.md`.
+
+The downstream queue view-model contract performs a one-way, allowlisted, JSON-safe degradation of authentic sealed queue snapshots. It does not expose raw queue items or internal fingerprints and cannot feed domain trust back into routing or authority boundaries. It adds no UI route, loader, or operational port; production remains empty and blocked.
+
+The stacked evidence review queue UI at `/intelligence/events/review` consumes only that degraded view model. A server-only loader returns its fixed blocked/empty production model; the client component receives serializable presentation data only and applies local display filters. There are no source, persistence, credential, scheduler, notification, event-authority, signal, or trading ports. See `EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_UI.md`.
+
+Event-intelligence evidence review is a separate, read-only in-memory projection over an authentic routing result. Its status and categorical priority cannot create authority, persistence, scheduling, notifications, or trading decisions; see EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_CONTRACT.md.
+# Event evidence composition checkpoint
+
+The evidence review composition is a server-only, in-memory synthetic application boundary stacked on the review queue UI checkpoint (parent `4724b9de8a29f6ce6b2f1e3d1cfb691fabd44663`). It uses the existing discovery, routing, queue sealing, and queue view-model contracts in order. It is not a source integration and is deliberately disconnected from `/intelligence/events/review`; that route remains empty and blocked. Production qualification and audit readiness remain blocked, including the baseline `GHSA-vfj7-8cjw-p6xm` audit finding.
+
+## Evidence queue read model decision
+
+The stacked `event-intelligence-evidence-review-queue-read-model-decision/v1` selects immutable derived snapshots as a future read strategy, but records `DECISION_ONLY_BLOCKED_UPSTREAM`. Routing, queue sets, and view models remain derived and non-authoritative; storage cannot restore runtime trust. No snapshot schema or read path is implemented, and the review route remains empty/blocked until provenance parents, scope, rights, retention, and runtime are separately approved.
+# Evidence review snapshot scope
+
+The evidence review queue's proposed persistence boundary uses an explicit versioned review-universe scope and closed source-family provenance. This remains a blocked design decision: no snapshot schema/runtime, issuer/discovery parent authority, storage rights, retention, or current-selection authority is approved. See [snapshot scope and provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md). The production queue remains empty and blocked.
