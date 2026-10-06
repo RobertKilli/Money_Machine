@@ -100,6 +100,7 @@ export type SecEdgar8kAmendmentLineageDesign=Readonly<{originalFilingIdentity:st
 export type SecEdgar8kRequestPlanInput=Readonly<{profileId:SecEdgar8kProfileId;form:string;cik:string;accession:string;documentFilename:string|null;userAgentIdentityRef:string;now:string;timeoutMs:number;maxResponseBytes:number;pageCount:number;fileCount:number;attempts:number;redirectHost:string;approvals:readonly SecEdgar8kUsage[]}>;
 export type SecEdgar8kRequestPlan=Readonly<{method:"GET";url:string;profileId:SecEdgar8kProfileId;responseKind:string;allowedContentTypes:readonly string[];cik:string;accession:string;form:"8-K"|"8-K/A";userAgentIdentityRef:string;timeoutMs:number;maxResponseBytes:number;pageCount:number;fileCount:number;attempts:number;redirectHostPolicy:"SAME_ALLOWLISTED_HOST_ONLY";rawBodyLogging:"FORBIDDEN"}>;
 const planTrusted=new WeakSet<object>();
+const planQualification=new WeakMap<object,SecEdgar8kQualification>();
 const PLAN_INPUT_FIELDS=["profileId","form","cik","accession","documentFilename","userAgentIdentityRef","now","timeoutMs","maxResponseBytes","pageCount","fileCount","attempts","redirectHost","approvals"] as const;
 export function createSecEdgar8kRequestPlan(q:unknown,input:SecEdgar8kRequestPlanInput):SecEdgar8kRequestPlan|null{
   try{if(!plain(input,PLAN_INPUT_FIELDS)||typeof input.profileId!=="string"||typeof input.form!=="string"||typeof input.cik!=="string"||typeof input.accession!=="string"||(input.documentFilename!==null&&typeof input.documentFilename!=="string")||typeof input.userAgentIdentityRef!=="string"||typeof input.redirectHost!=="string"||typeof input.now!=="string"||!Number.isSafeInteger(input.timeoutMs)||!Number.isSafeInteger(input.maxResponseBytes)||!Number.isSafeInteger(input.pageCount)||!Number.isSafeInteger(input.fileCount)||!Number.isSafeInteger(input.attempts)||!isAuthenticSecEdgar8kQualification(q)||q.status!=="QUALIFIED"||!iso(input.now)||Date.parse(input.now)<Date.parse(q.effectiveFrom)||Date.parse(input.now)>=Date.parse(q.expiresAt)||!(["8-K","8-K/A"] as string[]).includes(input.form)||!/^\d{10}$/.test(input.cik)||/^0{10}$/.test(input.cik)||!/^\d{10}-\d{2}-\d{6}$/.test(input.accession)||!str(input.userAgentIdentityRef)||!input.userAgentIdentityRef.startsWith("approved-identity:")||!SEC_EDGAR_8K_PROFILES.has(input.profileId)||!arr(input.approvals)||!canonList(input.approvals as unknown))return null;
@@ -107,10 +108,35 @@ export function createSecEdgar8kRequestPlan(q:unknown,input:SecEdgar8kRequestPla
     const profile=SEC_EDGAR_8K_ENDPOINT_PROFILES.find(e=>e.profileId===input.profileId)!;if(input.redirectHost!==profile.hostname)return null;let path=profile.pathTemplate.replace("{cik}",input.cik).replace("{cikUnpadded}",String(Number(input.cik))).replace("{accessionDigits}",input.accession.replaceAll("-","")).replace("{accessionDashed}",input.accession).replace("{form}",input.form);
     if(input.profileId==="SUBMISSIONS_HISTORY_JSON"){if(typeof input.documentFilename!=="string"||!new RegExp(`^CIK${input.cik}-submissions-[0-9]+\\.json$`).test(input.documentFilename))return null;path=path.replace("{historyFilenameFromCikSubmissionsFiles}",input.documentFilename);}
     else if(input.profileId==="PRIMARY_DOCUMENT"||input.profileId==="EXHIBIT_DOCUMENT"){if(typeof input.documentFilename!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.documentFilename)||input.documentFilename.includes(".."))return null;path=path.replace(input.profileId==="PRIMARY_DOCUMENT"?"{primaryDocument}":"{documentFilename}",input.documentFilename);}else if(input.documentFilename!==null)return null;
-    const url=`https://${profile.hostname}${path}`;const result=freeze({method:"GET" as const,url,profileId:input.profileId,responseKind:profile.responseKind,allowedContentTypes:profile.allowedContentTypes,cik:input.cik,accession:input.accession,form:input.form as "8-K"|"8-K/A",userAgentIdentityRef:input.userAgentIdentityRef,timeoutMs:input.timeoutMs,maxResponseBytes:input.maxResponseBytes,pageCount:input.pageCount,fileCount:input.fileCount,attempts:input.attempts,redirectHostPolicy:"SAME_ALLOWLISTED_HOST_ONLY" as const,rawBodyLogging:"FORBIDDEN" as const});planTrusted.add(result);return result;
+     const url=`https://${profile.hostname}${path}`;const result=freeze({method:"GET" as const,url,profileId:input.profileId,responseKind:profile.responseKind,allowedContentTypes:profile.allowedContentTypes,cik:input.cik,accession:input.accession,form:input.form as "8-K"|"8-K/A",userAgentIdentityRef:input.userAgentIdentityRef,timeoutMs:input.timeoutMs,maxResponseBytes:input.maxResponseBytes,pageCount:input.pageCount,fileCount:input.fileCount,attempts:input.attempts,redirectHostPolicy:"SAME_ALLOWLISTED_HOST_ONLY" as const,rawBodyLogging:"FORBIDDEN" as const});planTrusted.add(result);planQualification.set(result,q);return result;
   }catch{return null;}
+}
+/** Derive a later stage only from the exact authentic first-stage plan; callers cannot supply its qualification. */
+export function deriveSecEdgar8kRequestPlanFromSubmissions(base: unknown, profileId: SecEdgar8kProfileId, documentFilename: string | null, now: string): SecEdgar8kRequestPlan | null {
+  try {
+    if (!isAuthenticSecEdgar8kRequestPlan(base) || (base as SecEdgar8kRequestPlan).profileId !== "COMPANY_SUBMISSIONS_JSON" || !iso(now)) return null;
+    const source = base as SecEdgar8kRequestPlan;
+    const qualification = planQualification.get(source);
+    if (!qualification || !isAuthenticSecEdgar8kQualification(qualification)) return null;
+    const endpoint = SEC_EDGAR_8K_ENDPOINT_PROFILES.find((entry) => entry.profileId === profileId);
+    if (!endpoint || !["FILING_INDEX", "SUBMISSIONS_HISTORY_JSON"].includes(profileId)) return null;
+    return createSecEdgar8kRequestPlan(qualification, {
+      profileId, form: source.form, cik: source.cik, accession: source.accession,
+      documentFilename, userAgentIdentityRef: source.userAgentIdentityRef, now,
+      timeoutMs: Math.min(source.timeoutMs, qualification.requestPolicy.timeoutMsMax),
+      maxResponseBytes: Math.min(source.maxResponseBytes, qualification.requestPolicy.responseBytesMax),
+      pageCount: 1, fileCount: 1, attempts: 1, redirectHost: endpoint.hostname,
+      approvals: qualification.approvals.map((entry) => entry.usage),
+    });
+  } catch { return null; }
 }
 const SEC_EDGAR_8K_PROFILES=new Set<SecEdgar8kProfileId>(["COMPANY_SUBMISSIONS_JSON","SUBMISSIONS_HISTORY_JSON","FILING_INDEX","PRIMARY_DOCUMENT","EXHIBIT_DOCUMENT"]);
 export const isAuthenticSecEdgar8kRequestPlan=(v:unknown):v is SecEdgar8kRequestPlan=>!!v&&typeof v==="object"&&planTrusted.has(v);
+/** Recheck source qualification freshness and the runtime-pinned fingerprint at the transport boundary. */
+export function isCurrentlyQualifiedSecEdgar8kRequestPlan(v:unknown,now:string):v is SecEdgar8kRequestPlan{
+  if(!isAuthenticSecEdgar8kRequestPlan(v)||!iso(now))return false;
+  const qualification=planQualification.get(v);
+  return !!qualification&&isAuthenticSecEdgar8kQualification(qualification)&&qualification.status==="QUALIFIED"&&QUALIFIED_RUNTIME_FINGERPRINTS.has(qualification.fingerprint)&&Date.parse(now)>=Date.parse(qualification.effectiveFrom)&&Date.parse(now)<Date.parse(qualification.expiresAt);
+}
 
 export const SEC_EDGAR_8K_PRODUCTION_DECISION=Object.freeze({contractVersion:"sec-edgar-8k-production-decision/v1",status:"BLOCKED",selectedAcquisitionProfile:null,productionAcquisition:"BLOCKED",rawStorage:"NOT_APPROVED",normalizedStorage:"NOT_APPROVED",authorityPersistence:"NOT_APPROVED",approvals:Object.freeze({ACQUISITION:"NOT_APPROVED",RAW_STORAGE:"NOT_APPROVED",NORMALIZED_STORAGE:"NOT_APPROVED",AUTHORITY_ISSUANCE:"NOT_APPROVED",RETENTION:"NOT_APPROVED",REDISTRIBUTION:"NOT_APPROVED",COMMERCIAL_USE:"NOT_APPROVED"}),retention:"UNKNOWN",redistribution:"NOT_APPROVED",commercialUse:"NOT_APPROVED",scheduler:"BLOCKED",eventExtraction:"BLOCKED",sourceMapping:null,blockers:Object.freeze(["SEC_8K_COVERAGE_AND_COMPLETENESS_NOT_PROVEN","SEC_STORAGE_AND_USAGE_APPROVALS_NOT_GRANTED","SEC_REQUEST_IDENTITY_AND_LIVE_ACQUISITION_NOT_APPROVED","SEC_EVENT_EXTRACTION_AND_AUTHORITY_NOT_IMPLEMENTED"])} as const);
