@@ -22,6 +22,7 @@
     "m5:provider:smoke": "tsx --tsconfig scripts/tsconfig.json scripts/m5-provider-smoke.ts",
     "m5:coinbase:smoke": "tsx --tsconfig scripts/tsconfig.json scripts/m5-coinbase-smoke.ts",
     "sec:edgar:8k:dry-run": "tsx --tsconfig scripts/tsconfig.json scripts/sec-edgar-8k-smoke-dry-run.ts",
+    "sec:edgar:8k:local-smoke": "tsx --tsconfig scripts/tsconfig.json scripts/sec-edgar-8k-local-smoke.ts",
     "test:watch": "vitest"
   },
   "repository": {

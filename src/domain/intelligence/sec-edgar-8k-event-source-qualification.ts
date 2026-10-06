@@ -30,6 +30,9 @@ export type SecEdgar8kQualification = Readonly<{
   rawStorage: "NOT_APPROVED" | "APPROVED" | "UNKNOWN"; normalizedStorage: "NOT_APPROVED" | "APPROVED" | "UNKNOWN"; approvals: readonly Approval[]; retention: "NOT_APPROVED" | "APPROVED" | "UNKNOWN"; redistribution: "NOT_APPROVED" | "APPROVED" | "UNKNOWN"; commercialUse: "NOT_APPROVED" | "APPROVED" | "UNKNOWN";
   evidence: readonly Evidence[]; blockers: readonly string[]; reviewedAt: string; effectiveFrom: string; expiresAt: string; recordedAt: string; qualificationId: string; fingerprint: string;
 }>;
+/** Qualification material may only be introduced here by a separately reviewed code change. */
+export type SecEdgar8kCodePinnedQualification = Readonly<{ reference: string; material: unknown }>;
+export const SEC_EDGAR_8K_CODE_PINNED_QUALIFICATIONS: readonly SecEdgar8kCodePinnedQualification[] = Object.freeze([]);
 export type SecEdgar8kParse = Readonly<{ status: "VALID"; qualification: SecEdgar8kQualification }> | Readonly<{ status: "INVALID"; blocker: "SEC_EDGAR_8K_QUALIFICATION_INVALID" }>;
 const INVALID: SecEdgar8kParse = Object.freeze({ status: "INVALID", blocker: "SEC_EDGAR_8K_QUALIFICATION_INVALID" });
 const trusted = new WeakSet<object>();

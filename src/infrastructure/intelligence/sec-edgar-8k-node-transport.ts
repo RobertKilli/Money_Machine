@@ -33,6 +33,9 @@ export const SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE = Object.freeze({
 
 const failure = (code: SecEdgar8kTransportFailureCode): SecEdgar8kTransportResult => Object.freeze({ status: "BLOCKED", code });
 const CONTACT = /^[^\r\n<>]{2,80}\s+<[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>$/;
+export function isValidSecEdgar8kOperatorContact(value: unknown): value is string {
+  return typeof value === "string" && value === value.trim() && !/[\u0000-\u001f\u007f\u2028\u2029]/u.test(value) && CONTACT.test(value);
+}
 const hasExactDataShape = (value: unknown, keys: readonly string[]): value is Record<string, unknown> => {
   try {
     if (!value || typeof value !== "object" || utilTypes.isProxy(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
@@ -74,10 +77,10 @@ function validPlan(value: unknown): value is SecEdgar8kRequestPlan {
   } catch { return false; }
 }
 
-function matchingAuthorization(plans: readonly SecEdgar8kRequestPlan[], contact: string, now: string) {
+function matchingAuthorization(plans: readonly SecEdgar8kRequestPlan[], now: string) {
   return SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.find((authorization) =>
     authorization.cik === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik && authorization.accession === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession && authorization.form === "8-K" &&
-    authorization.operatorContact === contact && authorization.minimumIntervalMs >= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs && authorization.maxRequests <= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests && Date.parse(now) < Date.parse(authorization.expiresAt) && plans.length <= authorization.maxRequests &&
+    authorization.minimumIntervalMs >= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs && authorization.maxRequests <= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests && Date.parse(now) < Date.parse(authorization.expiresAt) && plans.length <= authorization.maxRequests &&
     plans.every((plan) => authorization.profileIds.includes(plan.profileId as "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON" | "FILING_INDEX") && plan.userAgentIdentityRef === authorization.userAgentIdentityRef)
   );
 }
@@ -201,14 +204,17 @@ function requestOnce(plan: SecEdgar8kRequestPlan, userAgent: string, requestPort
 }
 
 /** Manifest-first staged run. The caller supplies only the authentic submissions plan; later plans are derived privately. */
-export async function acquireSecEdgar8kManifestFirstExchange(input: Readonly<{ initialPlan: unknown; operatorContact: unknown; signal?: AbortSignal }>): Promise<SecEdgar8kStagedResult> {
+export async function acquireSecEdgar8kManifestFirstExchange(input: Readonly<{ initialPlan: unknown; operatorContact: unknown; authorizationId?: unknown; signal?: AbortSignal }>): Promise<SecEdgar8kStagedResult> {
   if (!input || typeof input !== "object" || utilTypes.isProxy(input)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
   let signal: unknown;
+  let hasAuthorizationId = false;
   try {
     const keys = Reflect.ownKeys(input);
-    if (Object.getPrototypeOf(input) !== Object.prototype || keys.some((key) => typeof key !== "string" || !["initialPlan", "operatorContact", "signal"].includes(key))) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+    if (Object.getPrototypeOf(input) !== Object.prototype || keys.some((key) => typeof key !== "string" || !["initialPlan", "operatorContact", "authorizationId", "signal"].includes(key))) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+    hasAuthorizationId = keys.includes("authorizationId");
     for (const key of keys) { const descriptor = Object.getOwnPropertyDescriptor(input, key); if (!descriptor || !("value" in descriptor) || descriptor.get || descriptor.set) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID"); }
     if (!("initialPlan" in input) || !("operatorContact" in input)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
+    if ("authorizationId" in input && typeof input.authorizationId !== "string") return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
     signal = Object.getOwnPropertyDescriptor(input, "signal")?.value;
   } catch { return failure("SEC_SMOKE_REQUEST_PLAN_INVALID"); }
   if (signal !== undefined && !nativeAbortSignal(signal)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
@@ -216,10 +222,11 @@ export async function acquireSecEdgar8kManifestFirstExchange(input: Readonly<{ i
   const initialPlan = input.initialPlan;
   if (!validPlan(initialPlan) || initialPlan.profileId !== "COMPANY_SUBMISSIONS_JSON") return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
   if (!isCurrentlyQualifiedSecEdgar8kRequestPlan(initialPlan, new Date().toISOString())) return failure("SEC_SMOKE_SOURCE_NOT_CURRENTLY_QUALIFIED");
-  if (typeof input.operatorContact !== "string" || !CONTACT.test(input.operatorContact)) return failure("SEC_SMOKE_OPERATOR_CONTACT_REQUIRED");
+  if (!isValidSecEdgar8kOperatorContact(input.operatorContact)) return failure("SEC_SMOKE_OPERATOR_CONTACT_REQUIRED");
   const authorizationCandidates = SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.filter((candidate) =>
+    (!hasAuthorizationId || candidate.authorizationId === input.authorizationId) &&
     candidate.cik === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik && candidate.accession === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession && candidate.form === "8-K" &&
-    candidate.operatorContact === input.operatorContact && candidate.maxRequests === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests &&
+    candidate.maxRequests === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests &&
     candidate.minimumIntervalMs >= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs && Date.now() < Date.parse(candidate.expiresAt) &&
     candidate.userAgentIdentityRef === initialPlan.userAgentIdentityRef && ["COMPANY_SUBMISSIONS_JSON", "SUBMISSIONS_HISTORY_JSON", "FILING_INDEX"].every((profile) => candidate.profileIds.includes(profile as "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON" | "FILING_INDEX"))
   );
@@ -228,7 +235,7 @@ export async function acquireSecEdgar8kManifestFirstExchange(input: Readonly<{ i
   if (!authorization) return failure("SEC_SMOKE_AUTHORIZATION_ALREADY_USED");
   usedAuthorizations.add(authorization); // one consumption for the whole run, never one per stage
 
-  const userAgent = `MoneyMachine/1.0 (${authorization.operatorContact})`;
+  const userAgent = `MoneyMachine/1.0 (${input.operatorContact})`;
   const observations: { plan: SecEdgar8kRequestPlan; response: ResponseValue }[] = [];
   let transferred = false;
   let requestCount = 0;
@@ -296,20 +303,20 @@ export async function acquireSecEdgar8kLocalSmokeExchange(input: Readonly<{ plan
   if (candidatePlans.length > SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests) return failure("SEC_SMOKE_RUN_LIMIT_EXCEEDED");
   if (candidatePlans.length === 0 || !candidatePlans.every(validPlan)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
   if (!candidatePlans.every((plan) => isCurrentlyQualifiedSecEdgar8kRequestPlan(plan, new Date().toISOString()))) return failure("SEC_SMOKE_SOURCE_NOT_CURRENTLY_QUALIFIED");
-  if (typeof input.operatorContact !== "string" || !CONTACT.test(input.operatorContact)) return failure("SEC_SMOKE_OPERATOR_CONTACT_REQUIRED");
+  if (!isValidSecEdgar8kOperatorContact(input.operatorContact)) return failure("SEC_SMOKE_OPERATOR_CONTACT_REQUIRED");
   const plans = candidatePlans as readonly SecEdgar8kRequestPlan[];
   // A history URL must be selected from the first SEC response before it is
   // requested. This one-shot batch API cannot do that safely, so fail closed.
   if (plans.length === 3) return failure("SEC_SMOKE_HISTORY_PREFLIGHT_REQUIRED");
   const allowedOrder = plans.length === 2 && plans[0]?.profileId === "COMPANY_SUBMISSIONS_JSON" && plans[1]?.profileId === "FILING_INDEX";
   if (!allowedOrder) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
-  const authorization = matchingAuthorization(plans, input.operatorContact, new Date().toISOString());
+  const authorization = matchingAuthorization(plans, new Date().toISOString());
   if (!authorization) return failure("SEC_SMOKE_AUTHORIZATION_REQUIRED");
   if (usedAuthorizations.has(authorization)) return failure("SEC_SMOKE_AUTHORIZATION_ALREADY_USED");
   // A permit authorizes one invocation only; repeated calls cannot reset its
   // per-run request budget. Failed runs require a separately issued permit.
   usedAuthorizations.add(authorization);
-  const userAgent = `MoneyMachine/1.0 (${authorization.operatorContact})`;
+  const userAgent = `MoneyMachine/1.0 (${input.operatorContact})`;
   const stillAuthorized = () => Date.now() < Date.parse(authorization.expiresAt) && SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.includes(authorization) && plans.every((plan) => isCurrentlyQualifiedSecEdgar8kRequestPlan(plan, new Date().toISOString()));
   const observations: SecEdgar8kTransportObservation[] = [];
   const privateResponses: { plan: SecEdgar8kRequestPlan; bytes: Buffer }[] = [];

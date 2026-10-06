@@ -8,7 +8,7 @@ export type SecEdgar8kLocalSmokeRunResult =
   | Readonly<{ status: "VERIFIED"; evidence: SecEdgar8kFilingEvidence }>;
 
 /** Server orchestration from an already-authentic request plan to reconciled metadata-only evidence. */
-export async function runSecEdgar8kLocalSmoke(input: Readonly<{ initialPlan: unknown; operatorContact: unknown; signal?: AbortSignal }>): Promise<SecEdgar8kLocalSmokeRunResult> {
+export async function runSecEdgar8kLocalSmoke(input: Readonly<{ initialPlan: unknown; operatorContact: unknown; authorizationId?: string; signal?: AbortSignal }>): Promise<SecEdgar8kLocalSmokeRunResult> {
   const exchange: SecEdgar8kStagedResult = await acquireSecEdgar8kManifestFirstExchange(input);
   if (exchange.status !== "COMPLETED") return Object.freeze({ status: "BLOCKED", code: exchange.code });
   const result = adaptSecEdgar8kTransportExchange(exchange, new Date().toISOString());
