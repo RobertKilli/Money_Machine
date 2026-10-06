@@ -36,4 +36,18 @@ The version range and patched release above are based on the advisory details su
 - Updating to the current stable Next.js pair does not remove the path: npm metadata reports stable `next@16.3.8` and `eslint-config-next@16.3.8`, with `@next/eslint-plugin-next@16.3.8 → fast-glob@3.3.1 → micromatch@4.0.8 → braces@^3.0.3`. No package or lockfile churn was made for this no-value update.
 - Revisit when a patched upstream `braces` release becomes available or the vulnerable dependency path is removed from the supported lint toolchain.
 
+## CI enforcement
+
+The CI security job runs an unconditional production dependency audit with
+`npm audit --omit=dev --audit-level=high`. It then evaluates the full
+`npm audit --json --audit-level=high` report with
+`scripts/check-dependency-audit.mjs`. The checker accepts only the exact
+GHSA-vfj7-8cjw-p6xm finding on `braces@3.0.3` through the lockfile-verified,
+development-only ESLint dependency chain above. It fails closed if the audit
+schema, advisory, installed versions, dependency edges, or development-only
+classification change, or if any other high/critical finding appears. A clean
+production audit and this narrowly scoped full-tree exception do not make the
+full `npm audit` command green. Remove the exception when upstream provides a
+patched `braces` release or the affected dependency path is removed.
+
 Verification on 2026-10-06: `npm explain braces`, `npm ls braces --all`, `npm ls braces --omit=dev --all`, `npm audit`, `npm audit --omit=dev --audit-level=high`, npm registry metadata for current stable packages, the installed Next ESLint helper, and application/config source searches. The full audit returned five high findings and exit code 1; the production-only audit found zero vulnerabilities and exited 0.
