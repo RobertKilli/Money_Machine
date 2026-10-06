@@ -1,5 +1,8 @@
 import "server-only";
+import { types as utilTypes } from "node:util";
 import { canonicalSha256 } from "./ingestion-provenance";
+import { evaluateSecEdgar8kLocalSmokeQualification, isAuthenticSecEdgar8kLocalSmokeQualification, isCurrentlySecEdgar8kLocalSmokeQualified, type SecEdgar8kLocalSmokeQualification } from "./sec-edgar-8k-local-smoke-qualification";
+import { SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE } from "./sec-edgar-8k-local-smoke-scope";
 
 export const SEC_EDGAR_8K_QUALIFICATION_VERSION = "sec-edgar-8k-event-source-qualification/v1" as const;
 export const SEC_EDGAR_8K_SOURCE_ID = "sec-edgar-8k" as const;
@@ -104,15 +107,33 @@ export type SecEdgar8kRequestPlanInput=Readonly<{profileId:SecEdgar8kProfileId;f
 export type SecEdgar8kRequestPlan=Readonly<{method:"GET";url:string;profileId:SecEdgar8kProfileId;responseKind:string;allowedContentTypes:readonly string[];cik:string;accession:string;form:"8-K"|"8-K/A";userAgentIdentityRef:string;timeoutMs:number;maxResponseBytes:number;pageCount:number;fileCount:number;attempts:number;redirectHostPolicy:"SAME_ALLOWLISTED_HOST_ONLY";rawBodyLogging:"FORBIDDEN"}>;
 const planTrusted=new WeakSet<object>();
 const planQualification=new WeakMap<object,SecEdgar8kQualification>();
+const planLocalSmokeQualification=new WeakMap<object,SecEdgar8kLocalSmokeQualification>();
 const PLAN_INPUT_FIELDS=["profileId","form","cik","accession","documentFilename","userAgentIdentityRef","now","timeoutMs","maxResponseBytes","pageCount","fileCount","attempts","redirectHost","approvals"] as const;
+function materializeRequestPlan(input: SecEdgar8kRequestPlanInput): SecEdgar8kRequestPlan | null {
+  const profile=SEC_EDGAR_8K_ENDPOINT_PROFILES.find(e=>e.profileId===input.profileId);if(!profile||input.redirectHost!==profile.hostname)return null;
+  let path=profile.pathTemplate.replace("{cik}",input.cik).replace("{cikUnpadded}",String(Number(input.cik))).replace("{accessionDigits}",input.accession.replaceAll("-","")).replace("{accessionDashed}",input.accession).replace("{form}",input.form);
+  if(input.profileId==="SUBMISSIONS_HISTORY_JSON"){if(typeof input.documentFilename!=="string"||!new RegExp(`^CIK${input.cik}-submissions-[0-9]+\\.json$`).test(input.documentFilename))return null;path=path.replace("{historyFilenameFromCikSubmissionsFiles}",input.documentFilename);}
+  else if(input.profileId==="PRIMARY_DOCUMENT"||input.profileId==="EXHIBIT_DOCUMENT"){if(typeof input.documentFilename!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.documentFilename)||input.documentFilename.includes(".."))return null;path=path.replace(input.profileId==="PRIMARY_DOCUMENT"?"{primaryDocument}":"{documentFilename}",input.documentFilename);}
+  else if(input.documentFilename!==null)return null;
+  const result=freeze({method:"GET" as const,url:`https://${profile.hostname}${path}`,profileId:input.profileId,responseKind:profile.responseKind,allowedContentTypes:profile.allowedContentTypes,cik:input.cik,accession:input.accession,form:input.form as "8-K"|"8-K/A",userAgentIdentityRef:input.userAgentIdentityRef,timeoutMs:input.timeoutMs,maxResponseBytes:input.maxResponseBytes,pageCount:input.pageCount,fileCount:input.fileCount,attempts:input.attempts,redirectHostPolicy:"SAME_ALLOWLISTED_HOST_ONLY" as const,rawBodyLogging:"FORBIDDEN" as const});planTrusted.add(result);return result;
+}
 export function createSecEdgar8kRequestPlan(q:unknown,input:SecEdgar8kRequestPlanInput):SecEdgar8kRequestPlan|null{
   try{if(!plain(input,PLAN_INPUT_FIELDS)||typeof input.profileId!=="string"||typeof input.form!=="string"||typeof input.cik!=="string"||typeof input.accession!=="string"||(input.documentFilename!==null&&typeof input.documentFilename!=="string")||typeof input.userAgentIdentityRef!=="string"||typeof input.redirectHost!=="string"||typeof input.now!=="string"||!Number.isSafeInteger(input.timeoutMs)||!Number.isSafeInteger(input.maxResponseBytes)||!Number.isSafeInteger(input.pageCount)||!Number.isSafeInteger(input.fileCount)||!Number.isSafeInteger(input.attempts)||!isAuthenticSecEdgar8kQualification(q)||q.status!=="QUALIFIED"||!iso(input.now)||Date.parse(input.now)<Date.parse(q.effectiveFrom)||Date.parse(input.now)>=Date.parse(q.expiresAt)||!(["8-K","8-K/A"] as string[]).includes(input.form)||!/^\d{10}$/.test(input.cik)||/^0{10}$/.test(input.cik)||!/^\d{10}-\d{2}-\d{6}$/.test(input.accession)||!str(input.userAgentIdentityRef)||!input.userAgentIdentityRef.startsWith("approved-identity:")||!SEC_EDGAR_8K_PROFILES.has(input.profileId)||!arr(input.approvals)||!canonList(input.approvals as unknown))return null;
     const p=q.requestPolicy;if(input.timeoutMs<=0||input.timeoutMs>p.timeoutMsMax||input.maxResponseBytes<=0||input.maxResponseBytes>p.responseBytesMax||input.pageCount<=0||input.pageCount>p.pageCountMax||input.fileCount<=0||input.fileCount>p.fileCountMax||input.attempts<=0||input.attempts>p.attemptsMax||SEC_EDGAR_8K_USAGES.some(u=>!input.approvals.includes(u))||q.approvals.some(a=>a.status!=="APPROVED"))return null;
-    const profile=SEC_EDGAR_8K_ENDPOINT_PROFILES.find(e=>e.profileId===input.profileId)!;if(input.redirectHost!==profile.hostname)return null;let path=profile.pathTemplate.replace("{cik}",input.cik).replace("{cikUnpadded}",String(Number(input.cik))).replace("{accessionDigits}",input.accession.replaceAll("-","")).replace("{accessionDashed}",input.accession).replace("{form}",input.form);
-    if(input.profileId==="SUBMISSIONS_HISTORY_JSON"){if(typeof input.documentFilename!=="string"||!new RegExp(`^CIK${input.cik}-submissions-[0-9]+\\.json$`).test(input.documentFilename))return null;path=path.replace("{historyFilenameFromCikSubmissionsFiles}",input.documentFilename);}
-    else if(input.profileId==="PRIMARY_DOCUMENT"||input.profileId==="EXHIBIT_DOCUMENT"){if(typeof input.documentFilename!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.documentFilename)||input.documentFilename.includes(".."))return null;path=path.replace(input.profileId==="PRIMARY_DOCUMENT"?"{primaryDocument}":"{documentFilename}",input.documentFilename);}else if(input.documentFilename!==null)return null;
-     const url=`https://${profile.hostname}${path}`;const result=freeze({method:"GET" as const,url,profileId:input.profileId,responseKind:profile.responseKind,allowedContentTypes:profile.allowedContentTypes,cik:input.cik,accession:input.accession,form:input.form as "8-K"|"8-K/A",userAgentIdentityRef:input.userAgentIdentityRef,timeoutMs:input.timeoutMs,maxResponseBytes:input.maxResponseBytes,pageCount:input.pageCount,fileCount:input.fileCount,attempts:input.attempts,redirectHostPolicy:"SAME_ALLOWLISTED_HOST_ONLY" as const,rawBodyLogging:"FORBIDDEN" as const});planTrusted.add(result);planQualification.set(result,q);return result;
+    const result=materializeRequestPlan(input);if(!result)return null;planQualification.set(result,q);return result;
   }catch{return null;}
+}
+/** Creates the same bounded request-plan shape, but binds it only to the distinct LOCAL_SMOKE qualification. */
+export function createSecEdgar8kLocalSmokeRequestPlan(q: unknown, input: SecEdgar8kRequestPlanInput): SecEdgar8kRequestPlan | null {
+  try {
+    if (!input || typeof input !== "object" || utilTypes.isProxy(input) || !plain(input, PLAN_INPUT_FIELDS) || !isAuthenticSecEdgar8kLocalSmokeQualification(q) || typeof input.profileId !== "string" || typeof input.form !== "string" || typeof input.cik !== "string" || typeof input.accession !== "string" || (input.documentFilename !== null && (typeof input.documentFilename !== "string" || !str(input.documentFilename, 64))) || typeof input.userAgentIdentityRef !== "string" || typeof input.redirectHost !== "string" || typeof input.now !== "string" || !Number.isSafeInteger(input.timeoutMs) || !Number.isSafeInteger(input.maxResponseBytes) || !Number.isSafeInteger(input.pageCount) || !Number.isSafeInteger(input.fileCount) || !Number.isSafeInteger(input.attempts) || utilTypes.isProxy(input.approvals) || !arr(input.approvals) || !isCurrentlySecEdgar8kLocalSmokeQualified(q, input.now)) return null;
+    if (!iso(input.now) || input.form !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.form || input.cik !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik || input.accession !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession || input.timeoutMs !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.timeoutMs || input.maxResponseBytes !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxResponseBytes || input.pageCount !== 1 || input.fileCount !== 1 || input.attempts !== 1 || input.userAgentIdentityRef !== q.userAgentIdentityRef || !str(input.userAgentIdentityRef) || !input.userAgentIdentityRef.startsWith("approved-identity:") || input.profileId === "PRIMARY_DOCUMENT" || input.profileId === "EXHIBIT_DOCUMENT" || input.profileId === "SUBMISSIONS_BULK_ZIP" || input.profileId === "LATEST_FILINGS_RSS" || (input.profileId === "SUBMISSIONS_HISTORY_JSON" && (typeof input.documentFilename !== "string" || !str(input.documentFilename, 64)))) return null;
+    if (input.approvals.length !== 0) return null;
+    const result = materializeRequestPlan(input);
+    if (!result) return null;
+    planLocalSmokeQualification.set(result, q);
+    return result;
+  } catch { return null; }
 }
 /** Derive a later stage only from the exact authentic first-stage plan; callers cannot supply its qualification. */
 export function deriveSecEdgar8kRequestPlanFromSubmissions(base: unknown, profileId: SecEdgar8kProfileId, documentFilename: string | null, now: string): SecEdgar8kRequestPlan | null {
@@ -120,6 +141,19 @@ export function deriveSecEdgar8kRequestPlanFromSubmissions(base: unknown, profil
     if (!isAuthenticSecEdgar8kRequestPlan(base) || (base as SecEdgar8kRequestPlan).profileId !== "COMPANY_SUBMISSIONS_JSON" || !iso(now)) return null;
     const source = base as SecEdgar8kRequestPlan;
     const qualification = planQualification.get(source);
+    const localSmokeQualification = planLocalSmokeQualification.get(source);
+    if (localSmokeQualification && isAuthenticSecEdgar8kLocalSmokeQualification(localSmokeQualification)) {
+      if (!isCurrentlySecEdgar8kLocalSmokeQualified(localSmokeQualification, now)) return null;
+      const endpoint = SEC_EDGAR_8K_ENDPOINT_PROFILES.find((entry) => entry.profileId === profileId);
+      if (!endpoint || !["FILING_INDEX", "SUBMISSIONS_HISTORY_JSON"].includes(profileId)) return null;
+      return createSecEdgar8kLocalSmokeRequestPlan(localSmokeQualification, {
+        profileId, form: source.form, cik: source.cik, accession: source.accession, documentFilename,
+        userAgentIdentityRef: source.userAgentIdentityRef, now,
+        timeoutMs: Math.min(source.timeoutMs, SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.timeoutMs),
+        maxResponseBytes: Math.min(source.maxResponseBytes, SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxResponseBytes),
+        pageCount: 1, fileCount: 1, attempts: 1, redirectHost: endpoint.hostname, approvals: [],
+      });
+    }
     if (!qualification || !isAuthenticSecEdgar8kQualification(qualification)) return null;
     const endpoint = SEC_EDGAR_8K_ENDPOINT_PROFILES.find((entry) => entry.profileId === profileId);
     if (!endpoint || !["FILING_INDEX", "SUBMISSIONS_HISTORY_JSON"].includes(profileId)) return null;
@@ -140,6 +174,17 @@ export function isCurrentlyQualifiedSecEdgar8kRequestPlan(v:unknown,now:string):
   if(!isAuthenticSecEdgar8kRequestPlan(v)||!iso(now))return false;
   const qualification=planQualification.get(v);
   return !!qualification&&isAuthenticSecEdgar8kQualification(qualification)&&qualification.status==="QUALIFIED"&&QUALIFIED_RUNTIME_FINGERPRINTS.has(qualification.fingerprint)&&Date.parse(now)>=Date.parse(qualification.effectiveFrom)&&Date.parse(now)<Date.parse(qualification.expiresAt);
+}
+/** Production qualification v1 never accepts LOCAL_SMOKE plans. */
+export function isCurrentlySecEdgar8kLocalSmokeQualifiedRequestPlan(v: unknown, now: string): v is SecEdgar8kRequestPlan {
+  if (!isAuthenticSecEdgar8kRequestPlan(v) || !iso(now)) return false;
+  const qualification = planLocalSmokeQualification.get(v);
+  return !!qualification && isAuthenticSecEdgar8kLocalSmokeQualification(qualification) && evaluateSecEdgar8kLocalSmokeQualification(qualification, now).status === "APPROVED_FOR_LOCAL_SMOKE";
+}
+export function getSecEdgar8kLocalSmokeQualificationReferenceForPlan(v: unknown): string | null {
+  if (!isAuthenticSecEdgar8kRequestPlan(v)) return null;
+  const qualification = planLocalSmokeQualification.get(v);
+  return qualification && isAuthenticSecEdgar8kLocalSmokeQualification(qualification) ? qualification.qualificationReference : null;
 }
 
 export const SEC_EDGAR_8K_PRODUCTION_DECISION=Object.freeze({contractVersion:"sec-edgar-8k-production-decision/v1",status:"BLOCKED",selectedAcquisitionProfile:null,productionAcquisition:"BLOCKED",rawStorage:"NOT_APPROVED",normalizedStorage:"NOT_APPROVED",authorityPersistence:"NOT_APPROVED",approvals:Object.freeze({ACQUISITION:"NOT_APPROVED",RAW_STORAGE:"NOT_APPROVED",NORMALIZED_STORAGE:"NOT_APPROVED",AUTHORITY_ISSUANCE:"NOT_APPROVED",RETENTION:"NOT_APPROVED",REDISTRIBUTION:"NOT_APPROVED",COMMERCIAL_USE:"NOT_APPROVED"}),retention:"UNKNOWN",redistribution:"NOT_APPROVED",commercialUse:"NOT_APPROVED",scheduler:"BLOCKED",eventExtraction:"BLOCKED",sourceMapping:null,blockers:Object.freeze(["SEC_8K_COVERAGE_AND_COMPLETENESS_NOT_PROVEN","SEC_STORAGE_AND_USAGE_APPROVALS_NOT_GRANTED","SEC_REQUEST_IDENTITY_AND_LIVE_ACQUISITION_NOT_APPROVED","SEC_EVENT_EXTRACTION_AND_AUTHORITY_NOT_IMPLEMENTED"])} as const);

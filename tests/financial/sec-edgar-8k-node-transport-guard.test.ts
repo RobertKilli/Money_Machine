@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS } from "@/infrastructure/intelligence/sec-edgar-8k-local-smoke-authorization";
+import { SEC_EDGAR_8K_LOCAL_SMOKE_QUALIFICATION_PINS } from "@/domain/intelligence/sec-edgar-8k-local-smoke-qualification";
 import { executeSecEdgar8kLocalSmoke, SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN } from "@/infrastructure/intelligence/sec-edgar-8k-node-transport";
 import { runSecEdgar8kFixtureClaimPipeline } from "@/domain/intelligence/sec-edgar-8k-fixture-claim-pipeline";
 import { SEC_EDGAR_8K_SYNTHETIC_FIXTURES } from "../fixtures/sec-edgar-8k-fixture-claim-pipeline";
@@ -7,6 +8,7 @@ import { SEC_EDGAR_8K_SYNTHETIC_FIXTURES } from "../fixtures/sec-edgar-8k-fixtur
 describe("SEC EDGAR local smoke remains operationally blocked", () => {
   it("keeps its live registry empty and dry-run network-free", () => {
     expect(SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS).toEqual([]);
+    expect(SEC_EDGAR_8K_LOCAL_SMOKE_QUALIFICATION_PINS).toEqual([]);
     expect(SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN.networkRequests).toBe(0);
     expect(SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN.status).toBe("BLOCKED");
   });

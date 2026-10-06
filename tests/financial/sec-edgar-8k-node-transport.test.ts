@@ -6,6 +6,7 @@ import type { IncomingMessage } from "node:http";
 const mocks = vi.hoisted(() => ({
   authenticPlan: vi.fn(() => true),
   currentlyQualified: vi.fn(() => true),
+  qualificationReference: "sec-edgar-8k-local-smoke-qualification:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   derivePlan: vi.fn((base: Record<string, unknown>, profileId: string, filename: string | null) => ({ ...base, profileId, responseKind: profileId === "FILING_INDEX" ? "HTML" : "JSON", allowedContentTypes: profileId === "FILING_INDEX" ? ["text/html"] : ["application/json"], url: profileId === "SUBMISSIONS_HISTORY_JSON" ? `https://data.sec.gov/submissions/${filename}` : "https://www.sec.gov/Archives/edgar/data/789019/000119312523255762/0001193125-23-255762-index.htm" })),
   request: vi.fn(),
   authorizations: [] as Record<string, unknown>[],
@@ -21,6 +22,8 @@ vi.mock("@/domain/intelligence/sec-edgar-8k-event-source-qualification", () => (
   ],
   isAuthenticSecEdgar8kRequestPlan: mocks.authenticPlan,
   isCurrentlyQualifiedSecEdgar8kRequestPlan: mocks.currentlyQualified,
+  isCurrentlySecEdgar8kLocalSmokeQualifiedRequestPlan: mocks.currentlyQualified,
+  getSecEdgar8kLocalSmokeQualificationReferenceForPlan: () => mocks.qualificationReference,
   deriveSecEdgar8kRequestPlanFromSubmissions: mocks.derivePlan,
 }));
 vi.mock("@/infrastructure/intelligence/sec-edgar-8k-local-smoke-authorization", () => ({ SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS: mocks.authorizations }));
@@ -32,6 +35,7 @@ import { runSecEdgar8kLocalSmoke } from "@/infrastructure/intelligence/sec-edgar
 const contact = "Synthetic Test Operator <sec-test@example.invalid>";
 const scope = {
   authorizationId: "test-only-synthetic-permit",
+  qualificationReference: mocks.qualificationReference,
   cik: "0000789019",
   accession: "0001193125-23-255762",
   form: "8-K",
@@ -145,6 +149,13 @@ describe("SEC EDGAR bounded local smoke transport", () => {
   it("honors an exact staged permit reference instead of substituting another permit", async () => {
     freshPermit();
     expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact, authorizationId: "different-permit-id" })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_AUTHORIZATION_REQUIRED" });
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
+  it("rejects a permit whose qualification reference differs from the authentic plan before network", async () => {
+    freshPermit();
+    (mocks.authorizations[0] as Record<string, unknown>).qualificationReference = `sec-edgar-8k-local-smoke-qualification:${"b".repeat(64)}`;
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_AUTHORIZATION_REQUIRED" });
     expect(mocks.request).not.toHaveBeenCalled();
   });
 

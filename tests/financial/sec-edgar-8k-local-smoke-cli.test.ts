@@ -6,26 +6,30 @@ const mocks = vi.hoisted(() => ({
   request: vi.fn(),
   parseQualification: vi.fn(),
   createPlan: vi.fn(),
+  evaluateQualification: vi.fn(),
   run: vi.fn(),
 }));
 
 vi.mock("node:https", () => ({ request: mocks.request }));
 vi.mock("@/domain/intelligence/sec-edgar-8k-event-source-qualification", () => ({
-  SEC_EDGAR_8K_CODE_PINNED_QUALIFICATIONS: mocks.records,
-  SEC_EDGAR_8K_USAGES: ["ACQUISITION", "AUTHORITY_ISSUANCE", "COMMERCIAL_USE", "NORMALIZED_STORAGE", "RAW_STORAGE", "REDISTRIBUTION", "RETENTION"],
-  parseSecEdgar8kQualification: mocks.parseQualification,
-  createSecEdgar8kRequestPlan: mocks.createPlan,
+  createSecEdgar8kLocalSmokeRequestPlan: mocks.createPlan,
+}));
+vi.mock("@/domain/intelligence/sec-edgar-8k-local-smoke-qualification", () => ({
+  SEC_EDGAR_8K_LOCAL_SMOKE_QUALIFICATION_PINS: mocks.records,
+  parseSecEdgar8kLocalSmokeQualification: mocks.parseQualification,
+  evaluateSecEdgar8kLocalSmokeQualification: mocks.evaluateQualification,
 }));
 vi.mock("@/infrastructure/intelligence/sec-edgar-8k-local-smoke-authorization", () => ({ SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS: mocks.permits }));
 vi.mock("@/infrastructure/intelligence/sec-edgar-8k-local-smoke-runner", () => ({ runSecEdgar8kLocalSmoke: mocks.run }));
 
 import { runSecEdgar8kSmokeCli } from "@/infrastructure/intelligence/sec-edgar-8k-local-smoke-cli";
 
-const reference = `sec-edgar-8k-qualification:${"a".repeat(64)}`;
+const reference = `sec-edgar-8k-local-smoke-qualification:${"a".repeat(64)}`;
 const contact = "Synthetic Test Operator <sec-test@example.invalid>";
-const qualification = { status: "QUALIFIED", qualificationId: reference, approvals: [{ usage: "ACQUISITION" }] };
+const qualification = { status: "APPROVED_FOR_LOCAL_SMOKE", qualificationReference: reference };
 const permit = {
   authorizationId: "synthetic-permit-001",
+  qualificationReference: reference,
   cik: "0000789019",
   accession: "0001193125-23-255762",
   form: "8-K",
@@ -45,6 +49,7 @@ describe("SEC local-smoke CLI", () => {
     mocks.createPlan.mockReset();
     mocks.run.mockReset();
     mocks.parseQualification.mockReturnValue({ status: "VALID", qualification });
+    mocks.evaluateQualification.mockReturnValue({ status: "APPROVED_FOR_LOCAL_SMOKE", qualification });
     mocks.createPlan.mockReturnValue({ authenticSyntheticPlan: true });
     mocks.run.mockResolvedValue({ status: "VERIFIED", evidence: { status: "synthetic-only" } });
   });
@@ -113,6 +118,16 @@ describe("SEC local-smoke CLI", () => {
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
+  it("rejects a permit pinned to a different smoke qualification reference", async () => {
+    mocks.records.push({ reference, material: { synthetic: true } });
+    mocks.permits.push({ ...permit, qualificationReference: `sec-edgar-8k-local-smoke-qualification:${"b".repeat(64)}`, expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() });
+    const result = await runSecEdgar8kSmokeCli(["--execute", "--qualification-ref", reference, "--permit-id", "synthetic-permit-001"], contact);
+    expect(result.output).toContain("SEC_SMOKE_AUTHORIZATION_REQUIRED");
+    expect(mocks.createPlan).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
   it("blocks invalid qualification and expired or ambiguous permits", async () => {
     mocks.records.push({ reference, material: { synthetic: true } });
     mocks.parseQualification.mockReturnValue({ status: "INVALID", blocker: "SEC_EDGAR_8K_QUALIFICATION_INVALID" });
@@ -147,6 +162,7 @@ describe("SEC local-smoke CLI", () => {
       fileCount: 1,
       attempts: 1,
       redirectHost: "data.sec.gov",
+      approvals: [],
     }));
     expect(mocks.run).toHaveBeenCalledWith({ initialPlan: { authenticSyntheticPlan: true }, operatorContact: contact, authorizationId: "synthetic-permit-001" });
     expect(result.output).not.toContain(contact);

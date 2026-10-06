@@ -4,7 +4,8 @@ import type { IncomingMessage } from "node:http";
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { types as utilTypes } from "node:util";
-import { SEC_EDGAR_8K_ENDPOINT_PROFILES, deriveSecEdgar8kRequestPlanFromSubmissions, isAuthenticSecEdgar8kRequestPlan, isCurrentlyQualifiedSecEdgar8kRequestPlan, type SecEdgar8kRequestPlan } from "@/domain/intelligence/sec-edgar-8k-event-source-qualification";
+import { SEC_EDGAR_8K_ENDPOINT_PROFILES, deriveSecEdgar8kRequestPlanFromSubmissions, getSecEdgar8kLocalSmokeQualificationReferenceForPlan, isAuthenticSecEdgar8kRequestPlan, isCurrentlySecEdgar8kLocalSmokeQualifiedRequestPlan, type SecEdgar8kRequestPlan } from "@/domain/intelligence/sec-edgar-8k-event-source-qualification";
+import { SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE } from "@/domain/intelligence/sec-edgar-8k-local-smoke-scope";
 import { SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS } from "./sec-edgar-8k-local-smoke-authorization";
 
 export type SecEdgar8kTransportFailureCode = "SEC_SMOKE_AUTHORIZATION_REQUIRED" | "SEC_SMOKE_AUTHORIZATION_ALREADY_USED" | "SEC_SMOKE_OPERATOR_CONTACT_REQUIRED" | "SEC_SMOKE_REQUEST_PLAN_INVALID" | "SEC_SMOKE_SOURCE_NOT_CURRENTLY_QUALIFIED" | "SEC_SMOKE_HISTORY_PREFLIGHT_REQUIRED" | "SEC_SMOKE_RUN_LIMIT_EXCEEDED" | "SEC_SMOKE_REDIRECT_REJECTED" | "SEC_SMOKE_HTTP_STATUS_REJECTED" | "SEC_SMOKE_CONTENT_TYPE_REJECTED" | "SEC_SMOKE_RESPONSE_TOO_LARGE" | "SEC_SMOKE_TIMEOUT" | "SEC_SMOKE_ABORTED" | "SEC_SMOKE_NETWORK_ERROR";
@@ -16,20 +17,7 @@ export type SecEdgar8kTransportResult =
 type StagedAdapterCode = import("./sec-edgar-8k-response-adapter").SecEdgar8kResponseAdapterCode;
 export type SecEdgar8kStagedResult = SecEdgar8kTransportResult | Readonly<{ status: "BLOCKED"; code: StagedAdapterCode }>;
 
-export const SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE = Object.freeze({
-  company: "Microsoft Corporation",
-  cik: "0000789019",
-  form: "8-K",
-  accession: "0001193125-23-255762",
-  filingDate: "2023-10-13",
-  acceptanceUtc: "2023-10-13T08:37:32.000Z",
-  primaryDocument: "d537928d8k.htm",
-  profileIds: Object.freeze(["COMPANY_SUBMISSIONS_JSON", "SUBMISSIONS_HISTORY_JSON", "FILING_INDEX"] as const),
-  maxRequests: 3,
-  minimumIntervalMs: 1000,
-  timeoutMs: 10_000,
-  maxResponseBytes: 2 * 1024 * 1024,
-} as const);
+export { SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE } from "@/domain/intelligence/sec-edgar-8k-local-smoke-scope";
 
 const failure = (code: SecEdgar8kTransportFailureCode): SecEdgar8kTransportResult => Object.freeze({ status: "BLOCKED", code });
 const CONTACT = /^[^\r\n<>]{2,80}\s+<[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>$/;
@@ -81,7 +69,7 @@ function matchingAuthorization(plans: readonly SecEdgar8kRequestPlan[], now: str
   return SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.find((authorization) =>
     authorization.cik === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik && authorization.accession === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession && authorization.form === "8-K" &&
     authorization.minimumIntervalMs >= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs && authorization.maxRequests <= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests && Date.parse(now) < Date.parse(authorization.expiresAt) && plans.length <= authorization.maxRequests &&
-    plans.every((plan) => authorization.profileIds.includes(plan.profileId as "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON" | "FILING_INDEX") && plan.userAgentIdentityRef === authorization.userAgentIdentityRef)
+    plans.every((plan) => authorization.profileIds.includes(plan.profileId as "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON" | "FILING_INDEX") && plan.userAgentIdentityRef === authorization.userAgentIdentityRef && getSecEdgar8kLocalSmokeQualificationReferenceForPlan(plan) === authorization.qualificationReference)
   );
 }
 
@@ -221,14 +209,14 @@ export async function acquireSecEdgar8kManifestFirstExchange(input: Readonly<{ i
   if (signal?.aborted) return failure("SEC_SMOKE_ABORTED");
   const initialPlan = input.initialPlan;
   if (!validPlan(initialPlan) || initialPlan.profileId !== "COMPANY_SUBMISSIONS_JSON") return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
-  if (!isCurrentlyQualifiedSecEdgar8kRequestPlan(initialPlan, new Date().toISOString())) return failure("SEC_SMOKE_SOURCE_NOT_CURRENTLY_QUALIFIED");
+  if (!isCurrentlySecEdgar8kLocalSmokeQualifiedRequestPlan(initialPlan, new Date().toISOString())) return failure("SEC_SMOKE_SOURCE_NOT_CURRENTLY_QUALIFIED");
   if (!isValidSecEdgar8kOperatorContact(input.operatorContact)) return failure("SEC_SMOKE_OPERATOR_CONTACT_REQUIRED");
   const authorizationCandidates = SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.filter((candidate) =>
     (!hasAuthorizationId || candidate.authorizationId === input.authorizationId) &&
     candidate.cik === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik && candidate.accession === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession && candidate.form === "8-K" &&
     candidate.maxRequests === SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests &&
     candidate.minimumIntervalMs >= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs && Date.now() < Date.parse(candidate.expiresAt) &&
-    candidate.userAgentIdentityRef === initialPlan.userAgentIdentityRef && ["COMPANY_SUBMISSIONS_JSON", "SUBMISSIONS_HISTORY_JSON", "FILING_INDEX"].every((profile) => candidate.profileIds.includes(profile as "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON" | "FILING_INDEX"))
+    candidate.userAgentIdentityRef === initialPlan.userAgentIdentityRef && candidate.qualificationReference === getSecEdgar8kLocalSmokeQualificationReferenceForPlan(initialPlan) && ["COMPANY_SUBMISSIONS_JSON", "SUBMISSIONS_HISTORY_JSON", "FILING_INDEX"].every((profile) => candidate.profileIds.includes(profile as "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON" | "FILING_INDEX"))
   );
   if (authorizationCandidates.length === 0) return failure("SEC_SMOKE_AUTHORIZATION_REQUIRED");
   const authorization = authorizationCandidates.find((candidate) => !usedAuthorizations.has(candidate));
@@ -241,7 +229,7 @@ export async function acquireSecEdgar8kManifestFirstExchange(input: Readonly<{ i
   let requestCount = 0;
   const authorizedNow = (plan: SecEdgar8kRequestPlan) => Date.now() < Date.parse(authorization.expiresAt) &&
     SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.includes(authorization) && authorization.profileIds.includes(plan.profileId as "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON" | "FILING_INDEX") &&
-    plan.userAgentIdentityRef === authorization.userAgentIdentityRef && isCurrentlyQualifiedSecEdgar8kRequestPlan(plan, new Date().toISOString());
+    plan.userAgentIdentityRef === authorization.userAgentIdentityRef && authorization.qualificationReference === getSecEdgar8kLocalSmokeQualificationReferenceForPlan(plan) && isCurrentlySecEdgar8kLocalSmokeQualifiedRequestPlan(plan, new Date().toISOString());
   const requestStage = async (plan: SecEdgar8kRequestPlan): Promise<SecEdgar8kTransportFailureCode | null> => {
     if (requestCount >= authorization.maxRequests || requestCount >= SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests) return "SEC_SMOKE_RUN_LIMIT_EXCEEDED";
     if (!validPlan(plan)) return "SEC_SMOKE_REQUEST_PLAN_INVALID";
@@ -302,7 +290,7 @@ export async function acquireSecEdgar8kLocalSmokeExchange(input: Readonly<{ plan
   if (!hasDenseNativeArray(candidatePlans)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
   if (candidatePlans.length > SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests) return failure("SEC_SMOKE_RUN_LIMIT_EXCEEDED");
   if (candidatePlans.length === 0 || !candidatePlans.every(validPlan)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
-  if (!candidatePlans.every((plan) => isCurrentlyQualifiedSecEdgar8kRequestPlan(plan, new Date().toISOString()))) return failure("SEC_SMOKE_SOURCE_NOT_CURRENTLY_QUALIFIED");
+  if (!candidatePlans.every((plan) => isCurrentlySecEdgar8kLocalSmokeQualifiedRequestPlan(plan, new Date().toISOString()))) return failure("SEC_SMOKE_SOURCE_NOT_CURRENTLY_QUALIFIED");
   if (!isValidSecEdgar8kOperatorContact(input.operatorContact)) return failure("SEC_SMOKE_OPERATOR_CONTACT_REQUIRED");
   const plans = candidatePlans as readonly SecEdgar8kRequestPlan[];
   // A history URL must be selected from the first SEC response before it is
@@ -317,7 +305,7 @@ export async function acquireSecEdgar8kLocalSmokeExchange(input: Readonly<{ plan
   // per-run request budget. Failed runs require a separately issued permit.
   usedAuthorizations.add(authorization);
   const userAgent = `MoneyMachine/1.0 (${input.operatorContact})`;
-  const stillAuthorized = () => Date.now() < Date.parse(authorization.expiresAt) && SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.includes(authorization) && plans.every((plan) => isCurrentlyQualifiedSecEdgar8kRequestPlan(plan, new Date().toISOString()));
+  const stillAuthorized = () => Date.now() < Date.parse(authorization.expiresAt) && SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.includes(authorization) && plans.every((plan) => authorization.qualificationReference === getSecEdgar8kLocalSmokeQualificationReferenceForPlan(plan) && isCurrentlySecEdgar8kLocalSmokeQualifiedRequestPlan(plan, new Date().toISOString()));
   const observations: SecEdgar8kTransportObservation[] = [];
   const privateResponses: { plan: SecEdgar8kRequestPlan; bytes: Buffer }[] = [];
   let requestCount = 0;
@@ -373,6 +361,6 @@ export const SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN = Object.freeze({
     Object.freeze({ profileId: "FILING_INDEX", url: "https://www.sec.gov/Archives/edgar/data/789019/000119312523255762/0001193125-23-255762-index.htm", purpose: "One selected filing index, not a crawl." }),
   ]),
   conditionalHistoryRequest: Object.freeze({ profileId: "SUBMISSIONS_HISTORY_JSON", rule: "Only after the current submissions manifest is validated and the selected accession is absent from recent, the server selects exactly one CIK-owned history filename whose inclusive filingFrom/filingTo range covers 2023-10-13. That response must validate and contain the exact filing before the filing index is requested. No filename guessing, fan-out, caller-supplied history path, retries, or budget reset." }),
-  missing: Object.freeze(["SEC_EDGAR_8K_QUALIFICATION_NOT_PINNED", "LOCAL_SMOKE_AUTHORIZATION_REGISTRY_EMPTY", "REAL_OPERATOR_CONTACT_NOT_SUPPLIED", "NO_LIVE_SEC_RESPONSE_HAS_BEEN_RECONCILED"]),
+  missing: Object.freeze(["SEC_LOCAL_SMOKE_QUALIFICATION_NOT_PINNED", "LOCAL_SMOKE_AUTHORIZATION_REGISTRY_EMPTY", "REAL_OPERATOR_CONTACT_NOT_SUPPLIED", "NO_LIVE_SEC_RESPONSE_HAS_BEEN_RECONCILED"]),
   networkRequests: 0,
 });
