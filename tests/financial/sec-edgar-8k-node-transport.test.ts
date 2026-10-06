@@ -37,7 +37,6 @@ const scope = {
   form: "8-K",
   profileIds: ["COMPANY_SUBMISSIONS_JSON", "SUBMISSIONS_HISTORY_JSON", "FILING_INDEX"],
   userAgentIdentityRef: "approved-identity:synthetic-test",
-  operatorContact: contact,
   expiresAt: "2026-10-07T00:00:00.000Z",
   maxRequests: 3,
   minimumIntervalMs: 1000,
@@ -133,6 +132,19 @@ describe("SEC EDGAR bounded local smoke transport", () => {
     mocks.authorizations.splice(0);
     expect(await executeSecEdgar8kLocalSmoke({ plans, operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_AUTHORIZATION_REQUIRED" });
     expect(await executeSecEdgar8kLocalSmoke({ plans, operatorContact: "Money Machine" })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_OPERATOR_CONTACT_REQUIRED" });
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
+  it("binds the request plan to the permit identity reference", async () => {
+    freshPermit();
+    const mismatched = { ...plans[0]!, userAgentIdentityRef: "approved-identity:other" };
+    expect(await executeSecEdgar8kLocalSmoke({ plans: [mismatched, plans[1]], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_AUTHORIZATION_REQUIRED" });
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
+  it("honors an exact staged permit reference instead of substituting another permit", async () => {
+    freshPermit();
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact, authorizationId: "different-permit-id" })).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_AUTHORIZATION_REQUIRED" });
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
