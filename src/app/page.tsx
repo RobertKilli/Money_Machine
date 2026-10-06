@@ -8,9 +8,10 @@ export default function HomePage() {
         <h1 className="text-5xl font-semibold tracking-tight">A simulation-first financial workflow.</h1>
         <p className="text-lg leading-8 text-[var(--muted)]">Virtual capital, deterministic rules, and auditable state transitions. No real money, brokers, or investment execution.</p>
       </div>
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-3">
         <Link className="rounded-lg bg-[var(--accent)] px-5 py-3 font-semibold text-[#07120f]" href="/login">Sign in</Link>
         <Link className="rounded-lg border border-[var(--border)] px-5 py-3 text-[var(--muted)]" href="/dashboard">Dashboard</Link>
+        <Link className="rounded-lg border border-[var(--border)] px-5 py-3 text-[var(--muted)]" href="/intelligence/events/review">Evidence review queue</Link>
       </div>
     </main>
   );

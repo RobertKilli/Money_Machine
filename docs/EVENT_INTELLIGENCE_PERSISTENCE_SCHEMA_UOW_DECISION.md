@@ -156,3 +156,10 @@ The SEC provenance decision also leaves exact document-byte persistence/readback
 ## SEC exact-byte storage boundary
 
 SEC document `bytea`, immutable manifest and package membership are selected as a technical first-version candidate so a single PostgreSQL transaction can reread/hash bytes and atomically commit authority. Storage remains a separate design-only decision: no migration/UoW/runtime implementation, raw-byte approval, retention approval or event persistence approval is granted. Production stays `BLOCKED_BACKEND_UNAPPROVED`. See [SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md](SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md).
+
+## Evidence queue read-model schema review correction
+
+The child read-model decision `event-intelligence-evidence-review-queue-read-model-decision/v1` is design-only and recommends immutable derived view-model snapshots only after separate upstream, scope, rights, and retention approvals. Its first review incorrectly stopped at `20260916212845_m5_mapping_lineage.sql` and said the applied M5 mapping key lacked `source_lineage_id`. Later tracked migrations add that column/FK in `20260918181115_m5_mapping_source_lineage.sql`, replace the initial key with the eight-column lineage identity in `20260918215043_m5_raw_source_lineage.sql`, and add a separate seven-column assessment key in `20260920161300_m5_suspicious_assessment_authority.sql`. The existing eight-column mapping descriptor is supported by applied history. This corrects the read-model report; no child read-model or event-authority FK is inferred from the M5 key.
+# Queue snapshot provenance scope
+
+The queue snapshot child decision separates explicit review-universe scope from per-snapshot typed provenance. SEC and M5 asset-mapping keys are applied only within their own authority families; issuer-evidence, event-claim/correction and discovery source-record parents are absent from applied migrations. No queue FK or storage approval follows from the catalog. See [scope/provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md).

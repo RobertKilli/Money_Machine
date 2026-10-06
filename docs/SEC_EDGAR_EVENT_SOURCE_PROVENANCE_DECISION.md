@@ -124,3 +124,6 @@ The separately scoped synthetic runtime now implements the eleven authority tabl
 The previously blocked exact-byte backend is now a technical candidate decision: PostgreSQL `bytea`, immutable artifact manifest and package membership share one transaction; bounded readback rehash is required before authority commit and on every authoritative read. Supabase Storage and external object storage are not selected for v1 due to cross-service atomicity/recovery boundaries. This decision does not implement or approve persistence, acquisition, raw-byte storage, retention or usage. Production remains `BLOCKED_BACKEND_UNAPPROVED`. See [SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md](SEC_EVENT_DOCUMENT_BYTE_STORAGE_DECISION.md).
 
 Independent [runtime pre-PR review evidence](SEC_EDGAR_EVENT_SOURCE_PROVENANCE_RUNTIME_FINAL_REVIEW.md) supersedes checkpoint implementation totals; it leaves this versioned decision and all production approvals unchanged.
+# Evidence queue snapshot references
+
+SEC profile, filing, document, package/member, acquisition receipt, and lineage references remain SEC-family-specific. A receipt is retrieval/availability metadata, not document identity; snapshot provenance does not create event authority or independent corroboration. See [scope/provenance decision](EVENT_INTELLIGENCE_EVIDENCE_REVIEW_QUEUE_SNAPSHOT_SCOPE_PROVENANCE_DECISION.md).

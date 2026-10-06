@@ -1,0 +1,29 @@
+{
+  "contractVersion": "event-intelligence-source-portfolio-routing-production/v1",
+  "selectedSourcePortfolio": null,
+  "activeRoutes": [],
+  "credentialReferences": [],
+  "scheduler": "BLOCKED",
+  "acquisition": "BLOCKED",
+  "sourceRetrieval": "BLOCKED",
+  "rawStorage": "BLOCKED",
+  "normalizedStorage": "BLOCKED",
+  "persistence": "BLOCKED",
+  "mapping": "BLOCKED",
+  "correctionResolution": "BLOCKED",
+  "corroboration": "BLOCKED",
+  "eventAuthority": "BLOCKED",
+  "signal": "BLOCKED",
+  "trading": "BLOCKED",
+  "approvals": {
+    "ACQUISITION": "NOT_APPROVED",
+    "PROCESSING": "NOT_APPROVED",
+    "RAW_STORAGE": "NOT_APPROVED",
+    "METADATA_STORAGE": "NOT_APPROVED",
+    "NORMALIZED_STORAGE": "NOT_APPROVED",
+    "PERSISTENCE": "NOT_APPROVED",
+    "RETENTION": "NOT_APPROVED",
+    "REDISTRIBUTION": "NOT_APPROVED",
+    "COMMERCIAL_USE": "NOT_APPROVED"
+  }
+}
