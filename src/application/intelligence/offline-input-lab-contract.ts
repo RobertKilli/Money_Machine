@@ -1,6 +1,7 @@
 export const OFFLINE_INPUT_LAB_VERSION = "event-intelligence-offline-input-lab/v1" as const;
 export const OFFLINE_INPUT_LAB_MAX_RECORDS = 3;
 export const OFFLINE_INPUT_LAB_MAX_PAYLOAD_BYTES = 16 * 1024;
+/** Measured with JavaScript String.length and the HTML maxlength attribute: UTF-16 code units. */
 export const OFFLINE_INPUT_LAB_MAX_HEADLINE_LENGTH = 160;
 
 export const OFFLINE_INPUT_LAB_PROFILES = ["issuer-mapping", "rights-blocked", "unresolved-correction"] as const;
@@ -94,7 +95,7 @@ export function parseOfflineInputLabInput(value: unknown): OfflineInputLabInputP
         continue;
       }
       if (typeof row.headline !== "string" || row.headline.length === 0 || row.headline.length > OFFLINE_INPUT_LAB_MAX_HEADLINE_LENGTH || row.headline.trim() !== row.headline || controls.test(row.headline) || row.headline.normalize("NFC") !== row.headline) {
-        errors.push(invalid(`${fieldBase}.headline`, "INPUT_INVALID", "Use a non-empty synthetic headline up to 160 characters."));
+        errors.push(invalid(`${fieldBase}.headline`, "INPUT_INVALID", "Use a non-empty synthetic headline up to 160 UTF-16 code units."));
         continue;
       }
       const timestamps = ["publishedAt", "discoveredAt", "receivedAt", "recordedAt"] as const;

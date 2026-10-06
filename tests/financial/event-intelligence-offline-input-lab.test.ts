@@ -141,6 +141,13 @@ describe("bounded offline review input lab", () => {
     const tooLong = cloneInput();
     tooLong.records[0] = Object.freeze({ ...tooLong.records[0]!, headline: "x".repeat(161) });
     expect(parseOfflineInputLabInput(tooLong)).toMatchObject({ status: "INVALID" });
+    const exactHeadline = cloneInput();
+    exactHeadline.records[0] = Object.freeze({ ...exactHeadline.records[0]!, headline: "😀".repeat(80) });
+    expect(exactHeadline.records[0]?.headline.length).toBe(160);
+    expect(parseOfflineInputLabInput(exactHeadline).status).toBe("VALID");
+    exactHeadline.records[0] = Object.freeze({ ...exactHeadline.records[0]!, headline: "😀".repeat(81) });
+    expect(exactHeadline.records[0]?.headline.length).toBe(162);
+    expect(parseOfflineInputLabInput(exactHeadline)).toMatchObject({ status: "INVALID", errors: [{ field: "records.0.headline" }] });
     const unknownEnum = cloneInput();
     unknownEnum.records[0] = Object.freeze({ ...unknownEnum.records[0]!, jurisdiction: "CA" as never });
     expect(parseOfflineInputLabInput(unknownEnum).status).toBe("INVALID");
@@ -161,6 +168,23 @@ describe("bounded offline review input lab", () => {
     const tooLarge = formFrom(baseline);
     tooLarge.append("extra", "x".repeat(OFFLINE_INPUT_LAB_MAX_PAYLOAD_BYTES));
     expect(parseOfflineInputLabFormData(tooLarge)).toMatchObject({ status: "INVALID", errors: [{ code: "INPUT_TOO_LARGE" }] });
+    const exactlyAtByteLimit = new FormData();
+    exactlyAtByteLimit.append("x", "a".repeat(OFFLINE_INPUT_LAB_MAX_PAYLOAD_BYTES - 1));
+    const exactResult = parseOfflineInputLabFormData(exactlyAtByteLimit);
+    expect(exactResult.status).toBe("INVALID");
+    if (exactResult.status === "INVALID") {
+      expect(exactResult.errors.some(error => error.code === "UNKNOWN_FIELD")).toBe(true);
+      expect(exactResult.errors.some(error => error.code === "INPUT_TOO_LARGE")).toBe(false);
+    }
+    const oneByteOver = new FormData();
+    oneByteOver.append("x", "a".repeat(OFFLINE_INPUT_LAB_MAX_PAYLOAD_BYTES));
+    expect(parseOfflineInputLabFormData(oneByteOver)).toMatchObject({ status: "INVALID", errors: [{ code: "INPUT_TOO_LARGE" }] });
+    const file = new FormData();
+    file.append("records.0.headline", new File(["synthetic"], "input.txt", { type: "text/plain" }));
+    expect(parseOfflineInputLabFormData(file)).toMatchObject({ status: "INVALID", errors: expect.arrayContaining([expect.objectContaining({ field: "records.0.headline", code: "INPUT_INVALID" })]) });
+    const badIncluded = formFrom(baseline);
+    badIncluded.set("records.0.included", "maybe");
+    expect(parseOfflineInputLabFormData(badIncluded)).toMatchObject({ status: "INVALID", errors: expect.arrayContaining([expect.objectContaining({ field: "records.0.included", code: "INPUT_INVALID" })]) });
   });
 
   it("does not read caller accessors and gates before inspecting input outside development", async () => {
@@ -171,7 +195,10 @@ describe("bounded offline review input lab", () => {
     expect(rejected.status).toBe("INVALID");
     expect(getterRead).toBe(false);
 
-    vi.stubEnv("NODE_ENV", "test");
+  });
+
+  it.each(["production", "test", "", "staging", undefined])("direct runner gates before reading application input for NODE_ENV=%s", async environment => {
+    vi.stubEnv("NODE_ENV", environment);
     const hostile = new Proxy({}, { get() { throw new Error("must not inspect before gate"); } });
     await expect(runOfflineReviewInputLab(hostile)).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
   });
