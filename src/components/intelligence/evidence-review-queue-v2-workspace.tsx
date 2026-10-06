@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { EvidenceReviewQueueV2ViewModel, EvidenceReviewQueueV2ViewModelItem } from "@/application/intelligence/project-event-intelligence-evidence-review-queue-v2-view-model";
 
-type Props = Readonly<{ model: EvidenceReviewQueueV2ViewModel; idPrefix: "queue-v2-v1" | "queue-v2-v2" | "queue-v2-compare-v2" }>;
+type Props = Readonly<{ model: EvidenceReviewQueueV2ViewModel; idPrefix: "queue-v2-v1" | "queue-v2-v2" | "queue-v2-compare-v2" | "input-lab-v2" }>;
 const STATUSES = ["OPEN", "BLOCKED"] as const;
 const PRIORITIES = ["URGENT_RETRACTION_REVIEW", "URGENT_CORRECTION_REVIEW", "CONFLICT_REVIEW", "BLOCKED_RIGHTS", "JURISDICTION_UNKNOWN", "MAPPING_REQUIRED", "PRIMARY_SOURCE_MISSING", "ROUTINE_DISCOVERY_REVIEW", "NO_ACTION_DUPLICATE"] as const;
 const TYPES = ["PRIMARY_SOURCE_RETRIEVAL_REVIEW", "ISSUER_MAPPING_REVIEW", "ASSET_MAPPING_REVIEW", "CORRECTION_LINEAGE_REVIEW", "RETRACTION_REVIEW", "SOURCE_CONFLICT_REVIEW", "ORIGIN_GROUP_REVIEW", "RIGHTS_APPROVAL_REVIEW", "JURISDICTION_REVIEW", "LIFECYCLE_REVIEW", "DUPLICATE_NO_ACTION", "BLOCKED_UNSUPPORTED_CORROBORATION", "NON_AUTHORITATIVE_REVIEW_COMPLETE"] as const;

@@ -7,7 +7,8 @@ export type OfflineReviewWorkbenchPage =
   | "snapshot"
   | "queue-v2"
   | "review-session"
-  | "review-readiness";
+  | "review-readiness"
+  | "input-lab";
 
 const DEMO = "/intelligence/events/review/offline-demo";
 
@@ -23,6 +24,8 @@ const TECHNICAL_LINKS: ReadonlyArray<{ page: OfflineReviewWorkbenchPage; href: s
   { page: "review-session", href: `${DEMO}/review-session`, label: "Review-session" },
   { page: "review-readiness", href: `${DEMO}/review-readiness`, label: "Review readiness" },
 ];
+
+const INPUT_LAB_LINK = { page: "input-lab" as const, href: `${DEMO}/input-lab`, label: "Syntetiske input-laboratorium" };
 
 function NavigationLinks({ links, activePage }: {
   links: ReadonlyArray<{ page: OfflineReviewWorkbenchPage; href: string; label: string }>;
@@ -46,6 +49,10 @@ export function OfflineReviewWorkbenchNavigation({ activePage }: { activePage: O
       <section aria-labelledby="offline-review-main-links">
         <h2 id="offline-review-main-links" className="mb-2 text-xs font-bold uppercase tracking-wider text-[var(--muted)]">Hovedflyt</h2>
         <NavigationLinks links={PRIMARY_LINKS} activePage={activePage} />
+        <div className="mt-3 border-t border-[var(--border)] pt-3">
+          <h3 className="mb-1 text-xs font-semibold text-[var(--muted)]">Avgrenset simulering</h3>
+          <NavigationLinks links={[INPUT_LAB_LINK]} activePage={activePage} />
+        </div>
       </section>
       <details open={TECHNICAL_LINKS.some(link => link.page === activePage)} className="min-w-0">
         <summary className="w-fit cursor-pointer rounded px-1 py-1 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">Teknisk innsikt</summary>

@@ -6,6 +6,7 @@ import {
   type NewsDiscoveryCandidate,
 } from "@/domain/intelligence/event-intelligence-news-discovery";
 import type { SyntheticRoutingMaterial } from "@/domain/intelligence/event-intelligence-source-portfolio-routing-decision";
+import type { NewsDiscoveryRecord } from "@/domain/intelligence/event-intelligence-news-discovery";
 import type { EvidenceReviewQueueViewModelItem } from "@/domain/intelligence/event-intelligence-evidence-review-queue-view-model";
 
 export const OFFLINE_REVIEW_DEMO_EARLIER_EVALUATION_AS_OF = "2026-10-02T00:00:00.000Z";
@@ -45,6 +46,10 @@ export type OfflineReviewDemoFixture = Readonly<{
   candidate: NewsDiscoveryCandidate;
   routingMaterial: SyntheticRoutingMaterial;
 }>;
+
+export const OFFLINE_REVIEW_INPUT_PROFILES = Object.freeze(["issuer-mapping", "rights-blocked", "unresolved-correction"] as const);
+export type OfflineReviewInputProfile = typeof OFFLINE_REVIEW_INPUT_PROFILES[number];
+export type OfflineReviewInputEventHint = "PURCHASE_INTENT" | "BOARD_AUTHORIZATION" | "BINDING_AGREEMENT" | "COMPLETED_PURCHASE" | "TREASURY_POLICY" | "CORRECTION_AMENDMENT";
 
 export type OfflineReviewDemoReplayEpisodeFixtures = Readonly<{
   key: "EARLIER" | "LATER";
@@ -248,16 +253,17 @@ const FIXTURE_SPECS: readonly FixtureSpec[] = [
 function scenarioRoutingMaterial(
   candidate: NewsDiscoveryCandidate,
   flags: FixtureSpec["flags"],
-  eventHint: FixtureSpec["eventHint"],
+  eventHint: SyntheticRoutingMaterial["eventHint"],
   evaluatedAsOf: string,
 ): SyntheticRoutingMaterial {
   const isAggregator = candidate.record.sourceType === "NEWS_AGGREGATOR";
-  const jurisdiction = candidate.record.jurisdiction === "US" ? "US_SEC" : "UNKNOWN";
+  const jurisdiction = candidate.record.jurisdiction === "US" ? "US_SEC" : candidate.record.jurisdiction === "GB" ? "GB_LSE" : candidate.record.jurisdiction === "AU" ? "AU_ASX" : "UNKNOWN";
+  const listingScopes = jurisdiction === "US_SEC" ? ["listing:us-sec"] : jurisdiction === "GB_LSE" ? ["listing:lse"] : jurisdiction === "AU_ASX" ? ["listing:asx"] : [];
   return {
     provenance: "SYNTHETIC",
     candidateId: candidate.candidateId,
     jurisdiction,
-    listingScopes: jurisdiction === "US_SEC" ? ["listing:us-sec"] : [],
+    listingScopes,
     eventHint,
     seenFamilies: [isAggregator ? "DISCOVERY_AGGREGATOR" : "ISSUER_ATTRIBUTED_RELEASE"],
     availableFamilies: [],
@@ -282,6 +288,39 @@ function scenarioRoutingMaterial(
     correctionAvailableAt: flags.correctionPresent ? candidate.record.publishedAt : null,
     evaluationAsOf: evaluatedAsOf,
   };
+}
+
+/** Returns a fresh server-owned profile template; caller fields never select source or routing flags. */
+export function createOfflineReviewInputProfile(profile: OfflineReviewInputProfile): Readonly<{
+  record: NewsDiscoveryRecord;
+  routingFlags: FixtureSpec["flags"];
+}> | null {
+  const specification = FIXTURE_SPECS.find(item => item.key === profile);
+  if (!specification || !OFFLINE_REVIEW_INPUT_PROFILES.includes(profile)) return null;
+  return Object.freeze({
+    record: structuredClone(specification.record) as NewsDiscoveryRecord,
+    routingFlags: structuredClone(specification.flags) as FixtureSpec["flags"],
+  });
+}
+
+export function isOfflineReviewInputVariantSupported(profile: OfflineReviewInputProfile, eventHint: OfflineReviewInputEventHint): boolean {
+  if (!OFFLINE_REVIEW_INPUT_PROFILES.includes(profile)) return false;
+  return profile === "unresolved-correction"
+    ? eventHint === "CORRECTION_AMENDMENT"
+    : eventHint !== "CORRECTION_AMENDMENT";
+}
+
+/** Builds routing material only from the fixed profile and an authentic discovery candidate. */
+export function createOfflineReviewInputRoutingMaterial(
+  candidate: NewsDiscoveryCandidate,
+  profile: OfflineReviewInputProfile,
+  eventHint: OfflineReviewInputEventHint,
+  evaluatedAsOf: string,
+): SyntheticRoutingMaterial | null {
+  const specification = FIXTURE_SPECS.find(item => item.key === profile);
+  if (!specification || !OFFLINE_REVIEW_INPUT_PROFILES.includes(profile)) return null;
+  if (!isOfflineReviewInputVariantSupported(profile, eventHint)) return null;
+  return Object.freeze(scenarioRoutingMaterial(candidate, specification.flags, eventHint, evaluatedAsOf));
 }
 
 function createFixturesAt(

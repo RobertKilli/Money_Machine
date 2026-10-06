@@ -6,6 +6,10 @@ Start at `/intelligence/events/review/offline-demo`. The overview explains the f
 
 Use `/intelligence/events/review/offline-demo/replay` to compare two explicit synthetic input sets and their independently composed queues. The earlier set contains mapping and rights material; the later set adds unresolved correction material. This is not general historical retrieval or persistence.
 
+Use `/intelligence/events/review/offline-demo/input-lab` only when you need to vary a bounded synthetic record. The form accepts up to three fixed mapping, rights, and correction profiles, include/omit selections, a short headline, four canonical UTC record times, a common cutoff, four jurisdiction values, and profile-compatible event hints. Submitted text remains a synthetic declaration even if it resembles a real headline. Each run creates fresh records in memory and calls the existing discovery factory and V2 composition (which uses the existing routing API), followed by the V2 projection. Parent discovery rejections remain rejections; no valid default record is substituted. The form is limited to three slots, a 160-character headline, and 16 KiB of application fields. The Next Server Action runtime parses the request first and retains its existing 1 MiB request limit; the application bound is enforced immediately after the action's development gate and before fixture/domain work. Reload clears the laboratory.
+
+The parent V2 composer has no empty-queue representation: it rejects an empty candidate list with `COMPOSITION_INPUT_INVALID`. The input lab reports that actual bounded code and creates no queue or workspace. Non-empty records that survive discovery go through the existing V2 composer, which may still reject an invalid combined set; the page reports accepted, rejected, and composed counts separately.
+
 The shared navigation places snapshot roundtrip, V1/V2 comparison, review session, and review readiness under the native “Teknisk innsikt” disclosure. Each page explains its question and limits before its technical metadata.
 
 ## Existing routes
@@ -19,6 +23,7 @@ The shared navigation places snapshot roundtrip, V1/V2 comparison, review sessio
 | `/intelligence/events/review/offline-demo/queue-v2` | Opt-in V1/V2 contract comparison; equal results demonstrate contract alignment, not changed behavior. |
 | `/intelligence/events/review/offline-demo/review-session` | Evidence inventory owned by one exact in-memory session, not a global evidence history. |
 | `/intelligence/events/review/offline-demo/review-readiness` | Local milestone result and actual queue blockers shown separately. Review routing context A to queue routing context B remains `NOT_ESTABLISHED`. |
+| `/intelligence/events/review/offline-demo/input-lab` | Bounded development-only synthetic form; existing discovery, routing-through-V2-composition, and V2 projection determine actual accepted records and queue results. |
 
 All demo routes and direct loaders require exact `NODE_ENV === "development"`. The ordinary `/intelligence/events/review` route continues to use its blocked production loader and displays no synthetic candidate rows.
 
