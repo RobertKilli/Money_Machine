@@ -1,0 +1,148 @@
+[
+  {
+    "pattern": "apps/web",
+    "expected": [
+      "apps/web"
+    ]
+  },
+  {
+    "pattern": "apps/web/",
+    "expected": [
+      "apps/web/"
+    ]
+  },
+  {
+    "pattern": "./apps/web",
+    "expected": [
+      "./apps/web"
+    ]
+  },
+  {
+    "pattern": "apps/*",
+    "expected": [
+      "apps/admin",
+      "apps/linked",
+      "apps/mobile",
+      "apps/web"
+    ]
+  },
+  {
+    "pattern": "apps/*/",
+    "expected": [
+      "apps/admin",
+      "apps/linked",
+      "apps/mobile",
+      "apps/web"
+    ]
+  },
+  {
+    "pattern": "apps/**",
+    "expected": [
+      "apps/admin",
+      "apps/admin/pages",
+      "apps/linked",
+      "apps/linked/src",
+      "apps/linked/src/app",
+      "apps/linked/src/app/dashboard",
+      "apps/mobile",
+      "apps/web",
+      "apps/web/src",
+      "apps/web/src/app",
+      "apps/web/src/app/dashboard"
+    ]
+  },
+  {
+    "pattern": "apps/**/",
+    "expected": [
+      "apps/admin",
+      "apps/admin/pages",
+      "apps/linked",
+      "apps/linked/src",
+      "apps/linked/src/app",
+      "apps/linked/src/app/dashboard",
+      "apps/mobile",
+      "apps/web",
+      "apps/web/src",
+      "apps/web/src/app",
+      "apps/web/src/app/dashboard"
+    ]
+  },
+  {
+    "pattern": "apps/**/*",
+    "expected": [
+      "apps/admin",
+      "apps/admin/pages",
+      "apps/linked",
+      "apps/linked/src",
+      "apps/linked/src/app",
+      "apps/linked/src/app/dashboard",
+      "apps/mobile",
+      "apps/web",
+      "apps/web/src",
+      "apps/web/src/app",
+      "apps/web/src/app/dashboard"
+    ]
+  },
+  {
+    "pattern": "apps/{web,admin}",
+    "expected": [
+      "apps/admin",
+      "apps/web"
+    ]
+  },
+  {
+    "pattern": "apps/@(web|admin)",
+    "expected": [
+      "apps/admin",
+      "apps/web"
+    ]
+  },
+  {
+    "pattern": "apps/**/app",
+    "expected": [
+      "apps/linked/src/app",
+      "apps/web/src/app"
+    ]
+  },
+  {
+    "pattern": "apps/w?b",
+    "expected": [
+      "apps/web"
+    ]
+  },
+  {
+    "pattern": "apps/[wa]*",
+    "expected": [
+      "apps/admin",
+      "apps/web"
+    ]
+  },
+  {
+    "pattern": "!apps/*",
+    "expected": []
+  },
+  {
+    "pattern": "missing/*",
+    "expected": []
+  },
+  {
+    "pattern": "**",
+    "expected": [
+      "apps",
+      "apps/admin",
+      "apps/admin/pages",
+      "apps/linked",
+      "apps/linked/src",
+      "apps/linked/src/app",
+      "apps/linked/src/app/dashboard",
+      "apps/mobile",
+      "apps/web",
+      "apps/web/src",
+      "apps/web/src/app",
+      "apps/web/src/app/dashboard",
+      "docs",
+      "packages",
+      "packages/lib"
+    ]
+  }
+]

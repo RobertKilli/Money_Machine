@@ -1,4 +1,5 @@
-import { COINBASE_SMOKE_AUTHORITY_REGISTRIES, COINBASE_SMOKE_SCOPE, COINBASE_SMOKE_STATUS, planCoinbaseSmoke, smokeArray, smokeError, smokeFreeze } from "@/application/intelligence/m5-coinbase-smoke-contract";
+import { COINBASE_SMOKE_SCOPE, planCoinbaseSmoke, smokeArray, smokeError, smokeFreeze } from "@/application/intelligence/m5-coinbase-smoke-contract";
+import { createCoinbaseSmokeExecutor } from "@/application/intelligence/m5-coinbase-smoke-composition";
 
 const USAGE = "Usage: npm run m5:coinbase:smoke -- --start <UTC ISO timestamp> --end <UTC ISO timestamp> [--execute --environment LOCAL_SMOKE --authorization <reviewed-reference>]";
 export function parseCoinbaseSmokeArgs(input: unknown) {
@@ -22,9 +23,8 @@ export function runCoinbaseSmokeCli(argv: unknown) {
   if (args.help) return smokeFreeze({ usage: USAGE });
   const plan = planCoinbaseSmoke({ ...COINBASE_SMOKE_SCOPE, start: args.options["--start"], end: args.options["--end"], granularity: 86400 });
   if (!args.execute) return plan;
-  // There is no authority to load. A reference/string is never an executable authority.
-  if (COINBASE_SMOKE_AUTHORITY_REGISTRIES.LOCAL_SMOKE.length === 0) return smokeFreeze({ mode: "EXECUTE", status: "BLOCKED", code: "M5_COINBASE_SMOKE_AUTHORITY_NOT_PINNED", authorityStatus: COINBASE_SMOKE_STATUS, productionStatus: "BLOCKED_BACKEND_UNAPPROVED", requestCount: 0 });
-  return smokeError("OPERATIONAL_ADAPTER_NOT_APPROVED");
+  const result = createCoinbaseSmokeExecutor().executeReference({ config: { ...COINBASE_SMOKE_SCOPE, start: plan.start, end: plan.end, granularity: 86400 }, environment: args.options["--environment"], authorizationReference: args.options["--authorization"] });
+  return smokeFreeze({ mode: "EXECUTE", ...result });
 }
 if (process.argv[1]?.endsWith("m5-coinbase-smoke.ts")) {
   try {

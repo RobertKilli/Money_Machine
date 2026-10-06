@@ -43,7 +43,8 @@ function runReadinessCli(raw: string | Record<string, unknown>, ...args: string[
   const configPath = join(directory, "config.json");
   writeFileSync(configPath, typeof raw === "string" ? raw : JSON.stringify(raw), "utf8");
   try {
-    const result = execFileSync(process.execPath, ["node_modules/tsx/dist/cli.mjs", "--tsconfig", "scripts/tsconfig.json", "scripts/m5-provider-readiness.ts", ...args, ...(args.includes("--config") ? [] : ["--config", configPath])], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    // Exercise the real CLI without the tsx wrapper's unrelated IPC server.
+    const result = execFileSync(process.execPath, ["--import", "tsx", "scripts/m5-provider-readiness.ts", ...args, ...(args.includes("--config") ? [] : ["--config", configPath])], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TSX_TSCONFIG_PATH: "scripts/tsconfig.json" } });
     return { status: 0, stdout: result, stderr: "" };
   } catch (error) {
     const failure = error as { status?: number; stdout?: Buffer | string; stderr?: Buffer | string };
