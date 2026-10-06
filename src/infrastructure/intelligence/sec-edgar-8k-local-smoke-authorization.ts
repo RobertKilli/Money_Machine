@@ -7,6 +7,7 @@ import "server-only";
  */
 export type SecEdgar8kLocalSmokeAuthorization = Readonly<{
   authorizationId: string;
+  qualificationReference: `sec-edgar-8k-local-smoke-qualification:${string}`;
   cik: "0000789019";
   accession: "0001193125-23-255762";
   form: "8-K";

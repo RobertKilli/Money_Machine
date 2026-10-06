@@ -1,10 +1,7 @@
 import "server-only";
 
-import {
-  SEC_EDGAR_8K_CODE_PINNED_QUALIFICATIONS,
-  createSecEdgar8kRequestPlan,
-  parseSecEdgar8kQualification,
-} from "@/domain/intelligence/sec-edgar-8k-event-source-qualification";
+import { createSecEdgar8kLocalSmokeRequestPlan } from "@/domain/intelligence/sec-edgar-8k-event-source-qualification";
+import { evaluateSecEdgar8kLocalSmokeQualification, SEC_EDGAR_8K_LOCAL_SMOKE_QUALIFICATION_PINS, parseSecEdgar8kLocalSmokeQualification } from "@/domain/intelligence/sec-edgar-8k-local-smoke-qualification";
 import { SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS } from "./sec-edgar-8k-local-smoke-authorization";
 import { isValidSecEdgar8kOperatorContact, SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN, SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE } from "./sec-edgar-8k-node-transport";
 import { runSecEdgar8kLocalSmoke } from "./sec-edgar-8k-local-smoke-runner";
@@ -20,7 +17,7 @@ type CliFailureCode =
 export type SecEdgar8kSmokeCliResult = Readonly<{ exitCode: 0 | 1; output: string }>;
 type ParsedCommand = Readonly<{ mode: "DRY_RUN" }> | Readonly<{ mode: "EXECUTE"; qualificationReference: string; authorizationId: string }>;
 
-const QUALIFICATION_REFERENCE = /^sec-edgar-8k-qualification:[a-f0-9]{64}$/;
+const QUALIFICATION_REFERENCE = /^sec-edgar-8k-local-smoke-qualification:[a-f0-9]{64}$/;
 const AUTHORIZATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,95}$/;
 const EXPECTED_PROFILES = ["COMPANY_SUBMISSIONS_JSON", "SUBMISSIONS_HISTORY_JSON", "FILING_INDEX"] as const;
 const blocked = (code: CliFailureCode): SecEdgar8kSmokeCliResult => Object.freeze({ exitCode: 1, output: JSON.stringify({ status: "BLOCKED", code }) });
@@ -52,11 +49,11 @@ export async function runSecEdgar8kSmokeCli(args: unknown, operatorContact: unkn
   if (!command) return blocked("SEC_SMOKE_CLI_ARGUMENTS_INVALID");
   if (command.mode === "DRY_RUN") return success(SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN);
 
-  const qualificationMatches = SEC_EDGAR_8K_CODE_PINNED_QUALIFICATIONS.filter((entry) => entry.reference === command.qualificationReference);
+  const qualificationMatches = SEC_EDGAR_8K_LOCAL_SMOKE_QUALIFICATION_PINS.filter((entry) => entry.reference === command.qualificationReference);
   if (qualificationMatches.length !== 1) return blocked("SEC_SMOKE_QUALIFICATION_REFERENCE_UNAVAILABLE");
   const pinnedRecord = qualificationMatches[0]!;
-  const parsed = parseSecEdgar8kQualification(pinnedRecord.material);
-  if (parsed.status !== "VALID" || parsed.qualification.status !== "QUALIFIED" || parsed.qualification.qualificationId !== command.qualificationReference) {
+  const parsed = parseSecEdgar8kLocalSmokeQualification(pinnedRecord.material);
+  if (parsed.status !== "VALID" || parsed.qualification.status !== "APPROVED_FOR_LOCAL_SMOKE" || parsed.qualification.qualificationReference !== command.qualificationReference || evaluateSecEdgar8kLocalSmokeQualification(parsed.qualification, new Date().toISOString()).status !== "APPROVED_FOR_LOCAL_SMOKE") {
     return blocked("SEC_SMOKE_QUALIFICATION_REFERENCE_UNAVAILABLE");
   }
 
@@ -64,13 +61,13 @@ export async function runSecEdgar8kSmokeCli(args: unknown, operatorContact: unkn
   if (permitMatches.length !== 1) return blocked("SEC_SMOKE_AUTHORIZATION_REQUIRED");
   const permit = permitMatches[0]!;
   const expiresAt = permit ? Date.parse(permit.expiresAt) : Number.NaN;
-  if (!permit || permit.cik !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik || permit.accession !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession || permit.form !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.form || permit.maxRequests !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests || permit.minimumIntervalMs < SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs || permit.profileIds.length !== EXPECTED_PROFILES.length || !EXPECTED_PROFILES.every((profile) => permit.profileIds.includes(profile)) || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt - Date.now() > 24 * 60 * 60 * 1000) {
+  if (!permit || permit.qualificationReference !== command.qualificationReference || permit.cik !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik || permit.accession !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession || permit.form !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.form || permit.maxRequests !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests || permit.minimumIntervalMs < SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs || permit.profileIds.length !== EXPECTED_PROFILES.length || !EXPECTED_PROFILES.every((profile) => permit.profileIds.includes(profile)) || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt - Date.now() > 24 * 60 * 60 * 1000) {
     return blocked("SEC_SMOKE_AUTHORIZATION_REQUIRED");
   }
   if (!isValidSecEdgar8kOperatorContact(operatorContact)) return blocked("SEC_SMOKE_OPERATOR_CONTACT_REQUIRED");
 
   const now = new Date().toISOString();
-  const initialPlan = createSecEdgar8kRequestPlan(parsed.qualification, {
+  const initialPlan = createSecEdgar8kLocalSmokeRequestPlan(parsed.qualification, {
     profileId: "COMPANY_SUBMISSIONS_JSON",
     form: SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.form,
     cik: SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik,
@@ -84,7 +81,7 @@ export async function runSecEdgar8kSmokeCli(args: unknown, operatorContact: unkn
     fileCount: 1,
     attempts: 1,
     redirectHost: "data.sec.gov",
-    approvals: parsed.qualification.approvals.map((approval) => approval.usage).sort(),
+    approvals: [],
   });
   if (!initialPlan) return blocked("SEC_SMOKE_REQUEST_PLAN_INVALID");
 
