@@ -115,6 +115,8 @@ describe("bounded SEC 8-K document observation adapter", () => {
       <script data-note="quoted > character">const sample = '<meta name="description" content="script text"><title>script title</title>';</script>
       <style>.x::after { content: '<meta name="description" content="style text">'; }</style>
       <textarea><meta name="description" content="textarea text"></textarea>
+      <div data-markup="<meta name='description' content='attribute text'>"></div>
+      <template><title>template title</title><meta name="description" content="template text"></template>
       <title>Visible &amp; bounded title</title>
       <meta name="description" content="actual metadata">
     </head></html>`;

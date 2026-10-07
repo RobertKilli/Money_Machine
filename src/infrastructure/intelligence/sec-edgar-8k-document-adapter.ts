@@ -116,6 +116,7 @@ function maskNonMetadataRegions(html: string): Readonly<{ html: string; title: s
   let masked = "";
   let copiedThrough = 0;
   let title: string | null = null;
+  let templateDepth = 0;
   let index = 0;
   while (index < html.length) {
     if (html.startsWith("<!--", index)) {
@@ -126,13 +127,17 @@ function maskNonMetadataRegions(html: string): Readonly<{ html: string; title: s
       index = close + 3;
       continue;
     }
-    if (html[index] !== "<" || !/[A-Za-z]/.test(html[index + 1] ?? "")) { index++; continue; }
+    if (html[index] !== "<" || !/[A-Za-z/]/.test(html[index + 1] ?? "")) { index++; continue; }
     const end = tagEnd(html, index);
     if (end < 0) return null;
     const openTag = html.slice(index, end + 1);
-    const rawName = openTag.match(/^<([A-Za-z][A-Za-z0-9:-]*)\b/)?.[1]?.toLowerCase();
+    const rawName = openTag.match(/^<\s*\/?\s*([A-Za-z][A-Za-z0-9:-]*)\b/)?.[1]?.toLowerCase();
     const closing = /^<\//.test(openTag);
     const selfClosing = /\/\s*>$/.test(openTag);
+    if (rawName === "template") {
+      if (closing) templateDepth = Math.max(0, templateDepth - 1);
+      else if (!selfClosing) templateDepth++;
+    }
     if (rawName && !closing && !selfClosing && rawTextElements.has(rawName)) {
       const closeTag = new RegExp(`<\\/${rawName}\\s*>`, "ig");
       closeTag.lastIndex = end + 1;
@@ -141,7 +146,7 @@ function maskNonMetadataRegions(html: string): Readonly<{ html: string; title: s
       const limit = close.index + close[0].length;
       masked += html.slice(copiedThrough, index) + " ".repeat(limit - index);
       copiedThrough = limit;
-      if (rawName === "title") {
+      if (rawName === "title" && templateDepth === 0) {
         if (title !== null) return null;
         title = html.slice(end + 1, close.index);
       }
@@ -155,26 +160,25 @@ function maskNonMetadataRegions(html: string): Readonly<{ html: string; title: s
 }
 
 function collectMetaTags(html: string): string[] | "LIMIT" | null {
-  const starts = /<meta\b/gi;
   const tags: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = starts.exec(html)) !== null) {
-    const start = match.index;
-    let quote = "";
-    let end = -1;
-    for (let index = starts.lastIndex; index < html.length; index++) {
-      const character = html[index]!;
-      if (quote) {
-        if (character === quote) quote = "";
-      } else if (character === "\"" || character === "'") quote = character;
-      else if (character === ">") { end = index; break; }
-      if (index - start + 1 > MAX_META_TAG_CHARS) return "LIMIT";
-    }
+  let templateDepth = 0;
+  let index = 0;
+  while (index < html.length) {
+    if (html[index] !== "<" || !/[A-Za-z/!?]/.test(html[index + 1] ?? "")) { index++; continue; }
+    const end = tagEnd(html, index);
     if (end < 0) return null;
-    const tag = html.slice(start, end + 1);
-    tags.push(tag);
-    if (tags.length > MAX_META_TAGS) return "LIMIT";
-    starts.lastIndex = end + 1;
+    const tag = html.slice(index, end + 1);
+    const tagName = tag.match(/^<\s*(\/?)\s*([A-Za-z][A-Za-z0-9:-]*)\b/)?.[2]?.toLowerCase();
+    const closing = /^<\s*\//.test(tag);
+    if (tagName === "template") {
+      if (closing) templateDepth = Math.max(0, templateDepth - 1);
+      else if (!/\/\s*>$/.test(tag)) templateDepth++;
+    } else if (templateDepth === 0 && /^<meta\b/i.test(tag)) {
+      if (tag.length > MAX_META_TAG_CHARS) return "LIMIT";
+      tags.push(tag);
+      if (tags.length > MAX_META_TAGS) return "LIMIT";
+    }
+    index = end + 1;
   }
   return tags;
 }
