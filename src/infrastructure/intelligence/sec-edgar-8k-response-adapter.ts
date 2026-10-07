@@ -43,13 +43,20 @@ export type SecEdgar8kFilingEvidence = Readonly<{
 }>;
 
 export type SecEdgar8kResponseAdapterResult =
-  | Readonly<{ status: "BLOCKED"; code: SecEdgar8kResponseAdapterCode; historyRequest?: Readonly<{ filename: string; url: string }> }>
+  | Readonly<{ status: "BLOCKED"; code: SecEdgar8kResponseAdapterCode; diagnostic?: SecEdgar8kSanitizedDiagnostic; historyRequest?: Readonly<{ filename: string; url: string }> }>
   | Readonly<{ status: "VERIFIED"; evidence: SecEdgar8kFilingEvidence }>;
+
+/** Fixed, value-free diagnostics. Never includes response values, excerpts, or contact data. */
+export type SecEdgar8kSanitizedDiagnostic = Readonly<{
+  stage: "TRANSPORT" | "JSON" | "SUBMISSIONS" | "HISTORY_MANIFEST" | "HISTORY_SUBMISSIONS";
+  reason: "HTTP_STATUS_REJECTED" | "CONTENT_TYPE_REJECTED" | "INVALID_UTF8" | "INVALID_JSON" | "FIELD_MISSING" | "FIELD_INVALID" | "PARALLEL_ARRAY_LENGTH_MISMATCH" | "ROW_INVALID";
+  field?: "root" | "cik" | "filings" | "filings.recent" | "filings.recent.accessionNumber" | "filings.recent.form" | "filings.recent.filingDate" | "filings.recent.acceptanceDateTime" | "filings.recent.primaryDocument" | "filings.files" | "filings.files[].name" | "filings.files[].filingFrom" | "filings.files[].filingTo";
+}>;
 
 type Row = { accession: string; form: string; filingDate: string; acceptanceDateTime: string | null; primaryDocument: string };
 type ParsedSubmissions = { cik: string | null; rows: Row[]; files: { name: string; filingFrom: string; filingTo: string }[] };
 const SCOPE = SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE;
-const fail = (code: SecEdgar8kResponseAdapterCode): SecEdgar8kResponseAdapterResult => Object.freeze({ status: "BLOCKED", code });
+const fail = (code: SecEdgar8kResponseAdapterCode, diagnostic?: SecEdgar8kSanitizedDiagnostic): SecEdgar8kResponseAdapterResult => Object.freeze({ status: "BLOCKED", code, ...(diagnostic ? { diagnostic } : {}) });
 const dateOnly = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(`${v}T00:00:00.000Z`)) && new Date(`${v}T00:00:00.000Z`).toISOString().slice(0, 10) === v;
 const utcMillis = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v) && Number.isFinite(Date.parse(v)) && new Date(v).toISOString() === v;
 const acceptedUtc = (v: unknown): string | null => {
@@ -67,53 +74,84 @@ const normalizeCik = (v: unknown): string | null => {
 const decode = (bytes: Buffer): string | null => {
   try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return null; }
 };
-const parseJson = (bytes: Buffer): unknown => {
+type JsonParseResult = Readonly<{ status: "VALID"; value: unknown }> | Readonly<{ status: "INVALID_UTF8" }> | Readonly<{ status: "INVALID_JSON" }>;
+const parseJson = (bytes: Buffer): JsonParseResult => {
   const text = decode(bytes);
-  if (text === null) return null;
-  try { return JSON.parse(text) as unknown; } catch { return null; }
+  if (text === null) return Object.freeze({ status: "INVALID_UTF8" });
+  try { return Object.freeze({ status: "VALID", value: JSON.parse(text) as unknown }); }
+  catch { return Object.freeze({ status: "INVALID_JSON" }); }
 };
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.length <= 1000 && value.every((x) => typeof x === "string");
 function parallelArraysUnequal(value: unknown): boolean {
   if (!isRecord(value)) return false;
   const filings = isRecord(value.filings) ? value.filings : value;
   const source = isRecord(filings.recent) ? filings.recent : filings;
-  const columns = [source.accessionNumber, source.form, source.filingDate, source.acceptanceDateTime, source.primaryDocument];
   const allArrayColumns = Object.values(source).filter(Array.isArray) as unknown[][];
-  return columns.every(Array.isArray) && new Set(allArrayColumns.map((column) => column.length)).size > 1;
+  return new Set(allArrayColumns.map((column) => column.length)).size > 1;
 }
 
-function submissions(value: unknown, allowMissingCik = false): ParsedSubmissions | null {
-  if (!isRecord(value)) return null;
+type SubmissionsValidation = Readonly<{ status: "VALID"; value: ParsedSubmissions }> | Readonly<{ status: "INVALID"; diagnostic: SecEdgar8kSanitizedDiagnostic }>;
+const schemaIssue = (stage: "SUBMISSIONS" | "HISTORY_MANIFEST" | "HISTORY_SUBMISSIONS", reason: SecEdgar8kSanitizedDiagnostic["reason"], field?: NonNullable<SecEdgar8kSanitizedDiagnostic["field"]>): SubmissionsValidation => ({
+  status: "INVALID",
+  diagnostic: Object.freeze({ stage, reason, ...(field ? { field } : {}) }),
+});
+
+function submissions(value: unknown, allowMissingCik = false): SubmissionsValidation {
+  const stage = allowMissingCik ? "HISTORY_SUBMISSIONS" : "SUBMISSIONS";
+  if (!isRecord(value)) return schemaIssue(stage, "FIELD_INVALID", "root");
+  if (value.cik === undefined && !allowMissingCik) return schemaIssue(stage, "FIELD_MISSING", "cik");
   const cik = normalizeCik(value.cik);
-  if ((!cik && !allowMissingCik) || (value.cik !== undefined && !cik)) return null;
+  if ((value.cik !== undefined && !cik) || (!cik && !allowMissingCik)) return schemaIssue(stage, "FIELD_INVALID", "cik");
+  if (value.filings !== undefined && !isRecord(value.filings)) return schemaIssue(stage, "FIELD_INVALID", "filings");
   const wrapped = isRecord(value.filings);
   const filings = wrapped ? value.filings as Record<string, unknown> : value;
   const rawFiles = filings.files;
   const files: ParsedSubmissions["files"] = [];
+  const manifestStage = stage === "SUBMISSIONS" ? "HISTORY_MANIFEST" : "HISTORY_SUBMISSIONS";
   if (rawFiles !== undefined) {
-    if (!Array.isArray(rawFiles) || rawFiles.length > 1000) return null;
+    if (!Array.isArray(rawFiles) || rawFiles.length > 1000) return schemaIssue(manifestStage, "FIELD_INVALID", "filings.files");
     for (const entry of rawFiles) {
-      if (!isRecord(entry) || typeof entry.name !== "string" || !/^CIK\d{10}-submissions-\d+\.json$/.test(entry.name) || !dateOnly(entry.filingFrom) || !dateOnly(entry.filingTo) || entry.filingFrom > entry.filingTo) return null;
+      if (!isRecord(entry)) return schemaIssue(manifestStage, "FIELD_INVALID", "filings.files");
+      if (typeof entry.name !== "string" || !/^CIK\d{10}-submissions-\d+\.json$/.test(entry.name)) return schemaIssue(manifestStage, "FIELD_INVALID", "filings.files[].name");
+      if (!dateOnly(entry.filingFrom)) return schemaIssue(manifestStage, "FIELD_INVALID", "filings.files[].filingFrom");
+      if (!dateOnly(entry.filingTo) || entry.filingFrom > entry.filingTo) return schemaIssue(manifestStage, "FIELD_INVALID", "filings.files[].filingTo");
       files.push({ name: entry.name, filingFrom: entry.filingFrom, filingTo: entry.filingTo });
     }
   }
 
   const recent = filings.recent;
-  if (recent === undefined && !Array.isArray(value.accessionNumber)) return null;
+  if (recent === undefined && !Array.isArray(filings.accessionNumber)) return schemaIssue(stage, "FIELD_MISSING", "filings.recent");
+  if (recent !== undefined && !isRecord(recent)) return schemaIssue(stage, "FIELD_INVALID", "filings.recent");
   const source = recent === undefined ? filings : recent;
-  if (!isRecord(source)) return null;
-  const names = ["accessionNumber", "form", "filingDate", "acceptanceDateTime", "primaryDocument"] as const;
+  if (!isRecord(source)) return schemaIssue(stage, "FIELD_INVALID", "filings.recent");
+  const names = ["accessionNumber", "form", "filingDate", "primaryDocument"] as const;
+  const diagnosticField = (name: string): NonNullable<SecEdgar8kSanitizedDiagnostic["field"]> => `filings.recent.${name}` as NonNullable<SecEdgar8kSanitizedDiagnostic["field"]>;
   const columns = names.map((name) => source[name]);
-  if (!columns.every(isStringArray)) return null;
-  if (columns.some((column) => column.length !== columns[0]!.length)) return null;
-  const [accessions, forms, filingDates, accepted, documents] = columns as [string[], string[], string[], string[], string[]];
+  for (let i = 0; i < names.length; i++) {
+    if (source[names[i]!] === undefined) return schemaIssue(stage, "FIELD_MISSING", diagnosticField(names[i]!));
+    if (!isStringArray(columns[i])) return schemaIssue(stage, "FIELD_INVALID", diagnosticField(names[i]!));
+  }
+  const acceptancePresent = source.acceptanceDateTime !== undefined;
+  if (acceptancePresent && !isStringArray(source.acceptanceDateTime)) return schemaIssue(stage, "FIELD_INVALID", "filings.recent.acceptanceDateTime");
+  const accessions = columns[0] as string[];
+  const forms = columns[1] as string[];
+  const filingDates = columns[2] as string[];
+  const documents = columns[3] as string[];
+  const accepted = acceptancePresent ? source.acceptanceDateTime as string[] : null;
+  const rowCount = accessions.length;
+  if (columns.some((column) => (column as string[]).length !== rowCount) || (accepted && accepted.length !== rowCount)) return schemaIssue(stage, "PARALLEL_ARRAY_LENGTH_MISMATCH", "filings.recent");
   const rows: Row[] = [];
   for (let i = 0; i < accessions.length; i++) {
-    const normalizedAcceptance = accepted[i] === "" ? null : acceptedUtc(accepted[i]);
-    if (!/^\d{10}-\d{2}-\d{6}$/.test(accessions[i]!) || !/^[A-Z0-9/-]{1,20}$/.test(forms[i]!) || !dateOnly(filingDates[i]!) || (accepted[i] !== "" && !normalizedAcceptance) || (documents[i] !== "" && !safeFilename(documents[i]!))) return null;
+    const acceptedValue = accepted?.[i] ?? "";
+    const normalizedAcceptance = acceptedValue === "" ? null : acceptedUtc(acceptedValue);
+    if (!/^\d{10}-\d{2}-\d{6}$/.test(accessions[i]!)) return schemaIssue(stage, "ROW_INVALID", "filings.recent.accessionNumber");
+    if (!/^[A-Z0-9/-]{1,20}$/.test(forms[i]!)) return schemaIssue(stage, "ROW_INVALID", "filings.recent.form");
+    if (!dateOnly(filingDates[i]!)) return schemaIssue(stage, "ROW_INVALID", "filings.recent.filingDate");
+    if (acceptedValue !== "" && !normalizedAcceptance) return schemaIssue(stage, "ROW_INVALID", "filings.recent.acceptanceDateTime");
+    if (documents[i] !== "" && !safeFilename(documents[i]!)) return schemaIssue(stage, "ROW_INVALID", "filings.recent.primaryDocument");
     rows.push({ accession: accessions[i]!, form: forms[i]!, filingDate: filingDates[i]!, acceptanceDateTime: normalizedAcceptance, primaryDocument: documents[i]! });
   }
-  return { cik, rows, files };
+  return Object.freeze({ status: "VALID", value: { cik, rows, files } });
 }
 
 function safeFilename(filename: string): boolean {
@@ -183,11 +221,11 @@ function freezeDeep<T>(value: T): T {
   return value;
 }
 
-export type SecEdgar8kManifestStageResult = Readonly<{ status: "READY_FOR_INDEX" } | { status: "HISTORY_REQUIRED"; filename: string } | { status: "BLOCKED"; code: SecEdgar8kResponseAdapterCode }>;
-const manifestBlocked = (code: SecEdgar8kResponseAdapterCode): SecEdgar8kManifestStageResult => Object.freeze({ status: "BLOCKED", code });
+export type SecEdgar8kManifestStageResult = Readonly<{ status: "READY_FOR_INDEX" } | { status: "HISTORY_REQUIRED"; filename: string } | { status: "BLOCKED"; code: SecEdgar8kResponseAdapterCode; diagnostic?: SecEdgar8kSanitizedDiagnostic }>;
+const manifestBlocked = (code: SecEdgar8kResponseAdapterCode, diagnostic?: SecEdgar8kSanitizedDiagnostic): SecEdgar8kManifestStageResult => Object.freeze({ status: "BLOCKED", code, ...(diagnostic ? { diagnostic } : {}) });
 function inspectSingleJsonExchange(exchange: SecEdgar8kTransportExchange, expectedProfile: "COMPANY_SUBMISSIONS_JSON" | "SUBMISSIONS_HISTORY_JSON"):
   | { status: "OK"; value: unknown; plan: SecEdgar8kRequestPlan }
-  | { status: "BLOCKED"; code: SecEdgar8kResponseAdapterCode } {
+  | { status: "BLOCKED"; code: SecEdgar8kResponseAdapterCode; diagnostic?: SecEdgar8kSanitizedDiagnostic } {
   const responses = consumeSecEdgar8kExchangeBodiesForAdapter(exchange);
   if (!responses || responses.length !== 1) return { status: "BLOCKED", code: "SEC_RESPONSE_EXCHANGE_UNAUTHENTIC" };
   const response = responses[0]!;
@@ -196,29 +234,30 @@ function inspectSingleJsonExchange(exchange: SecEdgar8kTransportExchange, expect
     response.bytes.fill(0);
     return { status: "BLOCKED", code: "SEC_RESPONSE_PLAN_INVALID" };
   }
-  const value = parseJson(response.bytes);
+  const parsedJson = parseJson(response.bytes);
   response.bytes.fill(0);
-  if (value === null) return { status: "BLOCKED", code: "SEC_RESPONSE_BODY_INVALID" };
-  return { status: "OK", value, plan: response.plan };
+  if (parsedJson.status === "INVALID_UTF8") return { status: "BLOCKED", code: "SEC_RESPONSE_BODY_INVALID", diagnostic: Object.freeze({ stage: "JSON", reason: "INVALID_UTF8" }) };
+  if (parsedJson.status === "INVALID_JSON") return { status: "BLOCKED", code: "SEC_RESPONSE_BODY_INVALID", diagnostic: Object.freeze({ stage: "JSON", reason: "INVALID_JSON" }) };
+  return { status: "OK", value: parsedJson.value, plan: response.plan };
 }
 
 /** Internal staged preflight. It exposes only the single safe manifest filename needed by the server transport. */
 export function inspectSecEdgar8kSubmissionsStage(exchange: SecEdgar8kTransportExchange): SecEdgar8kManifestStageResult {
   const result = inspectSingleJsonExchange(exchange, "COMPANY_SUBMISSIONS_JSON");
-  if (result.status !== "OK") return manifestBlocked(result.code);
+  if (result.status !== "OK") return manifestBlocked(result.code, result.diagnostic);
   const current = result.value;
-  if (parallelArraysUnequal(current)) return manifestBlocked("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH");
+  if (parallelArraysUnequal(current)) return manifestBlocked("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH", Object.freeze({ stage: "SUBMISSIONS", reason: "PARALLEL_ARRAY_LENGTH_MISMATCH", field: "filings.recent" }));
   const parsed = submissions(current);
-  if (!parsed) return manifestBlocked("SEC_SUBMISSIONS_SCHEMA_INVALID");
-  if (parsed.cik !== SCOPE.cik) return manifestBlocked("SEC_SUBMISSIONS_CIK_MISMATCH");
-  const selected = parsed.rows.filter((row) => row.accession === SCOPE.accession);
+  if (parsed.status === "INVALID") return manifestBlocked("SEC_SUBMISSIONS_SCHEMA_INVALID", parsed.diagnostic);
+  if (parsed.value.cik !== SCOPE.cik) return manifestBlocked("SEC_SUBMISSIONS_CIK_MISMATCH", Object.freeze({ stage: "SUBMISSIONS", reason: "FIELD_INVALID", field: "cik" }));
+  const selected = parsed.value.rows.filter((row) => row.accession === SCOPE.accession);
   if (selected.length > 1) return manifestBlocked("SEC_FILING_IDENTITY_MISMATCH");
   if (selected.length === 1) {
     const row = selected[0]!;
     if (row.form !== SCOPE.form || row.filingDate !== SCOPE.filingDate || row.primaryDocument !== SCOPE.primaryDocument) return manifestBlocked("SEC_FILING_IDENTITY_MISMATCH");
     return Object.freeze({ status: "READY_FOR_INDEX" });
   }
-  const candidates = parsed.files.filter((file) => file.filingFrom <= SCOPE.filingDate && file.filingTo >= SCOPE.filingDate);
+  const candidates = parsed.value.files.filter((file) => file.filingFrom <= SCOPE.filingDate && file.filingTo >= SCOPE.filingDate);
   if (candidates.length > 1) return manifestBlocked("SEC_HISTORY_FILE_AMBIGUOUS");
   if (candidates.length === 0) return manifestBlocked("SEC_TARGET_ACCESSION_NOT_FOUND");
   return Object.freeze({ status: "HISTORY_REQUIRED", filename: candidates[0]!.name });
@@ -228,14 +267,14 @@ export function inspectSecEdgar8kSubmissionsStage(exchange: SecEdgar8kTransportE
 export function validateSecEdgar8kHistoryStage(exchange: SecEdgar8kTransportExchange, selectedFilename: string): SecEdgar8kManifestStageResult {
   if (!/^CIK0000789019-submissions-[0-9]+\.json$/.test(selectedFilename)) return manifestBlocked("SEC_HISTORY_FILE_NOT_REFERENCED");
   const result = inspectSingleJsonExchange(exchange, "SUBMISSIONS_HISTORY_JSON");
-  if (result.status !== "OK") return manifestBlocked(result.code);
+  if (result.status !== "OK") return manifestBlocked(result.code, result.diagnostic);
   const actualFilename = new URL(result.plan.url).pathname.split("/").at(-1);
   if (actualFilename !== selectedFilename) return manifestBlocked("SEC_HISTORY_FILE_NOT_REFERENCED");
-  if (parallelArraysUnequal(result.value)) return manifestBlocked("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH");
+  if (parallelArraysUnequal(result.value)) return manifestBlocked("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH", Object.freeze({ stage: "HISTORY_SUBMISSIONS", reason: "PARALLEL_ARRAY_LENGTH_MISMATCH", field: "filings.recent" }));
   const history = submissions(result.value, true);
-  if (!history) return manifestBlocked("SEC_SUBMISSIONS_SCHEMA_INVALID");
-  if (history.cik !== null && history.cik !== SCOPE.cik) return manifestBlocked("SEC_SUBMISSIONS_CIK_MISMATCH");
-  const selected = history.rows.filter((row) => row.accession === SCOPE.accession);
+  if (history.status === "INVALID") return manifestBlocked("SEC_SUBMISSIONS_SCHEMA_INVALID", history.diagnostic);
+  if (history.value.cik !== null && history.value.cik !== SCOPE.cik) return manifestBlocked("SEC_SUBMISSIONS_CIK_MISMATCH", Object.freeze({ stage: "HISTORY_SUBMISSIONS", reason: "FIELD_INVALID", field: "cik" }));
+  const selected = history.value.rows.filter((row) => row.accession === SCOPE.accession);
   if (selected.length !== 1) return manifestBlocked("SEC_TARGET_ACCESSION_NOT_FOUND");
   const row = selected[0]!;
   if (row.form !== SCOPE.form || row.filingDate !== SCOPE.filingDate || row.primaryDocument !== SCOPE.primaryDocument) return manifestBlocked("SEC_FILING_IDENTITY_MISMATCH");
@@ -258,28 +297,32 @@ export function adaptSecEdgar8kTransportExchange(exchange: SecEdgar8kTransportEx
     if (plan.profileId !== expectedProfiles[i] || observation?.profileId !== plan.profileId || observation.url !== plan.url || observation.contentType !== contentType || observation.statusCode !== 200 || observation.byteLength !== bytes.length || bytes.length > SCOPE.maxResponseBytes || plan.accession !== SCOPE.accession || plan.cik !== SCOPE.cik) return fail("SEC_RESPONSE_PLAN_INVALID");
   }
   const currentBytes = responses[0]!.bytes;
-  const currentJson = parseJson(currentBytes);
-  if (parallelArraysUnequal(currentJson)) return fail("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH");
+  const currentParse = parseJson(currentBytes);
+  if (currentParse.status !== "VALID") return fail("SEC_RESPONSE_BODY_INVALID", Object.freeze({ stage: "JSON", reason: currentParse.status }));
+  const currentJson = currentParse.value;
+  if (parallelArraysUnequal(currentJson)) return fail("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH", Object.freeze({ stage: "SUBMISSIONS", reason: "PARALLEL_ARRAY_LENGTH_MISMATCH", field: "filings.recent" }));
   const current = submissions(currentJson);
-  if (!current) return fail("SEC_SUBMISSIONS_SCHEMA_INVALID");
-  if (current.cik !== SCOPE.cik) return fail("SEC_SUBMISSIONS_CIK_MISMATCH");
-  let match = current.rows.filter((row) => row.accession === SCOPE.accession);
+  if (current.status === "INVALID") return fail("SEC_SUBMISSIONS_SCHEMA_INVALID", current.diagnostic);
+  if (current.value.cik !== SCOPE.cik) return fail("SEC_SUBMISSIONS_CIK_MISMATCH");
+  let match = current.value.rows.filter((row) => row.accession === SCOPE.accession);
   let usedHistory = false;
   if (responses.length === 3) {
     const historyName = responses[1]!.plan.url.split("/").at(-1);
-    const matchingFiles = current.files.filter((file) => file.filingFrom <= SCOPE.filingDate && file.filingTo >= SCOPE.filingDate);
+    const matchingFiles = current.value.files.filter((file) => file.filingFrom <= SCOPE.filingDate && file.filingTo >= SCOPE.filingDate);
     if (matchingFiles.length > 1) return fail("SEC_HISTORY_FILE_AMBIGUOUS");
     if (matchingFiles.length !== 1 || matchingFiles[0]!.name !== historyName) return fail("SEC_HISTORY_FILE_NOT_REFERENCED");
-    if (current.rows.some((row) => row.accession === SCOPE.accession)) return fail("SEC_FILING_EVIDENCE_INCOMPLETE");
-    const historyJson = parseJson(responses[1]!.bytes);
-    if (parallelArraysUnequal(historyJson)) return fail("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH");
+    if (current.value.rows.some((row) => row.accession === SCOPE.accession)) return fail("SEC_FILING_EVIDENCE_INCOMPLETE");
+    const historyParse = parseJson(responses[1]!.bytes);
+    if (historyParse.status !== "VALID") return fail("SEC_RESPONSE_BODY_INVALID", Object.freeze({ stage: "JSON", reason: historyParse.status }));
+    const historyJson = historyParse.value;
+    if (parallelArraysUnequal(historyJson)) return fail("SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH", Object.freeze({ stage: "HISTORY_SUBMISSIONS", reason: "PARALLEL_ARRAY_LENGTH_MISMATCH", field: "filings.recent" }));
     const history = submissions(historyJson, true);
-    if (!history) return fail("SEC_SUBMISSIONS_SCHEMA_INVALID");
-    if (history.cik !== null && history.cik !== SCOPE.cik) return fail("SEC_SUBMISSIONS_CIK_MISMATCH");
-    match = history.rows.filter((row) => row.accession === SCOPE.accession);
+    if (history.status === "INVALID") return fail("SEC_SUBMISSIONS_SCHEMA_INVALID", history.diagnostic);
+    if (history.value.cik !== null && history.value.cik !== SCOPE.cik) return fail("SEC_SUBMISSIONS_CIK_MISMATCH");
+    match = history.value.rows.filter((row) => row.accession === SCOPE.accession);
     usedHistory = true;
   } else if (match.length === 0) {
-    const matchingFiles = current.files.filter((file) => file.filingFrom <= SCOPE.filingDate && file.filingTo >= SCOPE.filingDate);
+    const matchingFiles = current.value.files.filter((file) => file.filingFrom <= SCOPE.filingDate && file.filingTo >= SCOPE.filingDate);
     if (matchingFiles.length === 1) return Object.freeze({ status: "BLOCKED", code: "SEC_HISTORY_FILE_REQUIRED", historyRequest: Object.freeze({ filename: matchingFiles[0]!.name, url: `https://data.sec.gov/submissions/${matchingFiles[0]!.name}` }) });
     if (matchingFiles.length > 1) return fail("SEC_HISTORY_FILE_AMBIGUOUS");
     return fail("SEC_TARGET_ACCESSION_NOT_FOUND");

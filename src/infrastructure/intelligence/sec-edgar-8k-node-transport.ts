@@ -15,7 +15,8 @@ export type SecEdgar8kTransportResult =
   | Readonly<{ status: "BLOCKED"; code: SecEdgar8kTransportFailureCode }>
   | SecEdgar8kTransportExchange;
 type StagedAdapterCode = import("./sec-edgar-8k-response-adapter").SecEdgar8kResponseAdapterCode;
-export type SecEdgar8kStagedResult = SecEdgar8kTransportResult | Readonly<{ status: "BLOCKED"; code: StagedAdapterCode }>;
+type StagedAdapterDiagnostic = import("./sec-edgar-8k-response-adapter").SecEdgar8kSanitizedDiagnostic;
+export type SecEdgar8kStagedResult = SecEdgar8kTransportResult | Readonly<{ status: "BLOCKED"; code: StagedAdapterCode; diagnostic?: StagedAdapterDiagnostic }>;
 
 export { SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE } from "@/domain/intelligence/sec-edgar-8k-local-smoke-scope";
 
@@ -249,7 +250,7 @@ export async function acquireSecEdgar8kManifestFirstExchange(input: Readonly<{ i
     if (firstError) return failure(firstError);
     const { inspectSecEdgar8kSubmissionsStage, validateSecEdgar8kHistoryStage } = await import("./sec-edgar-8k-response-adapter");
     const manifest = inspectSecEdgar8kSubmissionsStage(probe(observations[0]!));
-    if (manifest.status === "BLOCKED") return Object.freeze({ status: "BLOCKED", code: manifest.code });
+    if (manifest.status === "BLOCKED") return Object.freeze({ ...manifest });
     let historyFilename: string | null = null;
     if (manifest.status === "HISTORY_REQUIRED") {
       historyFilename = manifest.filename;
@@ -258,7 +259,7 @@ export async function acquireSecEdgar8kManifestFirstExchange(input: Readonly<{ i
       const historyError = await requestStage(historyPlan);
       if (historyError) return failure(historyError);
       const history = validateSecEdgar8kHistoryStage(probe(observations.at(-1)!), historyFilename);
-      if (history.status !== "READY_FOR_INDEX") return Object.freeze({ status: "BLOCKED", code: history.status === "BLOCKED" ? history.code : "SEC_HISTORY_FILE_NOT_REFERENCED" });
+      if (history.status !== "READY_FOR_INDEX") return history.status === "BLOCKED" ? Object.freeze({ ...history }) : Object.freeze({ status: "BLOCKED" as const, code: "SEC_HISTORY_FILE_NOT_REFERENCED" as const });
     }
     const indexPlan = deriveSecEdgar8kRequestPlanFromSubmissions(initialPlan, "FILING_INDEX", null, new Date().toISOString());
     if (!indexPlan || !validPlan(indexPlan)) return failure("SEC_SMOKE_REQUEST_PLAN_INVALID");
