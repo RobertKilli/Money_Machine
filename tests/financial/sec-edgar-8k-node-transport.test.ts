@@ -35,6 +35,7 @@ import { isAuthenticSecEdgar8kLocalSmokeResult } from "@/infrastructure/intellig
 import { buildSecEdgar8kObservationPlan, recordSecEdgar8kSourceObservation } from "@/application/intelligence/record-sec-edgar-8k-source-observation";
 import postgres from "postgres";
 import { createIngestionProvenanceUnitOfWork } from "@/infrastructure/postgres/ingestion-provenance-repository";
+import { readSecEdgar8kObservationReadModel } from "@/infrastructure/postgres/sec-edgar-8k-observation-read-model-repository";
 import type { AsyncIngestionProvenanceRepositories } from "@/application/intelligence/ingestion-provenance-persistence";
 
 const contact = "Synthetic Test Operator <sec-test@example.invalid>";
@@ -212,6 +213,7 @@ describe.skipIf(!postgresIntegrationUrl)("SEC EDGAR observation PostgreSQL Unit 
       const constraintCount = await sql`select count(*)::int as count from information_schema.table_constraints where constraint_schema='public' and table_name in ('intelligence_ingestion_requests','intelligence_ingestion_attempts','intelligence_ingestion_events','intelligence_source_artifacts','intelligence_source_envelopes','intelligence_ingestion_source_observations') and constraint_type in ('CHECK','FOREIGN KEY','UNIQUE')`;
       expect(Number(constraintCount[0]?.count)).toBeGreaterThan(0);
       const uow = createIngestionProvenanceUnitOfWork(sql);
+      expect(await readSecEdgar8kObservationReadModel(sql)).toMatchObject({ status: "NO_RECORDED_OBSERVATIONS", observations: [], incomplete: [] });
       const runResult = await verifiedSyntheticRunnerResult();
       expect(runResult.status).toBe("VERIFIED");
       if (runResult.status !== "VERIFIED") return;
@@ -233,6 +235,9 @@ describe.skipIf(!postgresIntegrationUrl)("SEC EDGAR observation PostgreSQL Unit 
       expect(concurrent[0]).toEqual(concurrent[1]);
       const first = concurrent[0]!;
       expect(first).toMatchObject({ status: "OBSERVATION_RECORDED", authority: "NON_AUTHORITATIVE_SOURCE_OBSERVATION", lifecycleStatus: "COMPLETED", eventDate: null });
+      const readModel = await readSecEdgar8kObservationReadModel(sql);
+      expect(readModel).toMatchObject({ status: "OBSERVATIONS_AVAILABLE", observations: [{ requestId: first.requestId, attemptId: first.attemptId, sourceObservationId: first.sourceObservationId, lifecycleStatus: "COMPLETED", cik: { value: "0000789019" }, accession: { value: "0001193125-23-255762" }, form: { value: "8-K" }, filingDate: { value: "2023-10-13" }, acceptanceDateTime: { value: accepted }, authority: "NON_AUTHORITATIVE_SOURCE_OBSERVATION", eventDate: { status: "UNKNOWN", value: null }, primaryDocumentContent: "NOT_RETRIEVED" }] });
+      expect(readModel.observations[0]!.retrievedAt.value).toBe(runResult.evidence.retrievedAt);
       const afterFirst = await observationTableCounts(sql);
       expect(afterFirst).toEqual({ ...before, intelligence_ingestion_requests: before.intelligence_ingestion_requests + 1, intelligence_ingestion_attempts: before.intelligence_ingestion_attempts + 1, intelligence_ingestion_events: before.intelligence_ingestion_events + 3, intelligence_source_artifacts: before.intelligence_source_artifacts + 1, intelligence_source_envelopes: before.intelligence_source_envelopes + 1, intelligence_ingestion_source_observations: before.intelligence_ingestion_source_observations + 1 });
 
