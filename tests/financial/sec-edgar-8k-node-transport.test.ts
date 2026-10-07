@@ -33,6 +33,9 @@ import { adaptSecEdgar8kTransportExchange } from "@/infrastructure/intelligence/
 import { runSecEdgar8kLocalSmoke } from "@/infrastructure/intelligence/sec-edgar-8k-local-smoke-runner";
 import { isAuthenticSecEdgar8kLocalSmokeResult } from "@/infrastructure/intelligence/sec-edgar-8k-local-smoke-runner";
 import { buildSecEdgar8kObservationPlan, recordSecEdgar8kSourceObservation } from "@/application/intelligence/record-sec-edgar-8k-source-observation";
+import postgres from "postgres";
+import { createIngestionProvenanceUnitOfWork } from "@/infrastructure/postgres/ingestion-provenance-repository";
+import type { AsyncIngestionProvenanceRepositories } from "@/application/intelligence/ingestion-provenance-persistence";
 
 const contact = "Synthetic Test Operator <sec-test@example.invalid>";
 const scope = {
@@ -53,6 +56,43 @@ const plans = [
 ];
 const historyPlan = { ...plans[0]!, url: "https://data.sec.gov/submissions/CIK0000789019-submissions-001.json", profileId: "SUBMISSIONS_HISTORY_JSON" };
 const accepted = "2023-10-13T08:37:32.000Z";
+const postgresIntegrationUrl = process.env.MM_SEC_OBSERVATION_TEST_DATABASE_URL;
+
+function assertDisposablePostgresUrl(value: string): void {
+  let parsed: URL;
+  try { parsed = new URL(value); } catch { throw new Error("SEC_OBSERVATION_TEST_DATABASE_URL_INVALID"); }
+  if (parsed.protocol !== "postgresql:" || !["localhost", "127.0.0.1", "::1"].includes(parsed.hostname) || parsed.username !== "postgres" || parsed.password !== "postgres" || Number(parsed.port) < 55439 || Number(parsed.port) > 56999 || !/^mm_sec_observation_[a-z0-9_]+$/.test(decodeURIComponent(parsed.pathname.slice(1)))) {
+    throw new Error("SEC_OBSERVATION_TEST_REQUIRES_TASK_OWNED_LOOPBACK_DATABASE");
+  }
+}
+
+const observationTables = ["intelligence_ingestion_requests", "intelligence_ingestion_attempts", "intelligence_ingestion_events", "intelligence_source_artifacts", "intelligence_source_envelopes", "intelligence_ingestion_source_observations", "intelligence_source_availability_claims"] as const;
+async function observationTableCounts(sql: postgres.Sql): Promise<Record<string, number>> {
+  const rows = await sql`select table_name, (xpath('/row/count/text()', query_to_xml(format('select count(*) as count from public.%I', table_name), false, true, '')))[1]::text::int as count from information_schema.tables where table_schema='public' and table_name in ${sql([...observationTables])}`;
+  return Object.fromEntries(observationTables.map(name => [name, Number(rows.find(row => row.table_name === name)?.count ?? 0)]));
+}
+
+function failAfterActualRepositoryWrite(repositories: AsyncIngestionProvenanceRepositories, failAt: string): AsyncIngestionProvenanceRepositories {
+  const injected = <T>(stage: string, save: (input: T) => Promise<T>) => async (input: T): Promise<T> => {
+    const saved = await save(input);
+    if (failAt === stage) throw new Error("SYNTHETIC_POSTGRES_WRITE_FAILURE");
+    return saved;
+  };
+  const eventsSave = repositories.events.save;
+  return {
+    ...repositories,
+    requests: { ...repositories.requests, save: injected("request", repositories.requests.save) },
+    attempts: { ...repositories.attempts, save: injected("attempt", repositories.attempts.save) },
+    events: { ...repositories.events, save: async input => {
+      const saved = await eventsSave(input);
+      if (failAt === `event:${input.eventType}`) throw new Error("SYNTHETIC_POSTGRES_WRITE_FAILURE");
+      return saved;
+    } },
+    artifacts: { ...repositories.artifacts, save: injected("artifact", repositories.artifacts.save) },
+    envelopes: { ...repositories.envelopes, save: injected("envelope", repositories.envelopes.save) },
+    observations: { ...repositories.observations, save: injected("observation", repositories.observations.save) },
+  };
+}
 
 function memoryObservationUnitOfWork(failWrite?: string) {
   type Collection = Map<string, Record<string, unknown>>;
@@ -159,6 +199,67 @@ function installBodySequence(bodies: (string | Buffer)[], contentTypes: string[]
     return request;
   });
 }
+
+describe.skipIf(!postgresIntegrationUrl)("SEC EDGAR observation PostgreSQL Unit of Work integration", () => {
+  it("commits the complete metadata-only transition, replays idempotently, and serializes concurrent replays", async () => {
+    assertDisposablePostgresUrl(postgresIntegrationUrl!);
+    const sql = postgres(postgresIntegrationUrl!, { max: 2, prepare: true });
+    try {
+      await sql`insert into public.intelligence_providers(provider_id,name,provider_type,canonical_source,provenance_policy_version,content_storage_mode) values ('SEC_EDGAR','SEC EDGAR','SEC_PUBLIC','sec.gov','sec-provenance/v1','METADATA_ONLY') on conflict (provider_id) do nothing`;
+      await sql`insert into public.intelligence_datasets(dataset_id,provider_id,dataset_version,source_description,content_storage_mode) values ('FILING_METADATA','SEC_EDGAR','sec-edgar-8k-metadata/v1','Synthetic local metadata observation','METADATA_ONLY') on conflict (dataset_id) do nothing`;
+      const missing = await sql`select name from (values ('intelligence_ingestion_requests'),('intelligence_ingestion_attempts'),('intelligence_ingestion_events'),('intelligence_source_artifacts'),('intelligence_source_envelopes'),('intelligence_ingestion_source_observations'),('intelligence_source_availability_claims')) expected(name) where not exists(select 1 from information_schema.tables t where t.table_schema='public' and t.table_name=expected.name)`;
+      expect(missing).toEqual([]);
+      const constraintCount = await sql`select count(*)::int as count from information_schema.table_constraints where constraint_schema='public' and table_name in ('intelligence_ingestion_requests','intelligence_ingestion_attempts','intelligence_ingestion_events','intelligence_source_artifacts','intelligence_source_envelopes','intelligence_ingestion_source_observations') and constraint_type in ('CHECK','FOREIGN KEY','UNIQUE')`;
+      expect(Number(constraintCount[0]?.count)).toBeGreaterThan(0);
+      const uow = createIngestionProvenanceUnitOfWork(sql);
+      const runResult = await verifiedSyntheticRunnerResult();
+      expect(runResult.status).toBe("VERIFIED");
+      if (runResult.status !== "VERIFIED") return;
+
+      const actualUow = createIngestionProvenanceUnitOfWork(sql);
+      const failStages = ["request", "attempt", "event:STARTED", "artifact", "envelope", "observation", "event:SOURCE_OBSERVED", "event:COMPLETED"];
+      for (const failAt of failStages) {
+        const beforeFailure = await observationTableCounts(sql);
+        const injectedUow = { withTransaction: <T>(work: (repositories: AsyncIngestionProvenanceRepositories) => Promise<T>) => actualUow.withTransaction(repositories => work(failAfterActualRepositoryWrite(repositories, failAt))) };
+        await expect(recordSecEdgar8kSourceObservation({ runResult, unitOfWork: injectedUow })).rejects.toThrow("SYNTHETIC_POSTGRES_WRITE_FAILURE");
+        expect(await observationTableCounts(sql), `rollback after ${failAt}`).toEqual(beforeFailure);
+      }
+
+      const before = await observationTableCounts(sql);
+      const concurrent = await Promise.all([
+        recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow }),
+        recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow }),
+      ]);
+      expect(concurrent[0]).toEqual(concurrent[1]);
+      const first = concurrent[0]!;
+      expect(first).toMatchObject({ status: "OBSERVATION_RECORDED", authority: "NON_AUTHORITATIVE_SOURCE_OBSERVATION", lifecycleStatus: "COMPLETED", eventDate: null });
+      const afterFirst = await observationTableCounts(sql);
+      expect(afterFirst).toEqual({ ...before, intelligence_ingestion_requests: before.intelligence_ingestion_requests + 1, intelligence_ingestion_attempts: before.intelligence_ingestion_attempts + 1, intelligence_ingestion_events: before.intelligence_ingestion_events + 3, intelligence_source_artifacts: before.intelligence_source_artifacts + 1, intelligence_source_envelopes: before.intelligence_source_envelopes + 1, intelligence_ingestion_source_observations: before.intelligence_ingestion_source_observations + 1 });
+
+      const lifecycle = await sql`select sequence,event_type from public.intelligence_ingestion_events where ingestion_attempt_id=${first.attemptId} order by sequence`;
+      expect(lifecycle.map(row => [Number(row.sequence), row.event_type])).toEqual([[1, "STARTED"], [2, "SOURCE_OBSERVED"], [3, "COMPLETED"]]);
+      const rows = await sql`select r.provider_id,r.dataset_id,r.dataset_version,e.normalized_envelope,o.metadata from public.intelligence_ingestion_requests r join public.intelligence_ingestion_attempts a using(ingestion_request_id) join public.intelligence_source_artifacts ar using(provider_id,dataset_id,dataset_version) join public.intelligence_source_envelopes e using(source_artifact_id) join public.intelligence_ingestion_source_observations o using(source_artifact_id) where a.ingestion_attempt_id=${first.attemptId}`;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ provider_id: "SEC_EDGAR", dataset_id: "FILING_METADATA", dataset_version: "sec-edgar-8k-metadata/v1" });
+      expect((rows[0]!.normalized_envelope as Record<string, unknown>).identity).toMatchObject({ filingDate: { value: "2023-10-13" }, acceptanceDateTime: { value: accepted }, eventDate: { value: null, sources: [] }, primaryDocument: { contentRetrieved: false } });
+      expect(JSON.stringify(rows[0])).not.toMatch(/Current Report|<html/i);
+      expect(rows[0]!.metadata).toEqual({ pageOrdinal: 0, cursorSafety: "NONE", responseHostPath: "https://www.sec.gov/Archives/edgar/data/789019/000119312523255762/0001193125-23-255762-index.htm" });
+      const claims = await sql`select count(*)::int as count from public.intelligence_source_availability_claims where source_artifact_id=${first.sourceArtifactId}`;
+      expect(claims[0]?.count).toBe(0);
+      let constraintFailure: { code?: string } | undefined;
+      try {
+        await sql`insert into public.intelligence_ingestion_events(lifecycle_event_id,ingestion_attempt_id,contract_version,sequence,event_type,payload,event_fingerprint,recorded_at,source_observation_id) values (${"invalid-source-observed-" + first.attemptId},${first.attemptId},'m5-ingestion-event/v1',4,'SOURCE_OBSERVED','{}'::jsonb,${"a".repeat(64)},now(),null)`;
+      } catch (error) { constraintFailure = error as { code?: string }; }
+      expect(constraintFailure?.code).toBe("23514");
+
+      expect(await recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow })).toEqual(first);
+      expect(await observationTableCounts(sql)).toEqual(afterFirst);
+
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  }, 30000);
+});
 
 describe("SEC EDGAR bounded local smoke transport", () => {
   beforeEach(() => { mocks.request.mockReset(); mocks.requestTimes.splice(0); mocks.authenticPlan.mockReturnValue(true); mocks.currentlyQualified.mockReturnValue(true); mocks.authorizations.splice(0, mocks.authorizations.length, { ...scope }); });
