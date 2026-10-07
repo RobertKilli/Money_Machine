@@ -30,6 +30,40 @@ describe("SEC filing admin observation panel", () => {
     expect(await loadSecObservationPanelState(async () => { throw new Error("offline"); })).toEqual({ kind: "READ_ERROR" });
   });
 
+  it("rejects observations without the identity, lifecycle, fields, provenance or fixed markings it renders", async () => {
+    const invalidBodies = [
+      { ...mixed, observations: [{}] },
+      { ...mixed, observations: [{ ...observation, cik: { value: "0000789019", sources: [7] } }] },
+      { ...mixed, observations: [{ ...observation, lifecycleStatus: "OPEN" }] },
+      { ...mixed, observations: [{ ...observation, attemptId: " " }] },
+      { ...mixed, observations: [{ ...observation, authority: "AUTHORITATIVE" }] },
+      { ...mixed, observations: [{ ...observation, eventDate: { status: "KNOWN", value: "2023-10-13", sources: [] } }] },
+      { ...mixed, observations: [{ ...observation, primaryDocumentContent: "RETRIEVED" }] },
+    ];
+    for (const body of invalidBodies) {
+      expect(await loadSecObservationPanelState(async () => response(200, body))).toEqual({ kind: "READ_ERROR" });
+    }
+  });
+
+  it("rejects malformed fields, source lists, and incomplete attempts", async () => {
+    expect(await loadSecObservationPanelState(async () => response(200, { ...incomplete, incomplete: [{}] }))).toEqual({ kind: "READ_ERROR" });
+    expect(await loadSecObservationPanelState(async () => response(200, { ...incomplete, incomplete: [{ requestId: "r1", attemptId: "a1", lifecycleStatus: "COMPLETED" }] }))).toEqual({ kind: "READ_ERROR" });
+    expect(await loadSecObservationPanelState(async () => response(200, { ...mixed, observations: [{ ...observation, acceptanceDateTime: { value: null, sources: [""] } }] }))).toEqual({ kind: "READ_ERROR" });
+    expect(await loadSecObservationPanelState(async () => response(200, { ...mixed, observations: [{ ...observation, retrievedAt: { value: "2026-10-07T12:01:00.000Z", sources: [] } }] }))).toEqual({ kind: "READ_ERROR" });
+  });
+
+  it("rejects contradictory status and result contents while keeping valid mixed results", async () => {
+    for (const body of [
+      { ...mixed, status: "OBSERVATIONS_AVAILABLE", observations: [] },
+      { ...mixed, status: "NO_RECORDED_OBSERVATIONS" },
+      { ...incomplete, status: "INGESTION_INCOMPLETE", observations: [observation] },
+      { ...empty, observations: [observation] },
+    ]) {
+      expect(await loadSecObservationPanelState(async () => response(200, body))).toEqual({ kind: "READ_ERROR" });
+    }
+    expect(await loadSecObservationPanelState(async () => response(200, mixed))).toMatchObject({ kind: "DATA", model: mixed });
+  });
+
   it("renders the distinct loading, no records, incomplete, available, forbidden and read-error states", () => {
     const render = (state: SecObservationPanelState) => renderToStaticMarkup(<SecObservationPanelView state={state} />);
     expect(render({ kind: "LOADING" })).toContain("Loading observations");

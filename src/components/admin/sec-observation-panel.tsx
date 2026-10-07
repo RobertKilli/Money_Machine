@@ -24,11 +24,54 @@ export async function loadSecObservationPanelState(fetcher: SecObservationFetch)
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.trim() === value;
+}
+
+function isSources(value: unknown, required: boolean): value is readonly string[] {
+  return Array.isArray(value) && (!required || value.length > 0) && value.every(nonEmptyString);
+}
+
+function isField(value: unknown, required: boolean): value is { value: string | null; sources: readonly string[] } {
+  if (!isRecord(value) || !(value.value === null || nonEmptyString(value.value)) || !isSources(value.sources, required)) return false;
+  return value.value === null ? !required : value.sources.length > 0;
+}
+
+function isObservation(value: unknown): value is SecObservationReadModel["observations"][number] {
+  if (!isRecord(value)) return false;
+  if (![value.requestId, value.attemptId, value.sourceObservationId].every(nonEmptyString) || value.lifecycleStatus !== "COMPLETED") return false;
+  if (!isField(value.cik, true) || !/^\d{10}$/.test(value.cik.value as string)) return false;
+  if (!isField(value.accession, true) || !/^\d{10}-\d{2}-\d{6}$/.test(value.accession.value as string)) return false;
+  if (!isField(value.form, true) || !/^[A-Z0-9][A-Z0-9/-]{0,15}$/.test(value.form.value as string)) return false;
+  if (!isField(value.filingDate, true) || !/^\d{4}-\d{2}-\d{2}$/.test(value.filingDate.value as string)) return false;
+  if (!isField(value.acceptanceDateTime, false) || !isField(value.retrievedAt, true)) return false;
+  if (value.authority !== "NON_AUTHORITATIVE_SOURCE_OBSERVATION" || value.primaryDocumentContent !== "NOT_RETRIEVED") return false;
+  if (!isRecord(value.eventDate) || value.eventDate.status !== "UNKNOWN" || value.eventDate.value !== null || !isSources(value.eventDate.sources, false) || value.eventDate.sources.length !== 0) return false;
+  return true;
+}
+
+function isIncompleteAttempt(value: unknown): value is SecObservationReadModel["incomplete"][number] {
+  if (!isRecord(value) || !nonEmptyString(value.requestId)) return false;
+  if (!(value.attemptId === null || nonEmptyString(value.attemptId))) return false;
+  return ["NOT_STARTED", "OPEN", "STARTED", "SOURCE_OBSERVED", "PARTIAL", "FAILED", "CANCELLED"].includes(String(value.lifecycleStatus));
+}
+
 function isReadModel(value: unknown): value is SecObservationReadModel {
-  if (!value || typeof value !== "object") return false;
-  const model = value as Partial<SecObservationReadModel>;
-  return ["NO_RECORDED_OBSERVATIONS", "INGESTION_INCOMPLETE", "OBSERVATIONS_AVAILABLE"].includes(String(model.status))
-    && Array.isArray(model.observations) && Array.isArray(model.incomplete);
+  if (!isRecord(value) || !Array.isArray(value.observations) || !Array.isArray(value.incomplete)) return false;
+  if (!value.observations.every(isObservation) || !value.incomplete.every(isIncompleteAttempt)) return false;
+  const observations = value.observations as SecObservationReadModel["observations"];
+  const incomplete = value.incomplete as SecObservationReadModel["incomplete"];
+  const identityKeys = observations.map(item => JSON.stringify([item.requestId, item.attemptId, item.sourceObservationId]));
+  if (new Set(identityKeys).size !== identityKeys.length) return false;
+
+  if (value.status === "NO_RECORDED_OBSERVATIONS") return observations.length === 0 && incomplete.length === 0;
+  if (value.status === "INGESTION_INCOMPLETE") return observations.length === 0 && incomplete.length > 0;
+  if (value.status === "OBSERVATIONS_AVAILABLE") return observations.length > 0;
+  return false;
 }
 
 const statusLabels = {
