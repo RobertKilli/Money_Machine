@@ -117,7 +117,8 @@ export function parseSecEdgar8kLocalSmokeQualification(input: unknown): Readonly
     if (value.contractVersion !== SEC_EDGAR_8K_LOCAL_SMOKE_QUALIFICATION_VERSION || !["PROPOSED", "APPROVED_FOR_LOCAL_SMOKE"].includes(value.status as string)) return Object.freeze({ status: "INVALID", code: "SEC_LOCAL_SMOKE_QUALIFICATION_INVALID" });
     if (!matchesFixedRecord(value.scope, SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE) || !matchesFixedRecord(value.restrictions, SEC_EDGAR_8K_LOCAL_SMOKE_RESTRICTIONS)) return Object.freeze({ status: "INVALID", code: "SEC_LOCAL_SMOKE_QUALIFICATION_INVALID" });
     if (!["NOT_APPROVED", "REQUIRES_REVIEW", "APPROVED"].includes(value.acquisitionDecision as string) || !["NOT_APPROVED", "REQUIRES_REVIEW", "APPROVED"].includes(value.processMemoryDecision as string)) return Object.freeze({ status: "INVALID", code: "SEC_LOCAL_SMOKE_QUALIFICATION_INVALID" });
-    if (!boundedText(value.userAgentIdentityRef, 128) || !/^approved-identity:[A-Za-z0-9][A-Za-z0-9._:-]{2,95}$/.test(value.userAgentIdentityRef)) return Object.freeze({ status: "INVALID", code: "SEC_LOCAL_SMOKE_QUALIFICATION_INVALID" });
+    // Opaque code-level binding label only; it does not establish operator authorization.
+    if (!boundedText(value.userAgentIdentityRef, 128) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,95}$/.test(value.userAgentIdentityRef)) return Object.freeze({ status: "INVALID", code: "SEC_LOCAL_SMOKE_QUALIFICATION_INVALID" });
     if (!Array.isArray(value.evidence) || utilTypes.isProxy(value.evidence) || Object.getPrototypeOf(value.evidence) !== Array.prototype || value.evidence.length > SEC_EDGAR_8K_LOCAL_SMOKE_REQUIRED_EVIDENCE.length || Reflect.ownKeys(value.evidence).length !== value.evidence.length + 1) return Object.freeze({ status: "INVALID", code: "SEC_LOCAL_SMOKE_QUALIFICATION_INVALID" });
     const evidence: SecEdgar8kLocalSmokeEvidence[] = [];
     for (let index = 0; index < value.evidence.length; index++) {

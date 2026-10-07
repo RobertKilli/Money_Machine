@@ -64,7 +64,10 @@ describe("versioned SEC LOCAL_SMOKE qualification", () => {
     const original = record();
     expect(parseSecEdgar8kLocalSmokeQualification({ ...original, scope: { ...original.scope, accession: "0000000000-00-000000" } }).status).toBe("INVALID");
     expect(parseSecEdgar8kLocalSmokeQualification({ ...original, fingerprint: "f".repeat(64) }).status).toBe("INVALID");
-    expect(parseSecEdgar8kLocalSmokeQualification({ ...original, userAgentIdentityRef: "approved-identity:other-operator" }).status).toBe("INVALID");
+    expect(parseSecEdgar8kLocalSmokeQualification({ ...original, userAgentIdentityRef: "sec-local-other-operator" }).status).toBe("INVALID");
+    const opaqueIdentity = parseSecEdgar8kLocalSmokeQualification(record({ userAgentIdentityRef: "sec-local-operator-01" }));
+    expect(opaqueIdentity.status).toBe("VALID");
+    expect(parseSecEdgar8kLocalSmokeQualification(record({ userAgentIdentityRef: "bad identity" })).status).toBe("INVALID");
     const expired = parseSecEdgar8kLocalSmokeQualification(approvedRecord());
     expect(expired.status).toBe("VALID");
     if (expired.status === "VALID") expect(evaluateSecEdgar8kLocalSmokeQualification(expired.qualification, "2026-10-07T12:00:00.000Z")).toEqual({ status: "BLOCKED", code: "SEC_LOCAL_SMOKE_QUALIFICATION_EXPIRED" });

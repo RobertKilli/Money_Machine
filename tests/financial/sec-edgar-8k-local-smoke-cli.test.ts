@@ -23,10 +23,11 @@ vi.mock("@/infrastructure/intelligence/sec-edgar-8k-local-smoke-authorization", 
 vi.mock("@/infrastructure/intelligence/sec-edgar-8k-local-smoke-runner", () => ({ runSecEdgar8kLocalSmoke: mocks.run }));
 
 import { runSecEdgar8kSmokeCli } from "@/infrastructure/intelligence/sec-edgar-8k-local-smoke-cli";
+import { createSecEdgar8kLocalSmokeDryRun } from "@/infrastructure/intelligence/sec-edgar-8k-local-smoke-dry-run";
 
 const reference = `sec-edgar-8k-local-smoke-qualification:${"a".repeat(64)}`;
 const contact = "Synthetic Test Operator <sec-test@example.invalid>";
-const qualification = { status: "APPROVED_FOR_LOCAL_SMOKE", qualificationReference: reference };
+const qualification = { status: "APPROVED_FOR_LOCAL_SMOKE", qualificationReference: reference, userAgentIdentityRef: "sec-local-operator-01" };
 const permit = {
   authorizationId: "synthetic-permit-001",
   qualificationReference: reference,
@@ -34,7 +35,7 @@ const permit = {
   accession: "0001193125-23-255762",
   form: "8-K",
   profileIds: ["COMPANY_SUBMISSIONS_JSON", "SUBMISSIONS_HISTORY_JSON", "FILING_INDEX"],
-  userAgentIdentityRef: "approved-identity:synthetic-test",
+  userAgentIdentityRef: "sec-local-operator-01",
   expiresAt: "",
   maxRequests: 3,
   minimumIntervalMs: 1000,
@@ -128,6 +129,41 @@ describe("SEC local-smoke CLI", () => {
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
+  it("reports code readiness separately from the current window and hides contact data", () => {
+    const beforeWindow = "2026-10-07T07:59:59.000Z";
+    const windowedQualification = {
+      ...qualification,
+      effectiveFrom: "2026-10-07T08:00:00.000Z",
+      expiresAt: "2026-10-08T08:00:00.000Z",
+    };
+    mocks.parseQualification.mockReturnValue({ status: "VALID", qualification: windowedQualification });
+    mocks.evaluateQualification.mockReturnValue({ status: "BLOCKED", code: "SEC_LOCAL_SMOKE_QUALIFICATION_NOT_YET_EFFECTIVE" });
+    mocks.records.push({ reference, material: { synthetic: true } });
+
+    const result = createSecEdgar8kLocalSmokeDryRun(contact, beforeWindow);
+    expect(result).toMatchObject({
+      status: "BLOCKED",
+      codeReadiness: "READY",
+      qualificationStatus: "PINNED_APPROVED",
+      qualificationWindow: { status: "NOT_YET_OPEN" },
+      operatorContactStatus: "FORMAT_VALID",
+      permissionToExecuteNow: "BLOCKED",
+      networkRequests: 0,
+    });
+    expect(JSON.stringify(result)).not.toContain(contact);
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
+  it("rejects a permit whose opaque contact identity binding differs from the qualification", async () => {
+    mocks.records.push({ reference, material: { synthetic: true } });
+    mocks.permits.push({ ...permit, userAgentIdentityRef: "sec-local-other-operator", expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() });
+    const result = await runSecEdgar8kSmokeCli(["--execute", "--qualification-ref", reference, "--permit-id", "synthetic-permit-001"], contact);
+    expect(result.output).toContain("SEC_SMOKE_AUTHORIZATION_REQUIRED");
+    expect(mocks.createPlan).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
   it("blocks invalid qualification and expired or ambiguous permits", async () => {
     mocks.records.push({ reference, material: { synthetic: true } });
     mocks.parseQualification.mockReturnValue({ status: "INVALID", blocker: "SEC_EDGAR_8K_QUALIFICATION_INVALID" });
@@ -155,7 +191,7 @@ describe("SEC local-smoke CLI", () => {
       cik: "0000789019",
       accession: "0001193125-23-255762",
       form: "8-K",
-      userAgentIdentityRef: "approved-identity:synthetic-test",
+      userAgentIdentityRef: "sec-local-operator-01",
       timeoutMs: 10_000,
       maxResponseBytes: 2 * 1024 * 1024,
       pageCount: 1,

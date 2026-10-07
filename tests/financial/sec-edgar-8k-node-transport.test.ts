@@ -41,7 +41,7 @@ const scope = {
   form: "8-K",
   profileIds: ["COMPANY_SUBMISSIONS_JSON", "SUBMISSIONS_HISTORY_JSON", "FILING_INDEX"],
   userAgentIdentityRef: "approved-identity:synthetic-test",
-  expiresAt: "2026-10-07T00:00:00.000Z",
+  expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
   maxRequests: 3,
   minimumIntervalMs: 1000,
 };
@@ -247,10 +247,9 @@ describe("SEC EDGAR bounded local smoke transport", () => {
     expect(mocks.request).toHaveBeenCalledTimes(expected ? 1 : 2);
   });
 
-  it("exposes a no-network dry-run with the fixed proposal and explicit blockers", () => {
+  it("exposes a no-network fixed request proposal without stale runtime blocker claims", () => {
     expect(SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN.networkRequests).toBe(0);
     expect(SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN.requests.map((request) => request.profileId)).toEqual(["COMPANY_SUBMISSIONS_JSON", "FILING_INDEX"]);
-    expect(SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN.missing).toContain("LOCAL_SMOKE_AUTHORIZATION_REGISTRY_EMPTY");
     expect(mocks.request).not.toHaveBeenCalled();
   });
 

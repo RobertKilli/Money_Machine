@@ -1,3 +1,4 @@
-import { SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN } from "../src/infrastructure/intelligence/sec-edgar-8k-node-transport";
+import { createSecEdgar8kLocalSmokeDryRun } from "../src/infrastructure/intelligence/sec-edgar-8k-local-smoke-dry-run";
 
-process.stdout.write(`${JSON.stringify(SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN, null, 2)}\n`);
+const result = createSecEdgar8kLocalSmokeDryRun(process.env.SEC_EDGAR_8K_OPERATOR_CONTACT, new Date().toISOString());
+process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
