@@ -12,7 +12,9 @@ The runner creates a random container and named volume, labels both with a task 
 
 Vitest emits a temporary JSON report. The runner requires the named PostgreSQL integration case to have status `passed`, so an omitted or skipped case fails the command. The report is stored in a unique OS temporary directory and removed during teardown.
 
-The `finally` teardown force-removes only the uniquely named task container and volume, removes the temporary report directory, and verifies that those resources no longer exist. Cleanup runs after success, test failure, and handled `Ctrl+C`/`SIGTERM`. To exercise cleanup after a real integration-test failure, run:
+The runner stops the readiness loop and checks the interruption flag before starting each next phase. Teardown has its own execution state: completed Docker cleanup commands are accepted even after an interrupt, while an active work command is stopped. Teardown independently attempts container removal, volume removal, and temporary-file removal, then verifies Docker resource absence and checks that both the report and its directory are gone. An inspection failure is reported but does not skip remaining removals or temporary-file cleanup.
+
+To exercise cleanup after a real integration-test failure, run:
 
 ```powershell
 node scripts/run-sec-observation-postgres-test.mjs --test-failure-probe
@@ -20,4 +22,19 @@ node scripts/run-sec-observation-postgres-test.mjs --test-failure-probe
 
 That probe removes a required table with `CASCADE` only inside its newly created disposable database, runs the existing test (which must fail), and still requires verified cleanup. Do not run it against any other database; the runner does not accept a caller-supplied database URL.
 
-If Docker is missing or stopped, the command exits with an instruction to install/start Docker Desktop. A forced process termination, machine shutdown, or Docker daemon failure can prevent Node.js from running `finally`; in that case uniquely labeled resources may remain. Inspect resources using the `money-machine.sec-observation-test` Docker label and remove only resources carrying that label. Normal `Ctrl+C` is handled and cleanup is verified before exit.
+The interruption probe starts a task container and a long-running Docker child command, then waits for console `Ctrl+C`. It must stop the active child, skip readiness/migrations/tests, exit nonzero, and verify its container, volume, report file, and temporary directory are removed. In PowerShell/Windows Terminal, the host may report its own cancellation exit code instead of Node's configured `130`:
+
+```powershell
+node scripts/run-sec-observation-postgres-test.mjs --interrupt-after-container-probe
+# Press Ctrl+C after the "Interrupt probe ready" message.
+```
+
+The cleanup-inspection probe forces Docker inspection to fail during teardown. It must still attempt removal of both named Docker resources, remove and verify the temporary report directory, and exit nonzero because Docker absence could not be verified:
+
+```powershell
+node scripts/run-sec-observation-postgres-test.mjs --cleanup-inspect-failure-probe
+```
+
+These paths were exercised on Windows with Docker Desktop: the normal command applied all 37 migrations and passed the existing PostgreSQL case; the failure probe made that case fail; the inspection probe failed verification after independently deleting its resources; and console `Ctrl+C` was sent after the container started while `docker exec ... sleep` was active. After interruption, checks found no task-labeled container or volume, no matching Docker child or runner process, and no `mm-sec-observation-test-*` temporary directory.
+
+If Docker is missing or stopped, the command exits with an instruction to install/start Docker Desktop. Windows console `Ctrl+C` and delivered `SIGTERM` are handled. Forced process termination (for example, Task Manager/`Stop-Process`), machine shutdown, or Docker daemon failure can prevent complete verification and may leave uniquely labeled resources. Inspect resources using the `money-machine.sec-observation-test` Docker label and remove only resources carrying that label. A Docker-daemon failure is surfaced as cleanup failure; it is not reported as successful cleanup.
