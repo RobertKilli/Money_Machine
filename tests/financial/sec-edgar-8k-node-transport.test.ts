@@ -68,7 +68,7 @@ const filingIndex = (overrides: Record<string, string> = {}) => `<!DOCTYPE html>
 <div id="filerDiv"><span class="companyName">MICROSOFT CORP (Filer)</span> CIK: <a href="/Archives/edgar/data/789019">0000789019</a></div>
 <div class="formContent">Form 8-K - Current report:<div class="formGrouping"><div class="infoHead">Form</div><div class="info">8-K - Current report</div></div>
 <div class="formGrouping"><div class="infoHead">Filing Date</div><div class="info">2023-10-13</div></div>
-<div class="formGrouping"><div class="infoHead">Accepted</div><div class="info">2023-10-13 08:37:32</div></div>
+<div class="formGrouping"><div class="infoHead">Accepted</div><div class="info">${overrides.accepted ?? "2023-10-13 08:37:32"}</div></div>
 <div>SEC Accession No. ${overrides.accession ?? "0001193125-23-255762"}</div></div>
 <table class="tableFile" summary="Document Format Files"><tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
 <tr><td>1</td><td>8-K</td><td><a href="${overrides.href ?? "d537928d8k.htm"}">${overrides.label ?? "d537928d8k.htm"}</a></td><td>${overrides.type ?? "8-K"}</td><td>27513</td></tr></table></body></html>`;
@@ -95,7 +95,7 @@ function installResponse(options: Parameters<typeof fakeResponse>[0] = {}) {
   });
 }
 
-function installBodySequence(bodies: string[], contentTypes: string[] = []) {
+function installBodySequence(bodies: (string | Buffer)[], contentTypes: string[] = []) {
   let index = 0;
   mocks.request.mockImplementation((requestOptions: RequestOptions, callback: (response: IncomingMessage) => void) => {
     mocks.requestTimes.push(performance.now());
@@ -105,9 +105,9 @@ function installBodySequence(bodies: string[], contentTypes: string[] = []) {
     const request = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
     request.destroy = vi.fn();
     request.end = () => {
-      const { response } = fakeResponse({ contentType, body });
+      const { response } = fakeResponse({ contentType });
       callback(response);
-      queueMicrotask(() => { response.emit("data", Buffer.from(body)); response.emit("end"); });
+      queueMicrotask(() => { response.emit("data", Buffer.isBuffer(body) ? body : Buffer.from(body)); response.emit("end"); });
     };
     return request;
   });
@@ -305,6 +305,89 @@ describe("SEC EDGAR bounded local smoke transport", () => {
     ]);
   }, 15000);
 
+  it("uses filing-index acceptance time only when submissions omits the optional field", async () => {
+    const current = recentSubmission();
+    delete (current.filings.recent as Record<string, unknown>).acceptanceDateTime;
+    installBodySequence([JSON.stringify(current), filingIndex()]);
+    const result = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(result.status).toBe("VERIFIED");
+    if (result.status === "VERIFIED") {
+      expect(result.evidence.acceptanceDateTime).toBe(accepted);
+      expect(result.evidence.evidence.acceptanceDateTime.sources).toEqual(["https://www.sec.gov/Archives/edgar/data/789019/000119312523255762/0001193125-23-255762-index.htm#Accepted"]);
+    }
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+  }, 15000);
+
+  it("reports invalid optional timestamp types and unequal parallel arrays without echoing response values", async () => {
+    installResponse({ status: 503, body: "PRIVATE_HTTP_BODY_MARKER" });
+    const httpResult = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(httpResult).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_HTTP_STATUS_REJECTED", diagnostic: { stage: "TRANSPORT", reason: "HTTP_STATUS_REJECTED" } });
+    expect(JSON.stringify(httpResult)).not.toContain("PRIVATE_HTTP_BODY_MARKER");
+    expect(JSON.stringify(httpResult)).not.toContain(contact);
+
+    mocks.request.mockReset();
+    freshPermit();
+    installResponse({ contentType: "text/html", body: "PRIVATE_CONTENT_TYPE_BODY_MARKER" });
+    const contentTypeResult = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(contentTypeResult).toEqual({ status: "BLOCKED", code: "SEC_SMOKE_CONTENT_TYPE_REJECTED", diagnostic: { stage: "TRANSPORT", reason: "CONTENT_TYPE_REJECTED" } });
+    expect(JSON.stringify(contentTypeResult)).not.toContain("PRIVATE_CONTENT_TYPE_BODY_MARKER");
+    expect(JSON.stringify(contentTypeResult)).not.toContain(contact);
+
+    mocks.request.mockReset();
+    freshPermit();
+    installBodySequence(["PRIVATE_JSON_BODY_MARKER"]);
+    const jsonResult = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(jsonResult).toEqual({ status: "BLOCKED", code: "SEC_RESPONSE_BODY_INVALID", diagnostic: { stage: "JSON", reason: "INVALID_JSON" } });
+    expect(JSON.stringify(jsonResult)).not.toContain("PRIVATE_JSON_BODY_MARKER");
+    expect(JSON.stringify(jsonResult)).not.toContain(contact);
+
+    mocks.request.mockReset();
+    freshPermit();
+    installBodySequence([Buffer.from([0xff, 0xfe])]);
+    const utf8Result = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(utf8Result).toEqual({ status: "BLOCKED", code: "SEC_RESPONSE_BODY_INVALID", diagnostic: { stage: "JSON", reason: "INVALID_UTF8" } });
+    expect(JSON.stringify(utf8Result)).not.toContain(contact);
+    expect("bytes" in utf8Result).toBe(false);
+
+    mocks.request.mockReset();
+    freshPermit();
+    const invalid = recentSubmission();
+    (invalid.filings.recent as Record<string, unknown>).acceptanceDateTime = ["PRIVATE_RESPONSE_VALUE"];
+    installBodySequence([JSON.stringify(invalid)]);
+    const invalidResult = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(invalidResult).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_SCHEMA_INVALID", diagnostic: { stage: "SUBMISSIONS", reason: "ROW_INVALID", field: "filings.recent.acceptanceDateTime" } });
+    expect(JSON.stringify(invalidResult)).not.toContain("PRIVATE_RESPONSE_VALUE");
+    expect(JSON.stringify(invalidResult)).not.toContain(contact);
+
+    mocks.request.mockReset();
+    freshPermit();
+    const invalidType = recentSubmission();
+    (invalidType.filings.recent as Record<string, unknown>).acceptanceDateTime = 12;
+    installBodySequence([JSON.stringify(invalidType)]);
+    const invalidTypeResult = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(invalidTypeResult).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_SCHEMA_INVALID", diagnostic: { stage: "SUBMISSIONS", reason: "FIELD_INVALID", field: "filings.recent.acceptanceDateTime" } });
+    expect(JSON.stringify(invalidTypeResult)).not.toContain(contact);
+
+    mocks.request.mockReset();
+    freshPermit();
+    const unequal = recentSubmission();
+    (unequal.filings.recent as Record<string, unknown>).acceptanceDateTime = [];
+    installBodySequence([JSON.stringify(unequal)]);
+    const unequalResult = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(unequalResult).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH", diagnostic: { stage: "SUBMISSIONS", reason: "PARALLEL_ARRAY_LENGTH_MISMATCH", field: "filings.recent" } });
+    expect(JSON.stringify(unequalResult)).not.toContain(contact);
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+  }, 20000);
+
+  it("rejects conflicting available acceptance timestamps rather than choosing a source", async () => {
+    const current = recentSubmission();
+    installBodySequence([JSON.stringify(current), filingIndex({ accepted: "2023-10-13 08:37:33" })]);
+    const result = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(result).toEqual({ status: "BLOCKED", code: "SEC_FILING_IDENTITY_MISMATCH" });
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(result)).not.toContain(contact);
+  }, 15000);
+
   it("selects and validates one manifest history file before requesting the filing index", async () => {
     const current = recentSubmission();
     const recent = (current.filings as Record<string, unknown>).recent as Record<string, string[]>;
@@ -361,7 +444,7 @@ describe("SEC EDGAR bounded local smoke transport", () => {
     for (const values of Object.values((current.filings as Record<string, unknown>).recent as Record<string, string[]>)) values.splice(0, values.length);
     (current.filings as Record<string, unknown>).files = [{ name: "CIK0000789019-submissions-../1.json", filingCount: 1, filingFrom: "2023-10-13", filingTo: "2023-10-13" }];
     installBodySequence([JSON.stringify(current)]);
-    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_SCHEMA_INVALID" });
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_SCHEMA_INVALID", diagnostic: { stage: "HISTORY_MANIFEST", reason: "FIELD_INVALID", field: "filings.files[].name" } });
     expect(mocks.request).toHaveBeenCalledTimes(1);
 
     mocks.request.mockReset();
@@ -417,7 +500,7 @@ describe("SEC EDGAR bounded local smoke transport", () => {
     installBodySequence([JSON.stringify(unequal), filingIndex()]);
     const first = await acquireSecEdgar8kLocalSmokeExchange({ plans, operatorContact: contact });
     expect(first.status).toBe("COMPLETED");
-    if (first.status === "COMPLETED") expect(adaptSecEdgar8kTransportExchange(first, "2026-10-06T12:00:00.000Z")).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH" });
+    if (first.status === "COMPLETED") expect(adaptSecEdgar8kTransportExchange(first, "2026-10-06T12:00:00.000Z")).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_PARALLEL_ARRAYS_MISMATCH", diagnostic: { stage: "SUBMISSIONS", reason: "PARALLEL_ARRAY_LENGTH_MISMATCH", field: "filings.recent" } });
 
     installBodySequence([JSON.stringify(recentSubmission()), filingIndex({ accession: "0001193125-23-255763" })]);
     freshPermit();

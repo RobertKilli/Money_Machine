@@ -96,3 +96,9 @@ upgrade this PARTIAL qualification, enable requests, or establish event
 authority. The fixture pipeline preserves original and 8-K/A amendment claims
 as append-only correction lineage; it does not treat the amendment as
 destructive replacement.
+
+## Submissions schema diagnostics — 2026-10-07
+
+The submissions adapter treats `acceptanceDateTime` as optional, consistent with the SEC API description that this field is present where available. A missing array is synthetically verified to fall back to the filing-index `Accepted` value; if both sources provide a timestamp, a disagreement is rejected as an identity conflict. A supplied value of the wrong type or an array length that differs from its parallel filing arrays remains rejected.
+
+The former `SEC_SUBMISSIONS_SCHEMA_INVALID` outcome was reproduced with a synthetic submissions response that omitted `acceptanceDateTime`. That demonstrates one concrete failure mode and the corrected fallback. The bytes from the earlier live attempt were not retained, so the actual cause of that live failure remains unknown. Bounded diagnostics distinguish transport status/content type, UTF-8/JSON parsing, and schema failures using only fixed stage/reason/field codes. They do not include response values, body excerpts, raw bytes, or operator contact. No live SEC request was made for this diagnosis.
