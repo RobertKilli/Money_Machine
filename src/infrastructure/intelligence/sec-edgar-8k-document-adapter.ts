@@ -99,6 +99,63 @@ function decodeHtmlAttribute(value: string): string {
   });
 }
 
+function collectMetaTags(html: string): string[] | null {
+  const starts = [...html.matchAll(/<meta\b/gi)];
+  const tags: string[] = [];
+  for (const match of starts) {
+    const start = match.index;
+    let quote = "";
+    let end = -1;
+    for (let index = start + match[0].length; index < html.length; index++) {
+      const character = html[index]!;
+      if (quote) {
+        if (character === quote) quote = "";
+      } else if (character === "\"" || character === "'") quote = character;
+      else if (character === ">") { end = index; break; }
+    }
+    if (end < 0) return null;
+    const tag = html.slice(start, end + 1);
+    if (tag.length > MAX_META_TAG_CHARS) return null;
+    tags.push(tag);
+  }
+  return tags;
+}
+
+function parseMetaAttributes(tag: string): Map<string, string | true> | null {
+  const attributes = new Map<string, string | true>();
+  let index = tag.search(/\s/);
+  if (index < 0) return attributes;
+  const limit = tag.length - 1;
+  while (index < limit) {
+    while (index < limit && /[\s/]/.test(tag[index]!)) index++;
+    if (index >= limit) break;
+    const nameMatch = tag.slice(index, limit).match(/^[^\s=/>]+/);
+    if (!nameMatch) return null;
+    const name = nameMatch[0].toLowerCase();
+    if (attributes.has(name)) return null;
+    index += nameMatch[0].length;
+    while (index < limit && /\s/.test(tag[index]!)) index++;
+    if (tag[index] !== "=") { attributes.set(name, true); continue; }
+    index++;
+    while (index < limit && /\s/.test(tag[index]!)) index++;
+    const quote = tag[index] === "\"" || tag[index] === "'" ? tag[index]! : "";
+    if (quote) {
+      index++;
+      const valueStart = index;
+      while (index < limit && tag[index] !== quote) index++;
+      if (index >= limit) return null;
+      attributes.set(name, tag.slice(valueStart, index));
+      index++;
+    } else {
+      const valueStart = index;
+      while (index < limit && !/\s/.test(tag[index]!)) index++;
+      if (valueStart === index) return null;
+      attributes.set(name, tag.slice(valueStart, index));
+    }
+  }
+  return attributes;
+}
+
 /**
  * Extracts only bounded document-level HTML metadata. Bytes are supplied by the
  * caller (normally a synthetic fixture); this adapter performs no network I/O.
@@ -121,13 +178,19 @@ export function adaptSecEdgar8kDocumentObservations(evidence: unknown, input: un
     if (!/<html\b[^>]*>/i.test(html) || !/<\/html\s*>/i.test(html)) return blocked("DOCUMENT_HTML_INVALID");
 
     const observations: SecEdgar8kDocumentObservation[] = [];
-    const metaTags = [...html.matchAll(/<meta\b([^>]*)>/gi)];
-    if (metaTags.length > MAX_META_TAGS || metaTags.some((match) => match[0].length > MAX_META_TAG_CHARS)) return blocked("DOCUMENT_PARSE_LIMIT_EXCEEDED");
+    const metaTags = collectMetaTags(html);
+    if (metaTags === null) return blocked("DOCUMENT_HTML_INVALID");
+    if (metaTags.length > MAX_META_TAGS) return blocked("DOCUMENT_PARSE_LIMIT_EXCEEDED");
     for (let index = 0; index < metaTags.length; index++) {
-      const attributes = metaTags[index]![1]!;
-      const name = attributes.match(/\b(?:name|property|http-equiv)\s*=\s*(["'])([^"']{1,128})\1/i)?.[2]?.trim();
-      const content = attributes.match(/\bcontent\s*=\s*(["'])([\s\S]*?)\1/i)?.[2];
-      if (!name || content === undefined) continue;
+      const attributes = parseMetaAttributes(metaTags[index]!);
+      if (!attributes) return blocked("DOCUMENT_HTML_INVALID");
+      const fieldNames = ["name", "property", "http-equiv"].filter((key) => attributes.has(key));
+      if (fieldNames.length > 1) return blocked("DOCUMENT_HTML_INVALID");
+      const rawName = fieldNames.length === 1 ? attributes.get(fieldNames[0]!) : undefined;
+      const rawContent = attributes.get("content");
+      if (typeof rawName !== "string" || typeof rawContent !== "string") continue;
+      const name = rawName.trim();
+      const content = rawContent;
       const field = decodeHtmlAttribute(name).toLowerCase();
       const value = decodeHtmlAttribute(content);
       if (!field || field.length > 128 || value.length > MAX_FIELD_VALUE_CHARS || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) return blocked("DOCUMENT_PARSE_LIMIT_EXCEEDED");

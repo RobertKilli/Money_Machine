@@ -108,4 +108,15 @@ describe("bounded SEC 8-K document observation adapter", () => {
     ]);
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("handles quoted greater-than characters and rejects ambiguous duplicate attributes", () => {
+    const withGreaterThan = `<!doctype html><html><head><meta name="x-note" content="left > right"></head></html>`;
+    const parsed = adaptSecEdgar8kDocumentObservations(metadata(), input(withGreaterThan));
+    expect(parsed.status).toBe("OBSERVED_METADATA_ONLY");
+    if (parsed.status === "OBSERVED_METADATA_ONLY") expect(parsed.unknownFields[0]?.value).toBe("left > right");
+
+    const duplicateAttribute = `<!doctype html><html><head><meta name="description" name="og:title" content="ambiguous"></head></html>`;
+    expect(adaptSecEdgar8kDocumentObservations(metadata(), input(duplicateAttribute))).toEqual({ status: "BLOCKED", code: "DOCUMENT_HTML_INVALID" });
+    expect(request).not.toHaveBeenCalled();
+  });
 });
