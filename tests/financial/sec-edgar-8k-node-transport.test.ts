@@ -31,6 +31,8 @@ vi.mock("@/infrastructure/intelligence/sec-edgar-8k-local-smoke-authorization", 
 import { acquireSecEdgar8kLocalSmokeExchange, executeSecEdgar8kLocalSmoke, SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN } from "@/infrastructure/intelligence/sec-edgar-8k-node-transport";
 import { adaptSecEdgar8kTransportExchange } from "@/infrastructure/intelligence/sec-edgar-8k-response-adapter";
 import { runSecEdgar8kLocalSmoke } from "@/infrastructure/intelligence/sec-edgar-8k-local-smoke-runner";
+import { isAuthenticSecEdgar8kLocalSmokeResult } from "@/infrastructure/intelligence/sec-edgar-8k-local-smoke-runner";
+import { buildSecEdgar8kObservationPlan, recordSecEdgar8kSourceObservation } from "@/application/intelligence/record-sec-edgar-8k-source-observation";
 
 const contact = "Synthetic Test Operator <sec-test@example.invalid>";
 const scope = {
@@ -51,6 +53,51 @@ const plans = [
 ];
 const historyPlan = { ...plans[0]!, url: "https://data.sec.gov/submissions/CIK0000789019-submissions-001.json", profileId: "SUBMISSIONS_HISTORY_JSON" };
 const accepted = "2023-10-13T08:37:32.000Z";
+
+function memoryObservationUnitOfWork(failWrite?: string) {
+  type Collection = Map<string, Record<string, unknown>>;
+  type State = { requests: Collection; attempts: Collection; events: Collection; artifacts: Collection; envelopes: Collection; observations: Collection };
+  let state: State = { requests: new Map(), attempts: new Map(), events: new Map(), artifacts: new Map(), envelopes: new Map(), observations: new Map() };
+  const availabilityClaimsSave = vi.fn();
+  const counts = () => Object.fromEntries(Object.entries(state).map(([key, value]) => [key, value.size]));
+  const repositorySet = (draft: State) => {
+    const save = (collection: keyof State, idKey: string, fingerprintKey: string) => async (input: unknown) => {
+      const record = input as Record<string, unknown>;
+      if (`${collection}:${collection === "events" ? record.eventType : "save"}` === failWrite) throw new Error("SYNTHETIC_TRANSACTION_FAILURE");
+      const id = String(record[idKey]);
+      const existing = draft[collection].get(id);
+      if (existing && existing[fingerprintKey] !== record[fingerprintKey]) throw new Error("SYNTHETIC_IDEMPOTENCY_CONFLICT");
+      draft[collection].set(id, existing ?? record);
+      return existing ?? record;
+    };
+    const read = (collection: keyof State, id: string) => draft[collection].get(id);
+    return {
+      requests: { save: save("requests", "ingestionRequestId", "requestFingerprint"), readById: async (id: string) => read("requests", id) },
+      attempts: { save: save("attempts", "ingestionAttemptId", "attemptFingerprint"), readById: async (id: string) => read("attempts", id) },
+      events: { save: save("events", "lifecycleEventId", "eventFingerprint"), readByAttempt: async (id: string) => [...draft.events.values()].filter(event => event.ingestionAttemptId === id) },
+      artifacts: { save: save("artifacts", "sourceArtifactId", "sourceArtifactFingerprint"), readById: async (id: string) => read("artifacts", id) },
+      envelopes: { save: save("envelopes", "sourceEnvelopeId", "sourceEnvelopeFingerprint"), readById: async (id: string) => read("envelopes", id) },
+      observations: { save: save("observations", "sourceObservationId", "observationFingerprint"), readById: async (id: string) => read("observations", id), readByArtifact: async () => [] },
+      availabilityClaims: { save: availabilityClaimsSave, readById: async () => undefined },
+    };
+  };
+  return {
+    counts,
+    availabilityClaimsSave,
+    unitOfWork: { withTransaction: async (work: (repositories: never) => Promise<unknown>) => {
+      const draft: State = { requests: new Map(state.requests), attempts: new Map(state.attempts), events: new Map(state.events), artifacts: new Map(state.artifacts), envelopes: new Map(state.envelopes), observations: new Map(state.observations) };
+      const result = await work(repositorySet(draft) as never);
+      state = draft;
+      return result;
+    } },
+  };
+}
+
+async function verifiedSyntheticRunnerResult() {
+  freshPermit();
+  installBodySequence([JSON.stringify(recentSubmission()), filingIndex()]);
+  return runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+}
 const freshPermit = () => mocks.authorizations.splice(0, mocks.authorizations.length, { ...scope });
 const recentSubmission = (overrides: Record<string, unknown> = {}) => ({
   cik: "789019",
@@ -386,6 +433,55 @@ describe("SEC EDGAR bounded local smoke transport", () => {
     expect(result).toEqual({ status: "BLOCKED", code: "SEC_FILING_IDENTITY_MISMATCH" });
     expect(mocks.request).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(result)).not.toContain(contact);
+  }, 15000);
+
+  it("binds the observation plan to the exact runner result and records SOURCE_OBSERVED atomically without claims", async () => {
+    const runResult = await verifiedSyntheticRunnerResult();
+    expect(runResult.status).toBe("VERIFIED");
+    expect(isAuthenticSecEdgar8kLocalSmokeResult(runResult)).toBe(true);
+    if (runResult.status !== "VERIFIED") return;
+    expect(Object.isFrozen(runResult)).toBe(true);
+    expect(Object.isFrozen(runResult.evidence)).toBe(true);
+    expect(Object.isFrozen(runResult.evidence.evidence)).toBe(true);
+    expect(Object.isFrozen(runResult.evidence.evidence.filingDate.sources)).toBe(true);
+    expect(Reflect.set(runResult.evidence.evidence.filingDate, "value", "1900-01-01")).toBe(false);
+    expect(runResult.evidence.evidence.filingDate.value).toBe("2023-10-13");
+    expect(() => buildSecEdgar8kObservationPlan({ ...runResult })).toThrow("SEC_8K_RUN_RESULT_UNAUTHENTIC");
+    const plan = buildSecEdgar8kObservationPlan(runResult);
+    expect(buildSecEdgar8kObservationPlan(runResult).request.idempotencyKey).toBe(plan.request.idempotencyKey);
+    expect(plan.request.idempotencyKey).toContain(plan.artifact.payloadFingerprint);
+    expect(plan.events.map(event => event.eventType)).toEqual(["STARTED", "SOURCE_OBSERVED", "COMPLETED"]);
+    expect(plan.envelope.normalizedEnvelope).toMatchObject({
+      evidenceKind: "TRANSPORT_RECONCILED_SEC_METADATA",
+      identity: { filingDate: { value: "2023-10-13" }, eventDate: { value: null }, primaryDocument: { contentRetrieved: false } },
+    });
+    expect(JSON.stringify(plan.envelope.normalizedEnvelope)).toContain("#Filing-Date");
+    expect(JSON.stringify(plan)).not.toContain("Current Report");
+
+    const uow = memoryObservationUnitOfWork();
+    const first = await recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow.unitOfWork as never });
+    const second = await recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow.unitOfWork as never });
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ status: "OBSERVATION_RECORDED", authority: "NON_AUTHORITATIVE_SOURCE_OBSERVATION", lifecycleStatus: "COMPLETED", eventDate: null });
+    expect(uow.counts()).toEqual({ requests: 1, attempts: 1, events: 3, artifacts: 1, envelopes: 1, observations: 1 });
+    expect(uow.availabilityClaimsSave).not.toHaveBeenCalled();
+    expect(plan.envelope.normalizedEnvelope.identity).toMatchObject({
+      cik: { value: "0000789019", sources: expect.arrayContaining([expect.stringContaining("#/cik")]) },
+      accession: { value: "0001193125-23-255762", sources: expect.arrayContaining([expect.stringContaining("accessionNumber")]) },
+      filingDate: { value: "2023-10-13", sources: expect.arrayContaining([expect.stringContaining("filingDate")]) },
+      eventDate: { value: null, sources: [] },
+    });
+  }, 15000);
+
+  it("rolls back every observation write stage when that stage fails", async () => {
+    const runResult = await verifiedSyntheticRunnerResult();
+    expect(runResult.status).toBe("VERIFIED");
+    if (runResult.status !== "VERIFIED") return;
+    for (const failWrite of ["requests:save", "attempts:save", "events:STARTED", "artifacts:save", "envelopes:save", "observations:save", "events:SOURCE_OBSERVED", "events:COMPLETED"]) {
+      const uow = memoryObservationUnitOfWork(failWrite);
+      await expect(recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow.unitOfWork as never })).rejects.toThrow("SYNTHETIC_TRANSACTION_FAILURE");
+      expect(uow.counts()).toEqual({ requests: 0, attempts: 0, events: 0, artifacts: 0, envelopes: 0, observations: 0 });
+    }
   }, 15000);
 
   it("selects and validates one manifest history file before requesting the filing index", async () => {

@@ -12,12 +12,20 @@ const safeTransportDiagnostic = (code: string): SecEdgar8kSanitizedDiagnostic | 
   if (code === "SEC_SMOKE_CONTENT_TYPE_REJECTED") return Object.freeze({ stage: "TRANSPORT", reason: "CONTENT_TYPE_REJECTED" });
   return undefined;
 };
+const authenticVerifiedResults = new WeakSet<object>();
+
+/** True only for the exact result object issued by this runner in this process. */
+export function isAuthenticSecEdgar8kLocalSmokeResult(value: unknown): value is Extract<SecEdgar8kLocalSmokeRunResult, { status: "VERIFIED" }> {
+  return !!value && typeof value === "object" && authenticVerifiedResults.has(value);
+}
 
 /** Server orchestration from an already-authentic request plan to reconciled metadata-only evidence. */
 export async function runSecEdgar8kLocalSmoke(input: Readonly<{ initialPlan: unknown; operatorContact: unknown; authorizationId?: string; signal?: AbortSignal }>): Promise<SecEdgar8kLocalSmokeRunResult> {
   const exchange: SecEdgar8kStagedResult = await acquireSecEdgar8kManifestFirstExchange(input);
   if (exchange.status !== "COMPLETED") return Object.freeze({ status: "BLOCKED", code: exchange.code, ...("diagnostic" in exchange && exchange.diagnostic ? { diagnostic: exchange.diagnostic } : safeTransportDiagnostic(exchange.code) ? { diagnostic: safeTransportDiagnostic(exchange.code) } : {}) });
   const result = adaptSecEdgar8kTransportExchange(exchange, new Date().toISOString());
-  if (result.status !== "VERIFIED") return Object.freeze({ ...result });
-  return Object.freeze({ status: "VERIFIED", evidence: result.evidence });
+  if (result.status !== "VERIFIED") return result;
+  const verified = Object.freeze({ status: "VERIFIED" as const, evidence: result.evidence });
+  authenticVerifiedResults.add(verified);
+  return verified;
 }
