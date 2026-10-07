@@ -109,6 +109,29 @@ describe("bounded SEC 8-K document observation adapter", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("ignores metadata-like markup inside comments and HTML raw-text elements", () => {
+    const hidden = `<!doctype html><html><head>
+      <!-- <meta name="description" content="commented out"><title>comment title</title> -->
+      <script data-note="quoted > character">const sample = '<meta name="description" content="script text"><title>script title</title>';</script>
+      <style>.x::after { content: '<meta name="description" content="style text">'; }</style>
+      <textarea><meta name="description" content="textarea text"></textarea>
+      <title>Visible &amp; bounded title</title>
+      <meta name="description" content="actual metadata">
+    </head></html>`;
+    const result = adaptSecEdgar8kDocumentObservations(metadata(), input(hidden));
+    expect(result.status).toBe("OBSERVED_METADATA_ONLY");
+    if (result.status !== "OBSERVED_METADATA_ONLY") return;
+    expect(result.title.value).toBe("Visible & bounded title");
+    expect(result.observations.map(item => item.value)).toEqual(["actual metadata"]);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("rejects unterminated comments and raw-text elements instead of interpreting their contents", () => {
+    expect(adaptSecEdgar8kDocumentObservations(metadata(), input("<html><head><!-- <meta name=\"x\" content=\"hidden\"></head></html>"))).toEqual({ status: "BLOCKED", code: "DOCUMENT_HTML_INVALID" });
+    expect(adaptSecEdgar8kDocumentObservations(metadata(), input("<html><head><script>const x = '<meta name=\"x\" content=\"hidden\">';</head></html>"))).toEqual({ status: "BLOCKED", code: "DOCUMENT_HTML_INVALID" });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("handles quoted greater-than characters and rejects ambiguous duplicate attributes", () => {
     const withGreaterThan = `<!doctype html><html><head><meta name="x-note" content="left > right"></head></html>`;
     const parsed = adaptSecEdgar8kDocumentObservations(metadata(), input(withGreaterThan));

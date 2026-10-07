@@ -99,24 +99,82 @@ function decodeHtmlAttribute(value: string): string {
   });
 }
 
-function collectMetaTags(html: string): string[] | null {
-  const starts = [...html.matchAll(/<meta\b/gi)];
+function tagEnd(html: string, start: number): number {
+  let quote = "";
+  for (let index = start + 1; index < html.length; index++) {
+    const character = html[index]!;
+    if (quote) {
+      if (character === quote) quote = "";
+    } else if (character === "\"" || character === "'") quote = character;
+    else if (character === ">") return index;
+  }
+  return -1;
+}
+
+function maskNonMetadataRegions(html: string): Readonly<{ html: string; title: string | null }> | null {
+  const rawTextElements = new Set(["script", "style", "title", "textarea", "xmp", "iframe", "noembed", "noframes", "noscript"]);
+  let masked = "";
+  let copiedThrough = 0;
+  let title: string | null = null;
+  let index = 0;
+  while (index < html.length) {
+    if (html.startsWith("<!--", index)) {
+      const close = html.indexOf("-->", index + 4);
+      if (close < 0) return null;
+      masked += html.slice(copiedThrough, index) + " ".repeat(close + 3 - index);
+      copiedThrough = close + 3;
+      index = close + 3;
+      continue;
+    }
+    if (html[index] !== "<" || !/[A-Za-z]/.test(html[index + 1] ?? "")) { index++; continue; }
+    const end = tagEnd(html, index);
+    if (end < 0) return null;
+    const openTag = html.slice(index, end + 1);
+    const rawName = openTag.match(/^<([A-Za-z][A-Za-z0-9:-]*)\b/)?.[1]?.toLowerCase();
+    const closing = /^<\//.test(openTag);
+    const selfClosing = /\/\s*>$/.test(openTag);
+    if (rawName && !closing && !selfClosing && rawTextElements.has(rawName)) {
+      const closeTag = new RegExp(`<\\/${rawName}\\s*>`, "ig");
+      closeTag.lastIndex = end + 1;
+      const close = closeTag.exec(html);
+      if (!close) return null;
+      const limit = close.index + close[0].length;
+      masked += html.slice(copiedThrough, index) + " ".repeat(limit - index);
+      copiedThrough = limit;
+      if (rawName === "title") {
+        if (title !== null) return null;
+        title = html.slice(end + 1, close.index);
+      }
+      index = limit;
+      continue;
+    }
+    index = end + 1;
+  }
+  masked += html.slice(copiedThrough);
+  return Object.freeze({ html: masked, title });
+}
+
+function collectMetaTags(html: string): string[] | "LIMIT" | null {
+  const starts = /<meta\b/gi;
   const tags: string[] = [];
-  for (const match of starts) {
+  let match: RegExpExecArray | null;
+  while ((match = starts.exec(html)) !== null) {
     const start = match.index;
     let quote = "";
     let end = -1;
-    for (let index = start + match[0].length; index < html.length; index++) {
+    for (let index = starts.lastIndex; index < html.length; index++) {
       const character = html[index]!;
       if (quote) {
         if (character === quote) quote = "";
       } else if (character === "\"" || character === "'") quote = character;
       else if (character === ">") { end = index; break; }
+      if (index - start + 1 > MAX_META_TAG_CHARS) return "LIMIT";
     }
     if (end < 0) return null;
     const tag = html.slice(start, end + 1);
-    if (tag.length > MAX_META_TAG_CHARS) return null;
     tags.push(tag);
+    if (tags.length > MAX_META_TAGS) return "LIMIT";
+    starts.lastIndex = end + 1;
   }
   return tags;
 }
@@ -175,12 +233,13 @@ export function adaptSecEdgar8kDocumentObservations(evidence: unknown, input: un
   try {
     let html: string;
     try { html = new TextDecoder("utf-8", { fatal: true }).decode(ownedBytes); } catch { return blocked("DOCUMENT_UTF8_INVALID"); }
-    if (!/<html\b[^>]*>/i.test(html) || !/<\/html\s*>/i.test(html)) return blocked("DOCUMENT_HTML_INVALID");
+    const parsedRegions = maskNonMetadataRegions(html);
+    if (parsedRegions === null || !/<html\b[^>]*>/i.test(parsedRegions.html) || !/<\/html\s*>/i.test(parsedRegions.html)) return blocked("DOCUMENT_HTML_INVALID");
 
     const observations: SecEdgar8kDocumentObservation[] = [];
-    const metaTags = collectMetaTags(html);
+    const metaTags = collectMetaTags(parsedRegions.html);
     if (metaTags === null) return blocked("DOCUMENT_HTML_INVALID");
-    if (metaTags.length > MAX_META_TAGS) return blocked("DOCUMENT_PARSE_LIMIT_EXCEEDED");
+    if (metaTags === "LIMIT") return blocked("DOCUMENT_PARSE_LIMIT_EXCEEDED");
     for (let index = 0; index < metaTags.length; index++) {
       const attributes = parseMetaAttributes(metaTags[index]!);
       if (!attributes) return blocked("DOCUMENT_HTML_INVALID");
@@ -202,10 +261,10 @@ export function adaptSecEdgar8kDocumentObservations(evidence: unknown, input: un
       }));
     }
 
-    const titleMatch = html.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i);
-    if (titleMatch?.[1] && titleMatch[1].length > MAX_TITLE_CHARS * 4) return blocked("DOCUMENT_PARSE_LIMIT_EXCEEDED");
-    const title = titleMatch ? decodeHtmlAttribute(titleMatch[1].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()) : null;
-    if (title !== null && title.length > MAX_TITLE_CHARS) return blocked("DOCUMENT_PARSE_LIMIT_EXCEEDED");
+    const rawTitle = parsedRegions.title;
+    if (rawTitle && rawTitle.length > MAX_TITLE_CHARS * 4) return blocked("DOCUMENT_PARSE_LIMIT_EXCEEDED");
+    const title = rawTitle === null ? null : decodeHtmlAttribute(rawTitle.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim());
+    if (title !== null && (title.length > MAX_TITLE_CHARS || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(title))) return blocked("DOCUMENT_PARSE_LIMIT_EXCEEDED");
     const documentSource = `${expectedUrl}#title`;
     const unknownFields = observations.filter((observation) => observation.classification === "UNRECOGNIZED_DOCUMENT_METADATA");
     return Object.freeze({
