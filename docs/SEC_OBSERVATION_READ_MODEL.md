@@ -1,0 +1,7 @@
+# SEC filing observation read model
+
+The admin-only `GET /api/admin/intelligence/sec-edgar-8k-observations` route projects the existing append-only ingestion request, attempt, lifecycle event, source observation, artifact, and envelope records. It does not add tables or infer an absent filing from missing rows.
+
+An observation is displayable only when the lifecycle is complete, its source-observed event resolves to exactly one observation in that attempt, and exactly one envelope matches that observation's artifact plus the ingestion request's parser contract and envelope schema. The request's parser/schema pair is the available binding between the envelope and the observation: the current schema does not store a direct `source_envelope_id` on the observation or lifecycle event. Envelopes for the same artifact under another schema do not affect this match. If the expected pair has no envelope or more than one, the completed attempt is reported as incomplete for this projection; the reader never picks the newest or otherwise arbitrary envelope.
+
+CI's PostgreSQL regression inserts a second envelope for the same artifact under a different schema and confirms the request-bound envelope remains selected. It then inserts a second envelope under the exact same artifact/parser/schema binding and confirms the completed attempt is withheld as ambiguous. The test uses a disposable database and synthetic data.

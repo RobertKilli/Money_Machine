@@ -35,6 +35,8 @@ import { isAuthenticSecEdgar8kLocalSmokeResult } from "@/infrastructure/intellig
 import { buildSecEdgar8kObservationPlan, recordSecEdgar8kSourceObservation } from "@/application/intelligence/record-sec-edgar-8k-source-observation";
 import postgres from "postgres";
 import { createIngestionProvenanceUnitOfWork } from "@/infrastructure/postgres/ingestion-provenance-repository";
+import { readSecEdgar8kObservationReadModel } from "@/infrastructure/postgres/sec-edgar-8k-observation-read-model-repository";
+import { createSourceEnvelope } from "@/domain/intelligence/ingestion-provenance";
 import type { AsyncIngestionProvenanceRepositories } from "@/application/intelligence/ingestion-provenance-persistence";
 
 const contact = "Synthetic Test Operator <sec-test@example.invalid>";
@@ -212,6 +214,7 @@ describe.skipIf(!postgresIntegrationUrl)("SEC EDGAR observation PostgreSQL Unit 
       const constraintCount = await sql`select count(*)::int as count from information_schema.table_constraints where constraint_schema='public' and table_name in ('intelligence_ingestion_requests','intelligence_ingestion_attempts','intelligence_ingestion_events','intelligence_source_artifacts','intelligence_source_envelopes','intelligence_ingestion_source_observations') and constraint_type in ('CHECK','FOREIGN KEY','UNIQUE')`;
       expect(Number(constraintCount[0]?.count)).toBeGreaterThan(0);
       const uow = createIngestionProvenanceUnitOfWork(sql);
+      expect(await readSecEdgar8kObservationReadModel(sql)).toMatchObject({ status: "NO_RECORDED_OBSERVATIONS", observations: [], incomplete: [] });
       const runResult = await verifiedSyntheticRunnerResult();
       expect(runResult.status).toBe("VERIFIED");
       if (runResult.status !== "VERIFIED") return;
@@ -233,6 +236,9 @@ describe.skipIf(!postgresIntegrationUrl)("SEC EDGAR observation PostgreSQL Unit 
       expect(concurrent[0]).toEqual(concurrent[1]);
       const first = concurrent[0]!;
       expect(first).toMatchObject({ status: "OBSERVATION_RECORDED", authority: "NON_AUTHORITATIVE_SOURCE_OBSERVATION", lifecycleStatus: "COMPLETED", eventDate: null });
+      const readModel = await readSecEdgar8kObservationReadModel(sql);
+      expect(readModel).toMatchObject({ status: "OBSERVATIONS_AVAILABLE", observations: [{ requestId: first.requestId, attemptId: first.attemptId, sourceObservationId: first.sourceObservationId, lifecycleStatus: "COMPLETED", cik: { value: "0000789019" }, accession: { value: "0001193125-23-255762" }, form: { value: "8-K" }, filingDate: { value: "2023-10-13" }, acceptanceDateTime: { value: accepted }, authority: "NON_AUTHORITATIVE_SOURCE_OBSERVATION", eventDate: { status: "UNKNOWN", value: null }, primaryDocumentContent: "NOT_RETRIEVED" }] });
+      expect(readModel.observations[0]!.retrievedAt.value).toBe(runResult.evidence.retrievedAt);
       const afterFirst = await observationTableCounts(sql);
       expect(afterFirst).toEqual({ ...before, intelligence_ingestion_requests: before.intelligence_ingestion_requests + 1, intelligence_ingestion_attempts: before.intelligence_ingestion_attempts + 1, intelligence_ingestion_events: before.intelligence_ingestion_events + 3, intelligence_source_artifacts: before.intelligence_source_artifacts + 1, intelligence_source_envelopes: before.intelligence_source_envelopes + 1, intelligence_ingestion_source_observations: before.intelligence_ingestion_source_observations + 1 });
 
@@ -252,8 +258,18 @@ describe.skipIf(!postgresIntegrationUrl)("SEC EDGAR observation PostgreSQL Unit 
       } catch (error) { constraintFailure = error as { code?: string }; }
       expect(constraintFailure?.code).toBe("23514");
 
+      const plan = buildSecEdgar8kObservationPlan(runResult);
+      const alternateSchemaEnvelope = createSourceEnvelope({ sourceArtifactId: plan.artifact.sourceArtifactId, parserContractVersion: plan.request.parserContractVersion, envelopeSchemaVersion: "sec-edgar-8k-test-alternate/v1", normalizedEnvelope: plan.envelope.normalizedEnvelope, selectedAuditableFields: plan.envelope.selectedAuditableFields, payloadFingerprint: plan.envelope.payloadFingerprint, observedAt: plan.envelope.observedAt, temporalQualityStatus: plan.envelope.temporalQualityStatus, temporalDiagnosticCodes: plan.envelope.temporalDiagnosticCodes, recordedAt: plan.envelope.recordedAt });
+      await actualUow.withTransaction(repositories => repositories.envelopes.save(alternateSchemaEnvelope));
+      const withSeparateSchema = await readSecEdgar8kObservationReadModel(sql);
+      expect(withSeparateSchema).toMatchObject({ status: "OBSERVATIONS_AVAILABLE", observations: [{ sourceObservationId: first.sourceObservationId, filingDate: { value: "2023-10-13" } }] });
+
+      await sql`insert into public.intelligence_source_envelopes(source_envelope_id,contract_version,source_artifact_id,parser_contract_version,envelope_schema_version,normalized_envelope,selected_auditable_fields,payload_fingerprint,source_envelope_fingerprint,provider_published_at,observed_at,temporal_quality_status,temporal_diagnostic_codes,recorded_at) select ${"synthetic-ambiguous-envelope:" + first.attemptId},contract_version,source_artifact_id,parser_contract_version,envelope_schema_version,normalized_envelope,selected_auditable_fields,payload_fingerprint,${"f".repeat(64)},provider_published_at,observed_at,temporal_quality_status,temporal_diagnostic_codes,recorded_at from public.intelligence_source_envelopes where source_artifact_id=${first.sourceArtifactId} and parser_contract_version=(select parser_contract_version from public.intelligence_ingestion_requests where ingestion_request_id=${first.requestId}) and envelope_schema_version=(select envelope_schema_version from public.intelligence_ingestion_requests where ingestion_request_id=${first.requestId})`;
+      const ambiguous = await readSecEdgar8kObservationReadModel(sql);
+      expect(ambiguous).toMatchObject({ status: "INGESTION_INCOMPLETE", observations: [], incomplete: [{ requestId: first.requestId, lifecycleStatus: "COMPLETED" }] });
+
       expect(await recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow })).toEqual(first);
-      expect(await observationTableCounts(sql)).toEqual(afterFirst);
+      expect(await observationTableCounts(sql)).toEqual({ ...afterFirst, intelligence_source_envelopes: afterFirst.intelligence_source_envelopes + 2 });
 
     } finally {
       await sql.end({ timeout: 5 });
