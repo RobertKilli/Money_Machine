@@ -61,7 +61,7 @@ const postgresIntegrationUrl = process.env.MM_SEC_OBSERVATION_TEST_DATABASE_URL;
 function assertDisposablePostgresUrl(value: string): void {
   let parsed: URL;
   try { parsed = new URL(value); } catch { throw new Error("SEC_OBSERVATION_TEST_DATABASE_URL_INVALID"); }
-  if (parsed.protocol !== "postgresql:" || !["localhost", "127.0.0.1", "::1"].includes(parsed.hostname) || parsed.username !== "postgres" || parsed.password !== "postgres" || Number(parsed.port) < 55439 || Number(parsed.port) > 55999 || !/^mm_sec_observation_[a-z0-9_]+$/.test(decodeURIComponent(parsed.pathname.slice(1)))) {
+  if (parsed.protocol !== "postgresql:" || !["localhost", "127.0.0.1", "::1"].includes(parsed.hostname) || parsed.username !== "postgres" || parsed.password !== "postgres" || Number(parsed.port) < 55439 || Number(parsed.port) > 56999 || !/^mm_sec_observation_[a-z0-9_]+$/.test(decodeURIComponent(parsed.pathname.slice(1)))) {
     throw new Error("SEC_OBSERVATION_TEST_REQUIRES_TASK_OWNED_LOOPBACK_DATABASE");
   }
 }
@@ -216,8 +216,22 @@ describe.skipIf(!postgresIntegrationUrl)("SEC EDGAR observation PostgreSQL Unit 
       expect(runResult.status).toBe("VERIFIED");
       if (runResult.status !== "VERIFIED") return;
 
+      const actualUow = createIngestionProvenanceUnitOfWork(sql);
+      const failStages = ["request", "attempt", "event:STARTED", "artifact", "envelope", "observation", "event:SOURCE_OBSERVED", "event:COMPLETED"];
+      for (const failAt of failStages) {
+        const beforeFailure = await observationTableCounts(sql);
+        const injectedUow = { withTransaction: <T>(work: (repositories: AsyncIngestionProvenanceRepositories) => Promise<T>) => actualUow.withTransaction(repositories => work(failAfterActualRepositoryWrite(repositories, failAt))) };
+        await expect(recordSecEdgar8kSourceObservation({ runResult, unitOfWork: injectedUow })).rejects.toThrow("SYNTHETIC_POSTGRES_WRITE_FAILURE");
+        expect(await observationTableCounts(sql), `rollback after ${failAt}`).toEqual(beforeFailure);
+      }
+
       const before = await observationTableCounts(sql);
-      const first = await recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow });
+      const concurrent = await Promise.all([
+        recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow }),
+        recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow }),
+      ]);
+      expect(concurrent[0]).toEqual(concurrent[1]);
+      const first = concurrent[0]!;
       expect(first).toMatchObject({ status: "OBSERVATION_RECORDED", authority: "NON_AUTHORITATIVE_SOURCE_OBSERVATION", lifecycleStatus: "COMPLETED", eventDate: null });
       const afterFirst = await observationTableCounts(sql);
       expect(afterFirst).toEqual({ ...before, intelligence_ingestion_requests: before.intelligence_ingestion_requests + 1, intelligence_ingestion_attempts: before.intelligence_ingestion_attempts + 1, intelligence_ingestion_events: before.intelligence_ingestion_events + 3, intelligence_source_artifacts: before.intelligence_source_artifacts + 1, intelligence_source_envelopes: before.intelligence_source_envelopes + 1, intelligence_ingestion_source_observations: before.intelligence_ingestion_source_observations + 1 });
@@ -241,36 +255,6 @@ describe.skipIf(!postgresIntegrationUrl)("SEC EDGAR observation PostgreSQL Unit 
       expect(await recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow })).toEqual(first);
       expect(await observationTableCounts(sql)).toEqual(afterFirst);
 
-      const concurrentRun = await verifiedSyntheticRunnerResult();
-      expect(concurrentRun.status).toBe("VERIFIED");
-      if (concurrentRun.status !== "VERIFIED") return;
-      const beforeConcurrent = await observationTableCounts(sql);
-      const concurrent = await Promise.all([
-        recordSecEdgar8kSourceObservation({ runResult: concurrentRun, unitOfWork: uow }),
-        recordSecEdgar8kSourceObservation({ runResult: concurrentRun, unitOfWork: uow }),
-      ]);
-      expect(concurrent[0]).toEqual(concurrent[1]);
-      expect(await observationTableCounts(sql)).toEqual({ ...beforeConcurrent, intelligence_ingestion_requests: beforeConcurrent.intelligence_ingestion_requests + 1, intelligence_ingestion_attempts: beforeConcurrent.intelligence_ingestion_attempts + 1, intelligence_ingestion_events: beforeConcurrent.intelligence_ingestion_events + 3, intelligence_source_artifacts: beforeConcurrent.intelligence_source_artifacts + 1, intelligence_source_envelopes: beforeConcurrent.intelligence_source_envelopes + 1, intelligence_ingestion_source_observations: beforeConcurrent.intelligence_ingestion_source_observations + 1 });
-    } finally {
-      await sql.end({ timeout: 5 });
-    }
-  }, 30000);
-
-  it("rolls back PostgreSQL state when each real repository write stage fails", async () => {
-    assertDisposablePostgresUrl(postgresIntegrationUrl!);
-    const sql = postgres(postgresIntegrationUrl!, { max: 1, prepare: true });
-    try {
-      const runResult = await verifiedSyntheticRunnerResult();
-      expect(runResult.status).toBe("VERIFIED");
-      if (runResult.status !== "VERIFIED") return;
-      const actualUow = createIngestionProvenanceUnitOfWork(sql);
-      const failStages = ["request", "attempt", "event:STARTED", "artifact", "envelope", "observation", "event:SOURCE_OBSERVED", "event:COMPLETED"];
-      for (const failAt of failStages) {
-        const before = await observationTableCounts(sql);
-        const injectedUow = { withTransaction: <T>(work: (repositories: AsyncIngestionProvenanceRepositories) => Promise<T>) => actualUow.withTransaction(repositories => work(failAfterActualRepositoryWrite(repositories, failAt))) };
-        await expect(recordSecEdgar8kSourceObservation({ runResult, unitOfWork: injectedUow })).rejects.toThrow("SYNTHETIC_POSTGRES_WRITE_FAILURE");
-        expect(await observationTableCounts(sql), `rollback after ${failAt}`).toEqual(before);
-      }
     } finally {
       await sql.end({ timeout: 5 });
     }
