@@ -361,6 +361,5 @@ export const SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN = Object.freeze({
     Object.freeze({ profileId: "FILING_INDEX", url: "https://www.sec.gov/Archives/edgar/data/789019/000119312523255762/0001193125-23-255762-index.htm", purpose: "One selected filing index, not a crawl." }),
   ]),
   conditionalHistoryRequest: Object.freeze({ profileId: "SUBMISSIONS_HISTORY_JSON", rule: "Only after the current submissions manifest is validated and the selected accession is absent from recent, the server selects exactly one CIK-owned history filename whose inclusive filingFrom/filingTo range covers 2023-10-13. That response must validate and contain the exact filing before the filing index is requested. No filename guessing, fan-out, caller-supplied history path, retries, or budget reset." }),
-  missing: Object.freeze(["SEC_LOCAL_SMOKE_QUALIFICATION_NOT_PINNED", "LOCAL_SMOKE_AUTHORIZATION_REGISTRY_EMPTY", "REAL_OPERATOR_CONTACT_NOT_SUPPLIED", "NO_LIVE_SEC_RESPONSE_HAS_BEEN_RECONCILED"]),
   networkRequests: 0,
 });

@@ -3,7 +3,8 @@ import "server-only";
 import { createSecEdgar8kLocalSmokeRequestPlan } from "@/domain/intelligence/sec-edgar-8k-event-source-qualification";
 import { evaluateSecEdgar8kLocalSmokeQualification, SEC_EDGAR_8K_LOCAL_SMOKE_QUALIFICATION_PINS, parseSecEdgar8kLocalSmokeQualification } from "@/domain/intelligence/sec-edgar-8k-local-smoke-qualification";
 import { SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS } from "./sec-edgar-8k-local-smoke-authorization";
-import { isValidSecEdgar8kOperatorContact, SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN, SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE } from "./sec-edgar-8k-node-transport";
+import { isValidSecEdgar8kOperatorContact, SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE } from "./sec-edgar-8k-node-transport";
+import { createSecEdgar8kLocalSmokeDryRun } from "./sec-edgar-8k-local-smoke-dry-run";
 import { runSecEdgar8kLocalSmoke } from "./sec-edgar-8k-local-smoke-runner";
 
 type CliFailureCode =
@@ -47,7 +48,7 @@ function parseCommand(input: unknown): ParsedCommand | null {
 export async function runSecEdgar8kSmokeCli(args: unknown, operatorContact: unknown): Promise<SecEdgar8kSmokeCliResult> {
   const command = parseCommand(args);
   if (!command) return blocked("SEC_SMOKE_CLI_ARGUMENTS_INVALID");
-  if (command.mode === "DRY_RUN") return success(SEC_EDGAR_8K_LOCAL_SMOKE_DRY_RUN);
+  if (command.mode === "DRY_RUN") return success(createSecEdgar8kLocalSmokeDryRun(operatorContact, new Date().toISOString()));
 
   const qualificationMatches = SEC_EDGAR_8K_LOCAL_SMOKE_QUALIFICATION_PINS.filter((entry) => entry.reference === command.qualificationReference);
   if (qualificationMatches.length !== 1) return blocked("SEC_SMOKE_QUALIFICATION_REFERENCE_UNAVAILABLE");
@@ -60,8 +61,9 @@ export async function runSecEdgar8kSmokeCli(args: unknown, operatorContact: unkn
   const permitMatches = SEC_EDGAR_8K_LOCAL_SMOKE_AUTHORIZATIONS.filter((entry) => entry.authorizationId === command.authorizationId);
   if (permitMatches.length !== 1) return blocked("SEC_SMOKE_AUTHORIZATION_REQUIRED");
   const permit = permitMatches[0]!;
+  const permitNow = Date.now();
   const expiresAt = permit ? Date.parse(permit.expiresAt) : Number.NaN;
-  if (!permit || permit.qualificationReference !== command.qualificationReference || permit.cik !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik || permit.accession !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession || permit.form !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.form || permit.maxRequests !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests || permit.minimumIntervalMs < SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs || permit.profileIds.length !== EXPECTED_PROFILES.length || !EXPECTED_PROFILES.every((profile) => permit.profileIds.includes(profile)) || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt - Date.now() > 24 * 60 * 60 * 1000) {
+  if (!permit || permit.qualificationReference !== command.qualificationReference || permit.userAgentIdentityRef !== parsed.qualification.userAgentIdentityRef || permit.cik !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.cik || permit.accession !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.accession || permit.form !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.form || permit.maxRequests !== SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.maxRequests || permit.minimumIntervalMs < SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE.minimumIntervalMs || permit.profileIds.length !== EXPECTED_PROFILES.length || !EXPECTED_PROFILES.every((profile) => permit.profileIds.includes(profile)) || !Number.isFinite(expiresAt) || expiresAt <= permitNow || expiresAt - permitNow > 24 * 60 * 60 * 1000) {
     return blocked("SEC_SMOKE_AUTHORIZATION_REQUIRED");
   }
   if (!isValidSecEdgar8kOperatorContact(operatorContact)) return blocked("SEC_SMOKE_OPERATOR_CONTACT_REQUIRED");
