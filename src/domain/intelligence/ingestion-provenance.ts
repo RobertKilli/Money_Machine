@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { type LifecycleEventType, type LifecycleStatus } from "@/domain/intelligence/ingestion-lifecycle-contract";
+export { isLifecycleStatus, LIFECYCLE_EVENT_TYPES, LIFECYCLE_STATUSES } from "@/domain/intelligence/ingestion-lifecycle-contract";
+export type { LifecycleEventType, LifecycleStatus } from "@/domain/intelligence/ingestion-lifecycle-contract";
 
 export const INGESTION_PROVENANCE_VERSION = "m5-ingestion-provenance/v1" as const;
 export const INGESTION_FIXTURE_VERSION = "m5-ingestion-fixture/v1" as const;
@@ -50,14 +53,6 @@ export type IngestionAttempt = Readonly<{
   startedAt: string;
 }>;
 
-export type LifecycleEventType =
-  | "STARTED"
-  | "SOURCE_OBSERVED"
-  | "COMPLETED"
-  | "PARTIAL"
-  | "FAILED"
-  | "CANCELLED";
-
 export type LifecycleEvent = Readonly<{
   lifecycleEventId: string;
   ingestionAttemptId: string;
@@ -70,7 +65,7 @@ export type LifecycleEvent = Readonly<{
 }>;
 
 export type LifecycleState = Readonly<{
-  status: "NOT_STARTED" | "OPEN" | LifecycleEventType;
+  status: LifecycleStatus;
   nextSequence: number;
   terminalEvent?: LifecycleEvent;
   events: readonly LifecycleEvent[];

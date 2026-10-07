@@ -1,18 +1,31 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { loadSecObservationPanelState, SecObservationPanelView, type SecObservationPanelState } from "@/components/admin/sec-observation-panel";
-import type { SecObservationReadModel } from "@/domain/intelligence/sec-edgar-8k-observation-read-model";
+import { createLifecycleEvent } from "@/domain/intelligence/ingestion-provenance";
+import { projectSecEdgar8kObservations, type SecObservationReadRow } from "@/domain/intelligence/sec-edgar-8k-observation-read-model";
 
 const field = (value: string | null, source: string) => ({ value, sources: value ? [source] : [] });
-const observation: SecObservationReadModel["observations"][number] = {
-  requestId: "request-complete", attemptId: "attempt-complete", sourceObservationId: "observation-1", lifecycleStatus: "COMPLETED",
+const now = "2026-10-07T12:00:00.000Z";
+const lifecycle = (attemptId: string, terminal: "COMPLETED" | null) => [
+  createLifecycleEvent({ ingestionAttemptId: attemptId, sequence: 1, eventType: "STARTED", payload: {}, recordedAt: now }),
+  ...(terminal === "COMPLETED" ? [
+    createLifecycleEvent({ ingestionAttemptId: attemptId, sequence: 2, eventType: "SOURCE_OBSERVED", payload: { sourceObservationId: `observation-${attemptId}` }, recordedAt: now }),
+    createLifecycleEvent({ ingestionAttemptId: attemptId, sequence: 3, eventType: "COMPLETED", payload: {}, recordedAt: now }),
+  ] : []),
+];
+const envelope = { identity: {
   cik: field("0000789019", "submission#/cik"), accession: field("0001193125-23-255762", "filing-index"), form: field("8-K", "submission#/form"), filingDate: field("2023-10-13", "submission#/filingDate"),
-  acceptanceDateTime: field("2023-10-13T16:05:00.000Z", "filing-index#Accepted"), retrievedAt: field("2026-10-07T12:01:00.000Z", "source-observation:observation-1:retrieved_at"),
-  authority: "NON_AUTHORITATIVE_SOURCE_OBSERVATION", eventDate: { status: "UNKNOWN", value: null, sources: [] }, primaryDocumentContent: "NOT_RETRIEVED",
-};
-const empty: SecObservationReadModel = { status: "NO_RECORDED_OBSERVATIONS", observations: [], incomplete: [] };
-const incomplete: SecObservationReadModel = { status: "INGESTION_INCOMPLETE", observations: [], incomplete: [{ requestId: "request-open", attemptId: "attempt-open", lifecycleStatus: "OPEN" }] };
-const mixed: SecObservationReadModel = { status: "OBSERVATIONS_AVAILABLE", observations: [observation], incomplete: incomplete.incomplete };
+  acceptanceDateTime: field("2023-10-13T16:05:00.000Z", "filing-index#Accepted"), eventDate: { value: null, sources: [] }, primaryDocument: { contentRetrieved: false },
+} };
+const row = (requestId: string, attemptId: string, matchCount: number, terminal: "COMPLETED" | null): SecObservationReadRow => ({
+  requestId, attemptId, sourceObservationId: terminal ? `observation-${attemptId}` : null, retrievedAt: terminal ? "2026-10-07T12:01:00.000Z" : null,
+  envelope, envelopeMatchCount: matchCount, events: lifecycle(attemptId, terminal),
+});
+const empty = projectSecEdgar8kObservations([]);
+const incomplete = projectSecEdgar8kObservations([row("request-open", "attempt-open", 0, null)]);
+const incompleteCompleted = projectSecEdgar8kObservations([row("request-ambiguous", "attempt-ambiguous", 2, "COMPLETED")]);
+const mixed = projectSecEdgar8kObservations([row("request-complete", "attempt-complete", 1, "COMPLETED"), row("request-ambiguous", "attempt-ambiguous", 2, "COMPLETED")]);
+const observation = mixed.observations[0]!;
 const response = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("SEC filing admin observation panel", () => {
@@ -47,7 +60,7 @@ describe("SEC filing admin observation panel", () => {
 
   it("rejects malformed fields, source lists, and incomplete attempts", async () => {
     expect(await loadSecObservationPanelState(async () => response(200, { ...incomplete, incomplete: [{}] }))).toEqual({ kind: "READ_ERROR" });
-    expect(await loadSecObservationPanelState(async () => response(200, { ...incomplete, incomplete: [{ requestId: "r1", attemptId: "a1", lifecycleStatus: "COMPLETED" }] }))).toEqual({ kind: "READ_ERROR" });
+    expect(await loadSecObservationPanelState(async () => response(200, { ...incomplete, incomplete: [{ requestId: "r1", attemptId: "a1", lifecycleStatus: "UNKNOWN" }] }))).toEqual({ kind: "READ_ERROR" });
     expect(await loadSecObservationPanelState(async () => response(200, { ...mixed, observations: [{ ...observation, acceptanceDateTime: { value: null, sources: [""] } }] }))).toEqual({ kind: "READ_ERROR" });
     expect(await loadSecObservationPanelState(async () => response(200, { ...mixed, observations: [{ ...observation, retrievedAt: { value: "2026-10-07T12:01:00.000Z", sources: [] } }] }))).toEqual({ kind: "READ_ERROR" });
   });
@@ -62,6 +75,28 @@ describe("SEC filing admin observation panel", () => {
       expect(await loadSecObservationPanelState(async () => response(200, body))).toEqual({ kind: "READ_ERROR" });
     }
     expect(await loadSecObservationPanelState(async () => response(200, mixed))).toMatchObject({ kind: "DATA", model: mixed });
+  });
+
+  it("accepts and renders backend-projected incomplete results with COMPLETED lifecycle status", async () => {
+    expect(incompleteCompleted).toMatchObject({ status: "INGESTION_INCOMPLETE", observations: [], incomplete: [{ lifecycleStatus: "COMPLETED" }] });
+    const result = await loadSecObservationPanelState(async () => response(200, incompleteCompleted));
+    expect(result).toMatchObject({ kind: "DATA", model: incompleteCompleted });
+    if (result.kind !== "DATA") throw new Error("Expected validated backend read model");
+    const html = renderToStaticMarkup(<SecObservationPanelView state={result} />);
+    expect(html).toContain("Ingestion incomplete");
+    expect(html).toContain("Request request-ambiguous");
+    expect(html).toContain("COMPLETED");
+  });
+
+  it("accepts a backend-projected observation together with a COMPLETED but incomplete attempt", async () => {
+    expect(mixed).toMatchObject({ status: "OBSERVATIONS_AVAILABLE", observations: [{ lifecycleStatus: "COMPLETED" }], incomplete: [{ lifecycleStatus: "COMPLETED" }] });
+    const result = await loadSecObservationPanelState(async () => response(200, mixed));
+    expect(result).toMatchObject({ kind: "DATA", model: mixed });
+    if (result.kind !== "DATA") throw new Error("Expected validated mixed read model");
+    const html = renderToStaticMarkup(<SecObservationPanelView state={result} />);
+    expect(html).toContain("0001193125-23-255762");
+    expect(html).toContain("Incomplete ingestion attempts");
+    expect(html).toContain("Request request-ambiguous");
   });
 
   it("renders the distinct loading, no records, incomplete, available, forbidden and read-error states", () => {
@@ -86,8 +121,8 @@ describe("SEC filing admin observation panel", () => {
     expect(html).toContain("Event date:");
     expect(html).toContain("Unknown");
     expect(html).toContain("Not retrieved");
-    expect(html).toContain("request-open");
-    expect(html).toContain("attempt-open");
+    expect(html).toContain("request-ambiguous");
+    expect(html).toContain("attempt-ambiguous");
     expect(html).not.toContain("No filing observations are recorded");
   });
 

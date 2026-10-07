@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { isLifecycleStatus } from "@/domain/intelligence/ingestion-lifecycle-contract";
 import type { SecObservationReadModel } from "@/domain/intelligence/sec-edgar-8k-observation-read-model";
 
 export type SecObservationPanelState =
@@ -57,7 +58,7 @@ function isObservation(value: unknown): value is SecObservationReadModel["observ
 function isIncompleteAttempt(value: unknown): value is SecObservationReadModel["incomplete"][number] {
   if (!isRecord(value) || !nonEmptyString(value.requestId)) return false;
   if (!(value.attemptId === null || nonEmptyString(value.attemptId))) return false;
-  return ["NOT_STARTED", "OPEN", "STARTED", "SOURCE_OBSERVED", "PARTIAL", "FAILED", "CANCELLED"].includes(String(value.lifecycleStatus));
+  return isLifecycleStatus(value.lifecycleStatus);
 }
 
 function isReadModel(value: unknown): value is SecObservationReadModel {
