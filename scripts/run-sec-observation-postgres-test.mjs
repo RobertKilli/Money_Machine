@@ -5,6 +5,7 @@ import { lstat, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { waitForSecObservationDatabase } from "./sec-observation-postgres-readiness.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const integrationTest = "tests/financial/sec-edgar-8k-node-transport.test.ts";
@@ -40,15 +41,22 @@ function run(command, args, options = {}) {
     });
     activeChild = child;
     let stderr = "";
+    let commandTimedOut = false;
+    const timeout = Number.isFinite(options.timeoutMs) ? setTimeout(() => {
+      commandTimedOut = true;
+      if (!child.killed) child.kill("SIGTERM");
+    }, Math.max(1, options.timeoutMs)) : undefined;
     if (options.capture) {
       child.stdout?.on("data", chunk => { stderr += chunk.toString(); });
       child.stderr?.on("data", chunk => { stderr += chunk.toString(); });
     }
     if (options.input !== undefined) child.stdin.end(options.input);
-    child.once("error", rejectPromise);
+    child.once("error", error => { if (timeout) clearTimeout(timeout); rejectPromise(error); });
     child.once("close", (code, signal) => {
+      if (timeout) clearTimeout(timeout);
       if (activeChild === child) activeChild = undefined;
       if (interrupted && !teardownActive) return rejectPromise(new Error("SEC_OBSERVATION_TEST_INTERRUPTED"));
+      if (commandTimedOut) return rejectPromise(new Error(`${command} timed out after ${options.timeoutMs}ms`));
       if (code === 0) return resolvePromise({ output: stderr, code });
       const details = options.capture ? `: ${stderr.trim().slice(-1200)}` : "";
       rejectPromise(new Error(`${command} exited ${code ?? signal}${details}`));
@@ -194,21 +202,7 @@ try {
     throw new Error("SEC_OBSERVATION_TEST_INTERRUPT_PROBE_NOT_INTERRUPTED");
   }
 
-  let ready = false;
-  for (let attempt = 0; attempt < 60; attempt++) {
-    ensureWorkNotInterrupted();
-    let check;
-    try {
-      check = await run("docker", ["exec", container, "pg_isready", "-U", "postgres", "-d", database], { capture: true });
-    } catch (error) {
-      if (interrupted) throw error;
-    }
-    ensureWorkNotInterrupted();
-    if (check) { ready = true; break; }
-    await new Promise(resolvePromise => setTimeout(resolvePromise, 1000));
-  }
-  ensureWorkNotInterrupted();
-  if (!ready) throw new Error("SEC_OBSERVATION_TEST_POSTGRES_NOT_READY: the task-owned container did not become ready within 60 seconds.");
+  await waitForSecObservationDatabase({ run, container, database, ensureWorkNotInterrupted });
 
   const bootstrap = `
     create role anon nologin;
