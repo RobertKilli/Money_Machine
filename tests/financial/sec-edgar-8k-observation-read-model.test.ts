@@ -11,18 +11,39 @@ const envelope = { identity: { cik: field("0000789019", "https://data.sec.gov/su
 describe("SEC filing observation read model", () => {
   it("distinguishes no records from incomplete ingestion without asserting a negative filing", () => {
     expect(projectSecEdgar8kObservations([])).toMatchObject({ status: "NO_RECORDED_OBSERVATIONS", observations: [], incomplete: [] });
-    expect(projectSecEdgar8kObservations([{ requestId: "r1", attemptId: "a1", sourceObservationId: null, retrievedAt: null, envelope: null, events: [started("a1")] }])).toMatchObject({ status: "INGESTION_INCOMPLETE", observations: [], incomplete: [{ lifecycleStatus: "OPEN" }] });
+    expect(projectSecEdgar8kObservations([{ requestId: "r1", attemptId: "a1", sourceObservationId: null, retrievedAt: null, envelope: null, envelopeMatchCount: 0, events: [started("a1")] }])).toMatchObject({ status: "INGESTION_INCOMPLETE", observations: [], incomplete: [{ lifecycleStatus: "OPEN" }] });
   });
 
   it("keeps acceptance and retrieval times separate and makes temporal/authority limits explicit", () => {
-    const model = projectSecEdgar8kObservations([{ requestId: "r1", attemptId: "a1", sourceObservationId: "o1", retrievedAt: "2026-10-07T12:01:00.000Z", envelope, events: completion("a1", "o1") }]);
+    const model = projectSecEdgar8kObservations([{ requestId: "r1", attemptId: "a1", sourceObservationId: "o1", retrievedAt: "2026-10-07T12:01:00.000Z", envelope, envelopeMatchCount: 1, events: completion("a1", "o1") }]);
     expect(model.status).toBe("OBSERVATIONS_AVAILABLE");
     expect(model.observations[0]).toMatchObject({ cik: { value: "0000789019" }, accession: { value: "0001193125-23-255762" }, form: { value: "8-K" }, filingDate: { value: "2023-10-13" }, acceptanceDateTime: { value: "2023-10-13T16:05:00.000Z" }, retrievedAt: { value: "2026-10-07T12:01:00.000Z" }, authority: "NON_AUTHORITATIVE_SOURCE_OBSERVATION", eventDate: { status: "UNKNOWN", value: null, sources: [] }, primaryDocumentContent: "NOT_RETRIEVED" });
     expect(model.observations[0]!.retrievedAt.value).not.toBe(model.observations[0]!.acceptanceDateTime.value);
   });
 
   it("does not promote malformed completed rows to observations", () => {
-    const model = projectSecEdgar8kObservations([{ requestId: "r1", attemptId: "a1", sourceObservationId: "o1", retrievedAt: "2026-10-07T12:01:00.000Z", envelope: { identity: { ...envelope.identity, eventDate: { value: "2023-10-13", sources: [] } } }, events: completion("a1", "o1") }]);
+    const model = projectSecEdgar8kObservations([{ requestId: "r1", attemptId: "a1", sourceObservationId: "o1", retrievedAt: "2026-10-07T12:01:00.000Z", envelope: { identity: { ...envelope.identity, eventDate: { value: "2023-10-13", sources: [] } } }, envelopeMatchCount: 1, events: completion("a1", "o1") }]);
     expect(model).toMatchObject({ status: "INGESTION_INCOMPLETE", observations: [], incomplete: [{ lifecycleStatus: "COMPLETED" }] });
+  });
+
+  it("requires valid non-null filing identity and exactly one envelope binding", () => {
+    for (const identity of [
+      { ...envelope.identity, cik: field(null, "https://data.sec.gov/source") },
+      { ...envelope.identity, accession: field("", "https://data.sec.gov/source") },
+      { ...envelope.identity, form: field(null, "https://data.sec.gov/source") },
+      { ...envelope.identity, filingDate: field("2023-02-30", "https://data.sec.gov/source") },
+    ]) {
+      const model = projectSecEdgar8kObservations([{ requestId: "r1", attemptId: "a1", sourceObservationId: "o1", retrievedAt: "2026-10-07T12:01:00.000Z", envelope: { identity }, envelopeMatchCount: 1, events: completion("a1", "o1") }]);
+      expect(model.status).toBe("INGESTION_INCOMPLETE");
+    }
+    const ambiguous = projectSecEdgar8kObservations([{ requestId: "r1", attemptId: "a1", sourceObservationId: "o1", retrievedAt: "2026-10-07T12:01:00.000Z", envelope, envelopeMatchCount: 2, events: completion("a1", "o1") }]);
+    expect(ambiguous).toMatchObject({ status: "INGESTION_INCOMPLETE", observations: [] });
+  });
+
+  it("allows acceptance time to remain unknown", () => {
+    const unknownAcceptance = { identity: { ...envelope.identity, acceptanceDateTime: { value: null, sources: [] } } };
+    const model = projectSecEdgar8kObservations([{ requestId: "r1", attemptId: "a1", sourceObservationId: "o1", retrievedAt: "2026-10-07T12:01:00.000Z", envelope: unknownAcceptance, envelopeMatchCount: 1, events: completion("a1", "o1") }]);
+    expect(model.status).toBe("OBSERVATIONS_AVAILABLE");
+    expect(model.observations[0]?.acceptanceDateTime.value).toBeNull();
   });
 });

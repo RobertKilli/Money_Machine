@@ -36,6 +36,7 @@ import { buildSecEdgar8kObservationPlan, recordSecEdgar8kSourceObservation } fro
 import postgres from "postgres";
 import { createIngestionProvenanceUnitOfWork } from "@/infrastructure/postgres/ingestion-provenance-repository";
 import { readSecEdgar8kObservationReadModel } from "@/infrastructure/postgres/sec-edgar-8k-observation-read-model-repository";
+import { createSourceEnvelope } from "@/domain/intelligence/ingestion-provenance";
 import type { AsyncIngestionProvenanceRepositories } from "@/application/intelligence/ingestion-provenance-persistence";
 
 const contact = "Synthetic Test Operator <sec-test@example.invalid>";
@@ -257,8 +258,18 @@ describe.skipIf(!postgresIntegrationUrl)("SEC EDGAR observation PostgreSQL Unit 
       } catch (error) { constraintFailure = error as { code?: string }; }
       expect(constraintFailure?.code).toBe("23514");
 
+      const plan = buildSecEdgar8kObservationPlan(runResult);
+      const alternateSchemaEnvelope = createSourceEnvelope({ sourceArtifactId: plan.artifact.sourceArtifactId, parserContractVersion: plan.request.parserContractVersion, envelopeSchemaVersion: "sec-edgar-8k-test-alternate/v1", normalizedEnvelope: plan.envelope.normalizedEnvelope, selectedAuditableFields: plan.envelope.selectedAuditableFields, payloadFingerprint: plan.envelope.payloadFingerprint, observedAt: plan.envelope.observedAt, temporalQualityStatus: plan.envelope.temporalQualityStatus, temporalDiagnosticCodes: plan.envelope.temporalDiagnosticCodes, recordedAt: plan.envelope.recordedAt });
+      await actualUow.withTransaction(repositories => repositories.envelopes.save(alternateSchemaEnvelope));
+      const withSeparateSchema = await readSecEdgar8kObservationReadModel(sql);
+      expect(withSeparateSchema).toMatchObject({ status: "OBSERVATIONS_AVAILABLE", observations: [{ sourceObservationId: first.sourceObservationId, filingDate: { value: "2023-10-13" } }] });
+
+      await sql`insert into public.intelligence_source_envelopes(source_envelope_id,contract_version,source_artifact_id,parser_contract_version,envelope_schema_version,normalized_envelope,selected_auditable_fields,payload_fingerprint,source_envelope_fingerprint,provider_published_at,observed_at,temporal_quality_status,temporal_diagnostic_codes,recorded_at) select ${"synthetic-ambiguous-envelope:" + first.attemptId},contract_version,source_artifact_id,parser_contract_version,envelope_schema_version,normalized_envelope,selected_auditable_fields,payload_fingerprint,${"f".repeat(64)},provider_published_at,observed_at,temporal_quality_status,temporal_diagnostic_codes,recorded_at from public.intelligence_source_envelopes where source_artifact_id=${first.sourceArtifactId} and parser_contract_version=(select parser_contract_version from public.intelligence_ingestion_requests where ingestion_request_id=${first.requestId}) and envelope_schema_version=(select envelope_schema_version from public.intelligence_ingestion_requests where ingestion_request_id=${first.requestId})`;
+      const ambiguous = await readSecEdgar8kObservationReadModel(sql);
+      expect(ambiguous).toMatchObject({ status: "INGESTION_INCOMPLETE", observations: [], incomplete: [{ requestId: first.requestId, lifecycleStatus: "COMPLETED" }] });
+
       expect(await recordSecEdgar8kSourceObservation({ runResult, unitOfWork: uow })).toEqual(first);
-      expect(await observationTableCounts(sql)).toEqual(afterFirst);
+      expect(await observationTableCounts(sql)).toEqual({ ...afterFirst, intelligence_source_envelopes: afterFirst.intelligence_source_envelopes + 2 });
 
     } finally {
       await sql.end({ timeout: 5 });
