@@ -1,22 +1,34 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { runDeterministicBacktest } from "@/application/backtest/run-deterministic-backtest";
+import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel } from "@/application/paper-trading/standing-paper-status";
+import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { price } from "@/domain/financial/price";
+import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION } from "@/domain/strategy/fixture-assets";
 import { loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
-import type { StandingPaperStatusReadModel } from "@/application/paper-trading/standing-paper-status";
 
-const model: StandingPaperStatusReadModel = {
-  status: "AVAILABLE", classification: "PAPER_ONLY_SYNTHETIC_SIMULATION", workerStatus: "UNKNOWN",
-  policies: [{
-    status: "AVAILABLE", policyId: "paper-policy-test", identity: "synthetic-test-account", version: "standing-paper-policy/v1",
-    policyStatus: "ACTIVE", mode: "PAPER_ONLY", workerStatus: "UNKNOWN", allowedInstrumentIds: ["fixture:alpha"],
-    riskLimits: { capitalBudgetMinor: "500000", maxOrderMinor: "100000", maxPositionMinor: "300000", maxGrossExposureMinor: "500000", maxLossMinor: "25000", maxPriceAgeMs: 86400000 },
-    lastRound: { id: "run-1", completedAt: "2026-10-08T10:00:00.000Z", asOf: "2026-10-08T09:00:00.000Z" },
-    netContributionsMinor: "200000", committedCapitalMinor: "80000", remainingCapitalBudgetMinor: "420000",
-    portfolioValueMinor: "198500", portfolioValueAsOf: "2026-10-08T09:00:00.000Z", currentLossMinor: "1500", remainingLossMarginMinor: "23500",
-    decisions: [{ orderId: "order-1", decisionId: "decision-1", outcome: "REJECTED", reasonCode: "PRICE_STALE", disposition: "REJECT", recordedAt: "2026-10-08T10:00:00.000Z" }],
-    fills: [{ fillId: "fill-1", orderId: "order-2", instrumentId: "fixture:alpha", quantityAtoms: "1000000", quantityScale: 6, grossMinor: "79900", feeMinor: "100", currency: "NOK", simulatedAt: "2026-10-08T10:00:00.000Z", executionPolicyVersion: "m1-market-execution/v1" }],
-    issueCode: null,
-  }],
+const testPolicy: StandingPaperPolicy = {
+  policyId: "paper-policy-test", identity: "synthetic-test-account", version: "standing-paper-policy/v1", mode: "PAPER_ONLY", status: "ACTIVE",
+  financialAccountId: "paper-account-test", allowedInstrumentIds: FIXTURE_ASSETS.map(asset => asset.assetId), capitalBudgetMinor: 500_000n,
+  maxOrderMinor: 100_000n, maxPositionMinor: 300_000n, maxGrossExposureMinor: 500_000n, maxLossMinor: 25_000n, maxPriceAgeMs: 86_400_000,
 };
+const testAt = "2026-10-08T10:00:00.000Z";
+const testResult = runDeterministicBacktest({
+  startAt: testAt, endAt: testAt, baseCurrency: "NOK", financialAccountId: testPolicy.financialAccountId,
+  contributionEvents: [{ eventId: "ui-fixture-deposit", availableAt: testAt, amountMinor: "200000", currency: "NOK" }], valuationTimestamps: [],
+  strategyVersion: "contribution-rebalancing/v1", riskPolicyVersion: "m1-risk-policy/v1", executionPolicyVersion: "m1-market-execution/v1",
+  portfolioValuationVersion: "portfolio-valuation/v1", fifoCostBasisVersion: "fifo-cost-basis/v1", assetRegistryVersion: "fixture-asset-registry/v1",
+  marketDatasetVersion: FIXTURE_DATASET_VERSION, standingPaperPolicy: testPolicy,
+}, FIXTURE_ASSETS.map((asset, index) => ({ recordId: `ui-price-${index}`, assetId: asset.assetId, price: price("NOK", BigInt((index + 1) * 1000), 2), observedAt: new Date("2026-10-08T09:00:00.000Z"), availableAt: new Date("2026-10-08T09:00:00.000Z"), ingestedAt: new Date("2026-10-08T09:00:00.000Z"), datasetVersion: FIXTURE_DATASET_VERSION })));
+const projectedCard = projectStandingPaperStatusCard({
+  policy: testPolicy, state: testResult.persistentState,
+  run: { id: "run-1", createdAt: "2026-10-08T10:00:01.000Z", result: testResult, valuation: { navMinor: testResult.endingState.nav, asOf: testResult.endingState.asOf, complete: testResult.endingState.valuationStatus === "COMPLETE" } },
+  decisions: [
+    ...testResult.paperPolicyDecisions.map(item => ({ orderId: item.orderId, decisionId: item.decisionId, outcome: item.outcome, reasonCode: item.evidence.reasonCode, disposition: item.evidence.disposition, recordedAt: testAt })),
+    { orderId: "order-rejected", decisionId: "decision-rejected", outcome: "REJECTED" as const, reasonCode: "PRICE_STALE", disposition: "REJECT" as const, recordedAt: testAt },
+  ],
+});
+const model = projectStandingPaperStatusReadModel([projectedCard]);
 const response = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("standing paper status view", () => {
@@ -25,6 +37,26 @@ describe("standing paper status view", () => {
     expect(await loadStandingPaperStatus(fetcher)).toEqual({ kind: "DATA", model });
     expect(fetcher).toHaveBeenCalledWith("/api/dashboard/paper-status", { cache: "no-store", credentials: "same-origin" });
     expect(parseStandingPaperStatus({ ...model, workerStatus: "RUNNING" })).toBeNull();
+  });
+
+  it("rejects contradictory or malformed identity, version, amount and status material", () => {
+    const card = model.policies[0]!;
+    expect(parseStandingPaperStatus({ ...model, status: "NO_ROUNDS" })).toBeNull();
+    expect(parseStandingPaperStatus({ ...model, policies: [{ ...card, identity: { value: "spoof" } }] })).toBeNull();
+    expect(parseStandingPaperStatus({ ...model, policies: [{ ...card, version: "other/v9" }] })).toBeNull();
+    expect(parseStandingPaperStatus({ ...model, policies: [{ ...card, riskLimits: { ...card.riskLimits, maxOrderMinor: { amount: "100" } } }] })).toBeNull();
+    expect(parseStandingPaperStatus({ ...model, policies: [{ ...card, remainingCapitalBudgetMinor: "500000" }] })).toBeNull();
+    expect(parseStandingPaperStatus({ ...model, policies: [{ ...card, fills: [{ ...card.fills[0]!, orderId: card.decisions[0]!.orderId }] }] })).toBeNull();
+    expect(parseStandingPaperStatus({ ...model, policies: [{ ...card, status: "NO_ROUNDS" }] })).toBeNull();
+    expect(parseStandingPaperStatus({ ...model, policies: [card, { ...card, policyId: "duplicate", identity: card.identity }] })).toBeNull();
+    expect(parseStandingPaperStatus({ ...model, policies: [card, { ...card, policyId: card.policyId }] })).toBeNull();
+  });
+
+  it("turns object-valued text fields into READ_ERROR without attempting to render them", async () => {
+    const malformed = { ...model, policies: [{ ...model.policies[0]!, identity: { toString: "not-a-string" } }] };
+    const state = await loadStandingPaperStatus(async () => response(200, malformed));
+    expect(state).toEqual({ kind: "READ_ERROR" });
+    expect(renderToStaticMarkup(<StandingPaperStatusPanelView state={state} />)).toContain("Paper-status utilgjengelig");
   });
 
   it("separates no policy, invalid payload, forbidden and read failure", async () => {

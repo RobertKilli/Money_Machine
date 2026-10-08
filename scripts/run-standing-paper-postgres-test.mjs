@@ -110,7 +110,6 @@ try {
     await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input, capture: true });
     ensureWorkNotInterrupted();
   }
-  await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input: "grant usage on schema public to authenticated; grant select on public.financial_accounts, public.ledger_accounts, public.ledger_transactions, public.ledger_entries, public.standing_paper_policies, public.standing_paper_runs, public.standing_paper_decisions, public.standing_paper_fills to authenticated;", capture: true });
   if (probeMode === "failure") await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input: "drop table public.standing_paper_policies cascade;", capture: true });
   console.log(`Applied ${migrations.length} migrations to the task-owned local PostgreSQL database.`);
   const env = { ...process.env, MONEY_MACHINE_INTEGRATION_TEST: "1", MM_STANDING_PAPER_TEST_DATABASE_URL: `postgresql://postgres:${password}@127.0.0.1:${port}/${database}` };
@@ -142,6 +141,8 @@ try {
     "requires a continuous interval and interrupts interval waiting immediately",
     "stops the actual CLI process through its control channel during a locked settlement",
     "reads a consistent owned paper status snapshot and never exposes another owner's policy",
+    "bounds history independently for each policy and accepts distinct runner timestamps",
+    "grants authenticated status reads through migrations while preserving owner RLS",
   ];
   if (probeMode === "failure") {
     if (!suiteError || !assertions.some(item => item.status === "failed")) throw new Error("STANDING_PAPER_FAILURE_PROBE_DID_NOT_FAIL");

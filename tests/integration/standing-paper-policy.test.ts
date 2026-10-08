@@ -466,4 +466,55 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(ownerOneViaSecondConnection).toMatchObject({ status: "AVAILABLE", policies: [{ policyId: first.policy.policyId }] });
     expect(ownerOneViaSecondConnection.policies.some(policy => policy.policyId === policyTwo.policyId)).toBe(false);
   });
+
+  it("bounds history independently for each policy and accepts distinct runner timestamps", async () => {
+    const first = await setup("status-history-heavy");
+    const owner = (await sql<{ owner_id: string }[]>`select owner_id from public.financial_accounts where id=${first.policy.financialAccountId}`)[0]!.owner_id;
+    await first.repository.run(first.policy.policyId, configWithEndAt("history-heavy-round", stamp(10), stamp(13)), pricesAt(stamp(9)), "history-heavy-round");
+    const accountId = randomUUID();
+    await sql`insert into public.financial_accounts (id, owner_id, mode, status, base_currency_code) values (${accountId}, ${owner}, 'PAPER', 'ACTIVE', 'NOK')`;
+    const secondPolicy: StandingPaperPolicy = { ...first.policy, policyId: `status-history-light-${randomUUID()}`, identity: "synthetic-history-light", financialAccountId: accountId, status: "DRAFT" };
+    const secondRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(secondRepository);
+    await secondRepository.create(secondPolicy);
+    await secondRepository.transition(secondPolicy.policyId, "ACTIVATE");
+    await secondRepository.run(secondPolicy.policyId, config("history-light-round", stamp(10)), pricesAt(stamp(9)), "history-light-round");
+    await first.repository.run(first.policy.policyId, configWithEndAt("history-heavy-later-round", stamp(11), stamp(13)), pricesAt(stamp(9)), "history-heavy-later-round");
+
+    const latest = await sql<{ last_run_id: string }[]>`select last_run_id from public.standing_paper_policies where policy_id=${first.policy.policyId}`;
+    await sql`
+      insert into public.standing_paper_decisions (policy_id, financial_account_id, order_id, input_hash, decision_json, run_id, created_at)
+      select ${first.policy.policyId}, ${first.policy.financialAccountId}, 'overflow-' || n::text, repeat('a', 64),
+        jsonb_build_object('decisionId', 'overflow-decision-' || n::text, 'orderId', 'overflow-' || n::text, 'outcome', 'REJECTED', 'riskCodes', jsonb_build_array(),
+          'evidence', jsonb_build_object('policyId', ${first.policy.policyId}::text, 'policyVersion', 'standing-paper-policy/v1', 'inputHash', repeat('a', 64), 'reasonCode', 'PRICE_STALE', 'disposition', 'REJECT')),
+        ${latest[0]!.last_run_id}::uuid, now() + n * interval '1 millisecond'
+      from generate_series(1, 405) n
+    `;
+    const status = await first.repository.loadOwnedStatus(owner);
+    const heavy = status.policies.find(policy => policy.policyId === first.policy.policyId)!;
+    const light = status.policies.find(policy => policy.policyId === secondPolicy.policyId)!;
+    expect(heavy.decisions).toHaveLength(20);
+    expect(light.decisions.length).toBeGreaterThan(0);
+    expect(heavy.lastRound).toMatchObject({ asOf: stamp(11) });
+
+    await sql.begin(async tx => {
+      await tx`set local session_replication_role = replica`;
+      await tx`update public.standing_paper_runs set result_json=jsonb_set(result_json, '{endingState,asOf}', '"2026-03-01T10:11:00.000Z"'::jsonb) where id=${latest[0]!.last_run_id}::uuid`;
+    });
+    const invalidBinding = await first.repository.loadOwnedStatus(owner);
+    expect(invalidBinding.policies.find(policy => policy.policyId === first.policy.policyId)?.status).toBe("INVALID");
+  });
+
+  it("grants authenticated status reads through migrations while preserving owner RLS", async () => {
+    const privileges = await sql<{ table_name: string; can_select: boolean; rls_enabled: boolean }[]>`
+      select tables.table_name, has_table_privilege('authenticated', format('public.%I', tables.table_name), 'select') as can_select,
+        cls.relrowsecurity as rls_enabled
+      from (values ('financial_accounts'), ('ledger_accounts'), ('ledger_transactions'), ('ledger_entries'),
+        ('standing_paper_policies'), ('standing_paper_runs'), ('standing_paper_decisions'), ('standing_paper_fills')) as tables(table_name)
+      join pg_class cls on cls.relname=tables.table_name join pg_namespace ns on ns.oid=cls.relnamespace and ns.nspname='public'
+      order by tables.table_name
+    `;
+    expect(privileges).toHaveLength(8);
+    expect(privileges.every(row => row.can_select && row.rls_enabled)).toBe(true);
+  });
 });
+const configWithEndAt = (eventId: string, availableAt: string, endAt: string): Omit<BacktestRunConfig, "standingPaperPolicy"> => ({ ...config(eventId, availableAt), endAt });
