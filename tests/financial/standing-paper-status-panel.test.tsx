@@ -29,6 +29,18 @@ const projectedCard = projectStandingPaperStatusCard({
   ],
 });
 const model = projectStandingPaperStatusReadModel([projectedCard]);
+const incompleteCard = projectStandingPaperStatusCard({
+  policy: testPolicy, state: testResult.persistentState,
+  run: { id: "incomplete-run", createdAt: "2026-10-08T10:00:02.000Z", result: testResult, valuation: { navMinor: null, asOf: testResult.endingState.asOf, complete: false } },
+  decisions: [], fills: [],
+});
+const secondPolicyCard = projectStandingPaperStatusCard({
+  policy: { ...testPolicy, policyId: "paper-policy-available", identity: "synthetic-available-account", financialAccountId: "paper-account-available" },
+  state: testResult.persistentState,
+  run: { id: "available-run", createdAt: "2026-10-08T10:00:03.000Z", result: testResult, valuation: { navMinor: testResult.endingState.nav, asOf: testResult.endingState.asOf, complete: true } },
+  decisions: [], fills: [],
+});
+const incompleteModel = projectStandingPaperStatusReadModel([incompleteCard]);
 const response = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("standing paper status view", () => {
@@ -37,6 +49,32 @@ describe("standing paper status view", () => {
     expect(await loadStandingPaperStatus(fetcher)).toEqual({ kind: "DATA", model });
     expect(fetcher).toHaveBeenCalledWith("/api/dashboard/paper-status", { cache: "no-store", credentials: "same-origin" });
     expect(parseStandingPaperStatus({ ...model, workerStatus: "RUNNING" })).toBeNull();
+  });
+
+  it("loads and renders backend-projected incomplete valuations alone and alongside available policies", async () => {
+    expect(incompleteCard.portfolioValueAsOf).toBe(incompleteCard.lastRound?.asOf);
+    expect(incompleteCard.portfolioValueMinor).toBeNull();
+    expect(incompleteCard.currentLossMinor).toBeNull();
+    expect(incompleteCard.remainingLossMarginMinor).toBeNull();
+    const mixedModel = projectStandingPaperStatusReadModel([incompleteCard, secondPolicyCard]);
+    for (const projected of [incompleteModel, mixedModel]) {
+      expect(parseStandingPaperStatus(projected)).toEqual(projected);
+      const state = await loadStandingPaperStatus(async () => response(200, projected));
+      expect(state).toEqual({ kind: "DATA", model: projected });
+      const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={state} />);
+      expect(html).toContain("Ufullstendig verdsettelse");
+      expect(html).toContain("Gjelder");
+    }
+  });
+
+  it("rejects incomplete valuations with conflicting timestamps or financial values", async () => {
+    const card = incompleteModel.policies[0]!;
+    const conflictingTime = { ...incompleteModel, policies: [{ ...card, portfolioValueAsOf: "2026-10-08T09:59:59.000Z" }] };
+    const invalidAmount = { ...incompleteModel, policies: [{ ...card, currentLossMinor: "1" }] };
+    for (const invalid of [conflictingTime, invalidAmount]) {
+      expect(parseStandingPaperStatus(invalid)).toBeNull();
+      expect(await loadStandingPaperStatus(async () => response(200, invalid))).toEqual({ kind: "READ_ERROR" });
+    }
   });
 
   it("rejects contradictory or malformed identity, version, amount and status material", () => {
@@ -88,8 +126,7 @@ describe("standing paper status view", () => {
     expect(render({ kind: "LOADING" })).toContain("Laster paper-status");
     const noRounds = { ...model, status: "NO_ROUNDS" as const, policies: [{ ...model.policies[0]!, status: "NO_ROUNDS" as const, lastRound: null }] };
     expect(render({ kind: "DATA", model: noRounds })).toContain("Ingen fullførte runder");
-    const incomplete = { ...model, status: "INCOMPLETE" as const, policies: [{ ...model.policies[0]!, status: "INCOMPLETE" as const, issueCode: "PAPER_VALUATION_INCOMPLETE" as const }] };
-    expect(render({ kind: "DATA", model: incomplete })).toContain("Ufullstendig verdsettelse");
+    expect(render({ kind: "DATA", model: incompleteModel })).toContain("Ufullstendig verdsettelse");
     const invalid = { ...model, status: "INVALID" as const, policies: [{ ...model.policies[0]!, status: "INVALID" as const, identity: null, version: null, policyStatus: "UNKNOWN" as const, mode: "UNKNOWN" as const, allowedInstrumentIds: [], riskLimits: { capitalBudgetMinor: null, maxOrderMinor: null, maxPositionMinor: null, maxGrossExposureMinor: null, maxLossMinor: null, maxPriceAgeMs: null }, lastRound: null, netContributionsMinor: null, committedCapitalMinor: null, remainingCapitalBudgetMinor: null, portfolioValueMinor: null, portfolioValueAsOf: null, currentLossMinor: null, remainingLossMarginMinor: null, decisions: [], fills: [], issueCode: "PAPER_MATERIAL_INVALID" as const }] };
     expect(render({ kind: "DATA", model: invalid })).toContain("Ugyldig eller ufullstendig lagret materiale");
     expect(render({ kind: "READ_ERROR" })).toContain("Paper-status utilgjengelig");

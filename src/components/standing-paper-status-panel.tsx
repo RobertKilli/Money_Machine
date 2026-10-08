@@ -34,12 +34,13 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
     typeof limits.maxPriceAgeMs !== "number" || !Number.isSafeInteger(limits.maxPriceAgeMs) || limits.maxPriceAgeMs <= 0 ||
     ![value.netContributionsMinor, value.committedCapitalMinor, value.remainingCapitalBudgetMinor].every(isNonnegativeAmount)) return false;
   if (value.lastRound !== null && (!isRecord(value.lastRound) || !isText(value.lastRound.id) || !isDate(value.lastRound.completedAt) || !isDate(value.lastRound.asOf))) return false;
-  const noSavedValuation = value.portfolioValueMinor === null && value.portfolioValueAsOf === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null;
+  const noValuationAmounts = value.portfolioValueMinor === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null;
+  const noSavedValuation = noValuationAmounts && value.portfolioValueAsOf === null;
   if (value.status === "NO_ROUNDS") return value.lastRound === null && noSavedValuation && value.decisions.length === 0 && value.fills.length === 0 && value.issueCode === null;
   if (value.lastRound === null) return false;
   if (value.status === "AVAILABLE" && (!isNonnegativeAmount(value.portfolioValueMinor) || !isDate(value.portfolioValueAsOf) || value.portfolioValueAsOf !== value.lastRound.asOf ||
     !isNonnegativeAmount(value.currentLossMinor) || !isNonnegativeAmount(value.remainingLossMarginMinor) || value.issueCode !== null)) return false;
-  if (value.status === "INCOMPLETE" && (!noSavedValuation || value.issueCode !== "PAPER_VALUATION_INCOMPLETE")) return false;
+  if (value.status === "INCOMPLETE" && (!noValuationAmounts || !isDate(value.portfolioValueAsOf) || value.portfolioValueAsOf !== value.lastRound.asOf || value.issueCode !== "PAPER_VALUATION_INCOMPLETE")) return false;
   const decisionCodes = ["POLICY_NOT_ACTIVE", "PRICE_MISSING", "PRICE_STALE", "INSTRUMENT_NOT_ALLOWED", "ORDER_LIMIT_EXCEEDED", "POSITION_LIMIT_EXCEEDED", "EXPOSURE_LIMIT_EXCEEDED", "CAPITAL_BUDGET_EXCEEDED", "LOSS_LIMIT_EXCEEDED", "M1_RISK_REJECTED", "APPROVED"];
   const decisionsValid = value.decisions.every(item => isRecord(item) && isText(item.orderId) && isText(item.decisionId) &&
     ["SIMULATED_FILLED", "REJECTED"].includes(String(item.outcome)) && decisionCodes.includes(String(item.reasonCode)) &&
