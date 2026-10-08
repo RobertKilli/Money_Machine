@@ -122,7 +122,14 @@ try {
   const output = JSON.parse(await readFile(report, "utf8"));
   const assertions = output.testResults?.flatMap(file => file.assertionResults ?? []) ?? [];
   console.log(assertions.map(item => `${item.status}: ${item.title}${item.failureMessages?.length ? `\n${item.failureMessages.join("\n")}` : ""}`).join("\n"));
-  const cases = ["continues one account across runner instances; replay and concurrent budget use stay idempotent", "rollback after persistence writes leaves no partial settlement", "deposit and process restart preserve contribution-adjusted loss margin", "pause and stop block new rounds before orders are written"];
+  const cases = [
+    "continues one account across runner instances; replay and concurrent budget use stay idempotent",
+    "rejects a pre-existing account ledger and an external ledger change between rounds",
+    "rejects malformed checkpoints without writing or resetting loss margin",
+    "rollback after persistence writes leaves no partial settlement",
+    "deposit and process restart preserve contribution-adjusted loss margin",
+    "pause and stop block new rounds before orders are written",
+  ];
   if (probeMode === "failure") {
     if (!suiteError || !assertions.some(item => item.status === "failed")) throw new Error("STANDING_PAPER_FAILURE_PROBE_DID_NOT_FAIL");
     console.log("Confirmed deliberate PostgreSQL suite failure; later work stopped and cleanup completed.");
