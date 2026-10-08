@@ -20,8 +20,8 @@ const pollText = argument("--poll-ms", false);
 let databaseUrl: URL;
 try { databaseUrl = new URL(connectionString); }
 catch { throw new Error("PAPER_WORKER_DATABASE_URL_INVALID"); }
-if (!((databaseUrl.hostname === "127.0.0.1" || databaseUrl.hostname === "localhost") && /^\/mm_paper_[0-9a-f]{32}$/.test(databaseUrl.pathname))) {
-  throw new Error("PAPER_WORKER_REFUSES_NON_TASK_OWNED_LOCAL_DATABASE");
+if (!(["127.0.0.1", "localhost", "[::1]"].includes(databaseUrl.hostname))) {
+  throw new Error("PAPER_WORKER_REFUSES_NON_LOCAL_DATABASE");
 }
 const maxRounds = maxRoundsText === undefined ? undefined : Number(maxRoundsText);
 const pollIntervalMs = pollText === undefined ? undefined : Number(pollText);

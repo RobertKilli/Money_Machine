@@ -76,9 +76,9 @@ task-owned local database URL, policy ID, and a stable worker ID explicitly:
 npm run paper:worker -- --database-url postgresql://postgres:postgres@127.0.0.1:55432/mm_paper_<32-hex-task-id> --policy-id <active-policy-id> --worker-id local-paper-1 --max-rounds 3
 ```
 
-The CLI rejects non-loopback databases and database names outside the
-task-owned `mm_paper_<32-hex-task-id>` form. It does not consult `DATABASE_URL`.
-Omit `--max-rounds` for a continuously running local process. Its input stream
+The CLI requires an explicit loopback database URL and does not consult
+`DATABASE_URL`. The bounded demo uses a task-owned `mm_paper_<32-hex-task-id>`
+database. Omit `--max-rounds` for a continuously running local process. Its input stream
 uses deterministic synthetic fixture prices and virtual contributions; it
 has no provider, broker, exchange, or live-trading adapter. Round keys are
 stable by policy, worker ID, and durable round ordinal. A restart continues at
