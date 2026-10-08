@@ -429,4 +429,41 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
       }
     }
   });
+
+  it("reads a consistent owned paper status snapshot and never exposes another owner's policy", async () => {
+    const first = await setup("read-status-owner-one");
+    const ownerRows = await sql<{ owner_id: string }[]>`select owner_id from public.financial_accounts where id=${first.policy.financialAccountId}`;
+    const ownerOne = ownerRows[0]!.owner_id;
+    await first.repository.run(first.policy.policyId, config("status-deposit", stamp(10)), pricesAt(stamp(9)), "status-round");
+
+    const ownerTwo = randomUUID(); const accountTwo = randomUUID();
+    await sql`insert into auth.users (id) values (${ownerTwo})`;
+    await sql`insert into public.financial_accounts (id, owner_id, mode, status, base_currency_code) values (${accountTwo}, ${ownerTwo}, 'PAPER', 'ACTIVE', 'NOK')`;
+    const policyTwo: StandingPaperPolicy = {
+      policyId: `status-owner-two-${randomUUID()}`, version: "standing-paper-policy/v1", identity: "synthetic-owner-two",
+      mode: "PAPER_ONLY", status: "DRAFT", financialAccountId: accountTwo, allowedInstrumentIds: FIXTURE_ASSETS.map(asset => asset.assetId),
+      capitalBudgetMinor: 500_000n, maxOrderMinor: 100_000n, maxPositionMinor: 300_000n,
+      maxGrossExposureMinor: 500_000n, maxLossMinor: 25_000n, maxPriceAgeMs: 86_400_000,
+    };
+    const secondRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(secondRepository);
+    await secondRepository.create(policyTwo);
+    await secondRepository.transition(policyTwo.policyId, "ACTIVATE");
+
+    const one = await first.repository.loadOwnedStatus(ownerOne);
+    expect(one.status).toBe("AVAILABLE");
+    expect(one.workerStatus).toBe("UNKNOWN");
+    expect(one.policies).toHaveLength(1);
+    expect(one.policies[0]).toMatchObject({ policyId: first.policy.policyId, status: "AVAILABLE", policyStatus: "ACTIVE", mode: "PAPER_ONLY", workerStatus: "UNKNOWN" });
+    expect(one.policies[0]!.lastRound).toMatchObject({ asOf: stamp(10) });
+    expect(one.policies[0]!.netContributionsMinor).toBe("100000");
+    expect(one.policies[0]!.portfolioValueMinor).not.toBeNull();
+    expect(one.policies[0]!.decisions.length).toBeGreaterThan(0);
+
+    const two = await secondRepository.loadOwnedStatus(ownerTwo);
+    expect(two.status).toBe("NO_ROUNDS");
+    expect(two.policies.map(policy => policy.policyId)).toEqual([policyTwo.policyId]);
+    const ownerOneViaSecondConnection = await secondRepository.loadOwnedStatus(ownerOne);
+    expect(ownerOneViaSecondConnection).toMatchObject({ status: "AVAILABLE", policies: [{ policyId: first.policy.policyId }] });
+    expect(ownerOneViaSecondConnection.policies.some(policy => policy.policyId === policyTwo.policyId)).toBe(false);
+  });
 });

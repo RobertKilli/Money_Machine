@@ -181,3 +181,9 @@ ledger transactions, ledger entries, and audit evidence are append-only.
   only and has no broker/exchange adapter. PostgreSQL row locking serializes
   decisions and the existing ledger remains authoritative for the synthetic
   FinancialAccount; its risk checkpoint is updated in the same transaction.
+
+## Read-only status view
+
+The authenticated dashboard at `/dashboard/paper` reads the caller's own PAPER accounts and policies through a read-only, repeatable-read PostgreSQL snapshot. The API checks the authenticated user before querying account data, returns private `no-store` responses, and limits history to the latest 20 decisions and fills per policy. Stored policies, checkpoints, run results, decisions, fills, and acquisition evidence are validated before projection; corrupt or incomplete material is shown as such rather than silently repaired.
+
+Displayed balances and portfolio values are the latest saved simulation snapshot, with its effective timestamp. They are not fresh market prices. The view labels the mode `PAPER_ONLY`, prices as synthetic, and fills as simulated. Worker status remains `UNKNOWN`: a stored completed round does not prove a worker is currently running, and this version has no heartbeat evidence. The page is read-only and offers no policy or trading controls.
