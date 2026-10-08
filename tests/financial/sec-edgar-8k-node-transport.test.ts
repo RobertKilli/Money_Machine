@@ -153,6 +153,19 @@ const recentSubmission = (overrides: Record<string, unknown> = {}) => ({
   },
   ...overrides,
 });
+function recentSubmissionWithRows(rowCount: number) {
+  const accessionNumber = Array.from({ length: rowCount }, (_, index) => index === 0 ? "0001193125-23-255762" : "0000320193-23-106611");
+  const form = Array.from({ length: rowCount }, (_, index) => index === 0 ? "8-K" : "10-K");
+  const filingDate = Array.from({ length: rowCount }, () => "2023-10-13");
+  const primaryDocument = Array.from({ length: rowCount }, (_, index) => index === 0 ? "d537928d8k.htm" : "");
+  return {
+    cik: "789019",
+    filings: {
+      recent: { accessionNumber, form, filingDate, primaryDocument },
+      files: [{ name: "CIK0000789019-submissions-001.json", filingCount: 2, filingFrom: "2023-10-01", filingTo: "2023-10-31" }],
+    },
+  };
+}
 const filingIndex = (overrides: Record<string, string> = {}) => `<!DOCTYPE html><html><body>
 <div id="filerDiv"><span class="companyName">MICROSOFT CORP (Filer)</span> CIK: <a href="/Archives/edgar/data/789019">0000789019</a></div>
 <div class="formContent">Form 8-K - Current report:<div class="formGrouping"><div class="infoHead">Form</div><div class="info">8-K - Current report</div></div>
@@ -582,6 +595,27 @@ describe("SEC EDGAR bounded local smoke transport", () => {
     expect(mocks.request).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(result)).not.toContain(contact);
   }, 15000);
+
+  it("accepts the bounded recent-array limit and gives a distinct size diagnostic above it", async () => {
+    const maxRecentRows = 40_000;
+    const boundedPlan = { ...plans[0]!, maxResponseBytes: 2 * 1024 * 1024 };
+    const atLimit = recentSubmissionWithRows(maxRecentRows);
+    const atLimitBody = JSON.stringify(atLimit);
+    expect(Buffer.byteLength(atLimitBody)).toBeLessThanOrEqual(boundedPlan.maxResponseBytes);
+    installBodySequence([atLimitBody, filingIndex()]);
+    const acceptedResult = await runSecEdgar8kLocalSmoke({ initialPlan: boundedPlan, operatorContact: contact });
+    expect(acceptedResult.status).toBe("VERIFIED");
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+
+    mocks.request.mockReset();
+    freshPermit();
+    const overLimit = recentSubmissionWithRows(maxRecentRows + 1);
+    installBodySequence([JSON.stringify(overLimit)]);
+    const rejectedResult = await runSecEdgar8kLocalSmoke({ initialPlan: boundedPlan, operatorContact: contact });
+    expect(rejectedResult).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_SCHEMA_INVALID", diagnostic: { stage: "SUBMISSIONS", reason: "ARRAY_LIMIT_EXCEEDED", field: "filings.recent.accessionNumber" } });
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(rejectedResult)).not.toContain(contact);
+  }, 30_000);
 
   it("rejects conflicting available acceptance timestamps rather than choosing a source", async () => {
     const current = recentSubmission();
