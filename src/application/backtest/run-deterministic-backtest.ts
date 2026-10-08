@@ -28,6 +28,17 @@ export interface BacktestResult {
   readonly portfolioSnapshots: readonly PortfolioProjection[]; readonly endingState: PortfolioProjection;
   readonly integrityStatus: "CONSISTENT";
   readonly paperPolicyDecisions: readonly { readonly decisionId: string; readonly orderId: string; readonly outcome: "SIMULATED_FILLED" | "REJECTED"; readonly riskCodes: readonly string[]; readonly evidence: PaperPolicyEvidence }[];
+  readonly persistentState: DeterministicBacktestState;
+}
+
+/** Ledger-derived continuation material; serializable at database boundaries. */
+export interface DeterministicBacktestState {
+  readonly ledger: readonly PortfolioLedgerEvidence[];
+  readonly acquisitions: readonly AcquisitionEvidence[];
+  readonly netContributionsMinor: bigint;
+  readonly adjustedEquityHighWaterMinor: bigint;
+  readonly committedCapitalMinor: bigint;
+  readonly lastProcessedAt: Date | null;
 }
 
 const canonical = (value: unknown): string => JSON.stringify(value, (_, v) => typeof v === "bigint" ? v.toString() : v instanceof Date ? v.toISOString() : v, 0);
@@ -44,7 +55,7 @@ function validate(config: BacktestRunConfig): void {
 }
 function account(financialAccountId: string, code: string, commodity: LedgerAccount["commodity"], cls: LedgerAccount["accountClass"], normal: LedgerAccount["normalBalance"], run: string): LedgerAccount { return { id: id(run, `account:${code}`), financialAccountId, code, commodity, accountClass: cls, normalBalance: normal }; }
 
-export function runDeterministicBacktest(config: BacktestRunConfig, prices: readonly FixturePriceObservation[]): BacktestResult {
+export function runDeterministicBacktest(config: BacktestRunConfig, prices: readonly FixturePriceObservation[], initialState?: DeterministicBacktestState): BacktestResult {
   validate(config);
   const canonicalConfig = canonical({ ...config, contributionEvents: [...config.contributionEvents].sort((a,b) => date(a.availableAt).getTime()-date(b.availableAt).getTime() || a.eventId.localeCompare(b.eventId)), valuationTimestamps: [...config.valuationTimestamps].sort() });
   const configHash = hash(canonicalConfig); const runId = hash(`${configHash}:${config.marketDatasetVersion}`);
@@ -53,14 +64,17 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
   const cash = account(financialAccountId, "CASH", { kind: "MONEY", currencyCode: "NOK" }, "ASSET", "DEBIT", runId);
   const capital = account(financialAccountId, "VIRTUAL_CONTRIBUTED_CAPITAL", { kind: "MONEY", currencyCode: "NOK" }, "EQUITY", "CREDIT", runId);
   const fee = account(financialAccountId, "FEE_EXPENSE", { kind: "MONEY", currencyCode: "NOK" }, "EXPENSE", "DEBIT", runId);
-  const ledger: PortfolioLedgerEvidence[] = []; const journals: LedgerTransaction[] = []; const acquisitions: AcquisitionEvidence[] = [];
+  const ledger: PortfolioLedgerEvidence[] = [...(initialState?.ledger ?? [])]; const journals: LedgerTransaction[] = []; const acquisitions: AcquisitionEvidence[] = [...(initialState?.acquisitions ?? [])];
   const decisions: StrategyDecision[] = []; const risks: ReturnType<typeof assessProposal>[] = []; const executions: SimulationFill[] = []; const snapshots: PortfolioProjection[] = [];
   const paperPolicyDecisions: { decisionId: string; orderId: string; outcome: "SIMULATED_FILLED" | "REJECTED"; riskCodes: readonly string[]; evidence: PaperPolicyEvidence }[] = [];
-  let committedCapitalMinor = 0n; let netContributionsMinor = 0n; let adjustedEquityHighWaterMinor = 0n;
+  let committedCapitalMinor = initialState?.committedCapitalMinor ?? 0n; let netContributionsMinor = initialState?.netContributionsMinor ?? 0n; let adjustedEquityHighWaterMinor = initialState?.adjustedEquityHighWaterMinor ?? 0n;
+  let lastProcessedAt = initialState?.lastProcessedAt ?? null;
   const source = (): PortfolioEvidence => ({ financialAccountId, baseCurrency: "NOK", ledger, acquisitions, assets: FIXTURE_ASSETS, prices: prices.filter(p => p.datasetVersion === config.marketDatasetVersion) });
   const stateAt = (at: Date): { projection: PortfolioProjection; state: DecisionPortfolioState } => { const projection = projectPortfolio(source(), at); if (projection.valuationStatus === "INCOMPLETE" || projection.nav === null) throw new Error("INCOMPLETE_DECISION_PORTFOLIO"); const values = Object.fromEntries(projection.holdings.map(h => [h.assetId, BigInt(h.marketValueMinor!)])); return { projection, state: { cashMinor: BigInt(projection.cash), decisionNavMinor: BigInt(projection.nav), holdings: projection.holdings.map(h => ({ assetId: h.assetId, marketValueMinor: BigInt(h.marketValueMinor!) })), existingMarketValueByAsset: values, priceRecordIds: projection.provenance.priceRecordIds } }; };
   const events = [...config.contributionEvents.map(e => ({ kind: "CONTRIBUTION" as const, at: date(e.availableAt), event: e })), ...config.valuationTimestamps.map(t => ({ kind: "VALUATION" as const, at: date(t) }))].sort((a,b) => a.at.getTime()-b.at.getTime() || (a.kind === "CONTRIBUTION" ? -1 : 1) || (a.kind === "CONTRIBUTION" && b.kind === "CONTRIBUTION" ? a.event.eventId.localeCompare(b.event.eventId) : 0));
   for (const event of events) {
+    if (lastProcessedAt && event.at.getTime() < lastProcessedAt.getTime()) throw new Error("PAPER_ROUND_TIMESTAMP_REGRESSION");
+    if (!lastProcessedAt || event.at.getTime() > lastProcessedAt.getTime()) lastProcessedAt = event.at;
     if (event.kind === "CONTRIBUTION") {
       const preContributionPortfolio = stateAt(event.at).projection;
       if (preContributionPortfolio.nav !== null) {
@@ -129,5 +143,6 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
     snapshots.push(snapshot);
   }
   const endingState = snapshots.at(-1) ?? projectPortfolio(source(), date(config.endAt));
-  return Object.freeze({ runId, configHash, config, decisions: Object.freeze(decisions), riskAssessments: Object.freeze(risks), executions: Object.freeze(executions), journals: Object.freeze(journals), portfolioSnapshots: Object.freeze(snapshots), endingState, integrityStatus: "CONSISTENT" as const, paperPolicyDecisions: Object.freeze(paperPolicyDecisions) });
+  const persistentState: DeterministicBacktestState = { ledger: [...ledger], acquisitions: [...acquisitions], netContributionsMinor, adjustedEquityHighWaterMinor, committedCapitalMinor, lastProcessedAt };
+  return Object.freeze({ runId, configHash, config, decisions: Object.freeze(decisions), riskAssessments: Object.freeze(risks), executions: Object.freeze(executions), journals: Object.freeze(journals), portfolioSnapshots: Object.freeze(snapshots), endingState, integrityStatus: "CONSISTENT" as const, paperPolicyDecisions: Object.freeze(paperPolicyDecisions), persistentState });
 }

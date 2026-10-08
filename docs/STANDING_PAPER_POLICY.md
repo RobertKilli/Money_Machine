@@ -11,7 +11,9 @@ quantities and prices retain their M1 asset and price scales.
 Policies begin in `DRAFT`. `ACTIVATE` makes a policy eligible, `PAUSE` blocks
 new orders while retaining its identity, and `STOP` is terminal. The local demo
 activates an in-memory policy containing synthetic values. It does not create
-or enable a live mandate.
+or enable a live mandate. The PostgreSQL runner requires an existing active
+`PAPER` FinancialAccount and creates a policy in `DRAFT`; only explicit
+`ACTIVATE` makes it runnable.
 
 Each strategy proposal passes the existing `m1-risk-policy/v1`, then the
 standing policy evaluates status/account, price record and age, synthetic
@@ -42,8 +44,38 @@ virtual NOK contributions. Output calls fills `SIMULATED_PAPER_FILL`. It makes
 no provider, broker, exchange, hosted database, or live execution call. Its
 idempotency boundary is process-local: concurrent attempts and replays within
 one runner instance return the same outcome, while reusing a key with changed
-input fails. Durable cross-process policy/order persistence and database-level
-locking are outside this local demonstration.
+input fails. Durable state is provided separately by
+`StandingPaperPolicyRepository` for an existing PAPER FinancialAccount.
+
+Run its task-eid disposable local PostgreSQL integration suite with:
+
+```sh
+npm run test:standing-paper:postgres
+```
+
+The command creates a uniquely labeled local PostgreSQL container and volume,
+binds only to loopback, applies checked-in migrations, runs the integration
+suite, then verifies that the container, volume, report, and temporary folder
+are gone. It does not read `DATABASE_URL` and rejects a database URL that is
+not for its task-owned `127.0.0.1/mm_paper_<random-id>` database.
+
+Each durable decision round locks the policy row with `SELECT ... FOR UPDATE`.
+Inside that transaction it checks the run input hash, rejects contribution
+event IDs already processed, evaluates only new events using saved ledger and
+acquisition evidence, inserts run and decision records, creates simulated fill
+evidence, writes contribution idempotency and audit records, appends balanced
+transactions to the existing ledger, and updates the portfolio/risk checkpoint.
+Any error rolls the whole set of writes back. Unique constraints add a second
+idempotency barrier. Separate repository instances serialize on the same
+policy row. Previous contributions and fills are restored from the checkpoint;
+they are never passed through strategy or execution again.
+
+Migration `20261008120000_standing_paper_persistence.sql` adds policy state,
+run idempotency, contribution claims, decision records, and paper fill links.
+It references existing FinancialAccounts and ledger tables. The migration is
+source only; this change does not apply it to a hosted database. Current policy
+status and checkpoint are mutable. Runs, decisions, contributions, fills,
+ledger transactions, ledger entries, and audit evidence are append-only.
 
 ## What the simulation establishes
 
@@ -54,6 +86,9 @@ locking are outside this local demonstration.
   that reach the policy gate.
 - Multiple unattended decision rounds under one explicitly active
   PAPER_ONLY policy, plus process-local replay and simultaneous-call behavior.
+- The PostgreSQL path resumes the same ledger-derived account in a new runner,
+  serializes concurrent rounds, rejects duplicate events, and rolls back all
+  monetary and audit writes together after an injected failure.
 
 ## Assumptions and limits
 
@@ -65,7 +100,8 @@ locking are outside this local demonstration.
 - This fixture has no live provider data, brokerage, account custody,
   partial fills, exchange liquidity, or live mandate. Results are not actual
   investment performance, a forecast, financial advice, or a guarantee.
-- The runner is an offline review tool, not a durable unattended production
-  service. Production persistence, cross-process idempotency/locking, operator
-  controls, loss semantics, and legal/product review need a separately scoped
-  milestone.
+- The PostgreSQL runner is a local simulation persistence boundary, not a
+  production unattended trading service. It accepts synthetic fixture prices
+  only and has no broker/exchange adapter. PostgreSQL row locking serializes
+  decisions and the existing ledger remains authoritative for the synthetic
+  FinancialAccount; its risk checkpoint is updated in the same transaction.

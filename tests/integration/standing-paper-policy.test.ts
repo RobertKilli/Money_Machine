@@ -1,0 +1,140 @@
+import { randomUUID } from "node:crypto";
+import postgres, { type Sql, type TransactionSql } from "postgres";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
+import { price } from "@/domain/financial/price";
+import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
+import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
+
+const enabled = process.env.MONEY_MACHINE_INTEGRATION_TEST === "1";
+const testUrl = process.env.MM_STANDING_PAPER_TEST_DATABASE_URL;
+function assertTaskOwnedLocalDatabase(url: string | undefined): asserts url is string {
+  if (!url) throw new Error("STANDING_PAPER_TEST_DATABASE_URL_REQUIRED");
+  const parsed = new URL(url);
+  if (parsed.hostname !== "127.0.0.1" || !/^\/mm_paper_[0-9a-f]{32}$/.test(parsed.pathname)) throw new Error("STANDING_PAPER_TEST_REFUSES_NON_TASK_OWNED_DATABASE");
+}
+const stamp = (hour: number) => `2026-03-01T${String(hour).padStart(2, "0")}:10:00.000Z`;
+const pricesAt = (availableAt: string, priceAtoms = 10_000n): FixturePriceObservation[] => FIXTURE_ASSETS.map((asset, index) => ({
+  recordId: `synthetic-${availableAt}-${index}-${priceAtoms}`, assetId: asset.assetId, price: price("NOK", priceAtoms * BigInt(index + 1), 4),
+  observedAt: new Date(availableAt), availableAt: new Date(availableAt), ingestedAt: new Date(availableAt), datasetVersion: FIXTURE_DATASET_VERSION,
+}));
+const config = (eventId: string, availableAt: string, amountMinor = "100000"): Omit<BacktestRunConfig, "standingPaperPolicy"> => ({
+  startAt: availableAt, endAt: availableAt, baseCurrency: "NOK",
+  contributionEvents: [{ eventId, availableAt, amountMinor, currency: "NOK" }], valuationTimestamps: [],
+  strategyVersion: "contribution-rebalancing/v1", riskPolicyVersion: "m1-risk-policy/v1", executionPolicyVersion: "m1-market-execution/v1",
+  portfolioValuationVersion: "portfolio-valuation/v1", fifoCostBasisVersion: "fifo-cost-basis/v1", assetRegistryVersion: "fixture-asset-registry/v1", marketDatasetVersion: FIXTURE_DATASET_VERSION,
+});
+
+describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", () => {
+  let sql: Sql;
+  const repositories: StandingPaperPolicyRepository[] = [];
+  beforeAll(async () => {
+    assertTaskOwnedLocalDatabase(testUrl);
+    sql = postgres(testUrl, { max: 8, prepare: true });
+  });
+  afterAll(async () => { await Promise.all(repositories.map(repository => repository.close())); await sql?.end({ timeout: 5 }); });
+  async function account() {
+    const owner = randomUUID(); const financialAccountId = randomUUID();
+    await sql`insert into auth.users (id) values (${owner})`;
+    await sql`insert into public.financial_accounts (id, owner_id, mode, status, base_currency_code) values (${financialAccountId}, ${owner}, 'PAPER', 'ACTIVE', 'NOK')`;
+    return financialAccountId;
+  }
+  async function setup(label: string, capitalBudgetMinor = 1_000_000n, maxLossMinor = 1_000_000n) {
+    const financialAccountId = await account();
+    const policy: StandingPaperPolicy = {
+      policyId: `persistent-${label}-${randomUUID()}`, version: "standing-paper-policy/v1", identity: `synthetic-${label}`,
+      mode: "PAPER_ONLY", status: "DRAFT", financialAccountId, allowedInstrumentIds: FIXTURE_ASSETS.map(asset => asset.assetId),
+      capitalBudgetMinor, maxOrderMinor: capitalBudgetMinor, maxPositionMinor: capitalBudgetMinor,
+      maxGrossExposureMinor: capitalBudgetMinor, maxLossMinor, maxPriceAgeMs: 7 * 24 * 60 * 60 * 1000,
+    };
+    const repository = new StandingPaperPolicyRepository(testUrl!); repositories.push(repository);
+    await repository.create(policy);
+    await repository.transition(policy.policyId, "ACTIVATE");
+    return { repository, policy };
+  }
+  async function counts(accountId: string) {
+    const rows = await sql`select
+      (select count(*)::text from public.standing_paper_runs where financial_account_id=${accountId}) runs,
+      (select count(*)::text from public.standing_paper_contributions where financial_account_id=${accountId}) contributions,
+      (select count(*)::text from public.standing_paper_decisions where financial_account_id=${accountId}) decisions,
+      (select count(*)::text from public.standing_paper_fills where financial_account_id=${accountId}) fills,
+      (select count(*)::text from public.ledger_transactions where financial_account_id=${accountId}) journals,
+      (select count(*)::text from public.audit_events where financial_account_id=${accountId}) audits`;
+    return rows[0]!;
+  }
+
+  it("continues one account across runner instances; replay and concurrent budget use stay idempotent", async () => {
+    const f = await setup("continue", 110_000n);
+    const at1 = stamp(10); const at2 = stamp(11); const p = pricesAt(stamp(9));
+    const first = await f.repository.run(f.policy.policyId, config("deposit-a", at1), p, "round-a");
+    const secondRunner = new StandingPaperPolicyRepository(testUrl!); repositories.push(secondRunner);
+    const second = await secondRunner.run(f.policy.policyId, config("deposit-b", at2), p, "round-b");
+    expect(second.persistentState.netContributionsMinor).toBe(200_000n);
+    expect(second.persistentState.ledger.length).toBeGreaterThan(first.persistentState.ledger.length);
+    expect(await secondRunner.run(f.policy.policyId, config("deposit-b", at2), p, "round-b")).toEqual(second);
+    await expect(secondRunner.run(f.policy.policyId, config("deposit-c", at2), p, "round-b")).rejects.toThrow("IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_INPUT");
+    const duplicateAttempts = await Promise.all([
+      f.repository.run(f.policy.policyId, config("deposit-c", stamp(12)), p, "round-c"),
+      secondRunner.run(f.policy.policyId, config("deposit-c", stamp(12)), p, "round-c"),
+    ]);
+    expect(duplicateAttempts[0]).toEqual(duplicateAttempts[1]);
+    await expect(Promise.all([
+      f.repository.run(f.policy.policyId, config("deposit-d", stamp(13)), p, "round-d"),
+      secondRunner.run(f.policy.policyId, config("deposit-e", stamp(13)), p, "round-e"),
+    ])).resolves.toHaveLength(2);
+    const persisted = await sql<{ state: string }[]>`select state_json::text as state from public.standing_paper_policies where policy_id=${f.policy.policyId}`;
+    const checkpoint = JSON.parse(persisted[0]!.state) as { committedCapitalMinor?: { value?: string } };
+    if (!checkpoint.committedCapitalMinor) throw new Error(`PAPER_CHECKPOINT_SHAPE_INVALID: ${persisted[0]!.state}`);
+    expect(BigInt(checkpoint.committedCapitalMinor?.value ?? "-1")).toBeGreaterThanOrEqual(0n);
+    expect(BigInt(checkpoint.committedCapitalMinor!.value!)).toBeLessThanOrEqual(110_000n);
+    const evidence = await counts(f.policy.financialAccountId);
+    expect(Number(evidence.contributions)).toBe(5);
+    expect(Number(evidence.fills)).toBeLessThanOrEqual(Number(evidence.decisions));
+    expect(Number(evidence.journals)).toBe(Number(evidence.contributions) + Number(evidence.fills));
+    expect(Number(evidence.journals)).toBe(Number(evidence.audits));
+    const duplicates = await sql`select count(*)::text n from public.standing_paper_decisions where financial_account_id=${f.policy.financialAccountId} group by order_id having count(*) > 1`;
+    expect(duplicates).toHaveLength(0);
+  });
+
+  it("rollback after persistence writes leaves no partial settlement", async () => {
+    const f = await setup("rollback");
+    const repo = f.repository as unknown as { client: Sql };
+    const client = repo.client;
+    let injected = false;
+    repo.client = new Proxy(client, { get(target, property, receiver) {
+      if (property !== "begin") return Reflect.get(target, property, receiver);
+      return (work: (tx: TransactionSql) => Promise<unknown>) => client.begin(async tx => { await work(tx); injected = true; throw new Error("CONTROLLED_PAPER_ROLLBACK"); });
+    } });
+    try { await expect(f.repository.run(f.policy.policyId, config("rollback-event", stamp(10)), pricesAt(stamp(9)), "rollback-key")).rejects.toThrow("CONTROLLED_PAPER_ROLLBACK"); }
+    finally { repo.client = client; }
+    expect(injected).toBe(true);
+    expect(await counts(f.policy.financialAccountId)).toEqual({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
+    expect((await f.repository.run(f.policy.policyId, config("rollback-event", stamp(10)), pricesAt(stamp(9)), "rollback-key")).integrityStatus).toBe("CONSISTENT");
+  });
+
+  it("deposit and process restart preserve contribution-adjusted loss margin", async () => {
+    const f = await setup("drawdown", 1_000_000n, 0n);
+    const first = await f.repository.run(f.policy.policyId, config("seed", stamp(10)), pricesAt(stamp(9), 10_000n), "loss-first");
+    const restart = new StandingPaperPolicyRepository(testUrl!); repositories.push(restart);
+    const currentPrices = [...pricesAt(stamp(9), 5_000n), ...pricesAt(stamp(11), 5_000n)];
+    const second = await restart.run(f.policy.policyId, config("new-deposit", stamp(12)), currentPrices, "loss-after-deposit");
+    expect(second.persistentState.netContributionsMinor).toBe(200_000n);
+    expect(second.persistentState.adjustedEquityHighWaterMinor).toBe(first.persistentState.adjustedEquityHighWaterMinor);
+    expect(second.paperPolicyDecisions.length).toBeGreaterThan(0);
+    expect(BigInt(second.paperPolicyDecisions[0]!.evidence.currentLossMinor)).toBeGreaterThan(0n);
+    expect(second.paperPolicyDecisions.every(decision => decision.evidence.reasonCode === "LOSS_LIMIT_EXCEEDED")).toBe(true);
+  });
+
+  it("pause and stop block new rounds before orders are written", async () => {
+    for (const status of ["PAUSED", "STOPPED"] as const) {
+      const f = await setup(status.toLowerCase());
+      if (status === "PAUSED") await f.repository.transition(f.policy.policyId, "PAUSE");
+      else { await f.repository.transition(f.policy.policyId, "STOP"); }
+      await expect(f.repository.run(f.policy.policyId, config(`${status}-event`, stamp(10)), pricesAt(stamp(9)), `${status}-key`)).rejects.toThrow("POLICY_NOT_ACTIVE");
+      expect(await counts(f.policy.financialAccountId)).toEqual({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
+      const transitions = await sql<{ action: string; to_status: string }[]>`select action, to_status from public.standing_paper_policy_transitions where policy_id=${f.policy.policyId} order by occurred_at, id`;
+      expect(transitions.map(row => [row.action, row.to_status])).toEqual([["INITIALIZE", "DRAFT"], ["ACTIVATE", "ACTIVE"], [status === "PAUSED" ? "PAUSE" : "STOP", status]]);
+    }
+  });
+});
