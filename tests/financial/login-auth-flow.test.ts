@@ -5,21 +5,27 @@ const mocks = vi.hoisted(() => ({
   getSupabaseServerClient: vi.fn(),
   signInWithOtp: vi.fn(),
   exchangeCodeForSession: vi.fn(),
+  cookieStore: { getAll: vi.fn(() => [{ name: "sb-flsfallpputejojncyue-auth-token-code-verifier", value: "test-verifier" }]) },
   incomingHost: "moneymachine-eta.vercel.app",
   forwardedHost: "moneymachine-eta.vercel.app",
   forwardedProto: "https",
 }));
 
 vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
-vi.mock("next/headers", () => ({ headers: async () => new Headers({
-  host: mocks.incomingHost,
-  "x-forwarded-host": mocks.forwardedHost,
-  "x-forwarded-proto": mocks.forwardedProto,
-}) }));
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers({
+    host: mocks.incomingHost,
+    "x-forwarded-host": mocks.forwardedHost,
+    "x-forwarded-proto": mocks.forwardedProto,
+  }),
+  cookies: async () => mocks.cookieStore,
+}));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: mocks.getSupabaseServerClient }));
 
 import { getAuthApplicationOrigin, getAuthCallbackUrl, safePostAuthPath } from "@/lib/auth/callback-url";
 import { GET } from "@/app/auth/callback/route";
+import { safeSupabaseAuthErrorCode } from "@/lib/auth/callback-diagnostics";
+import { hasExpectedPkceVerifierCookie } from "@/lib/auth/pkce-verifier-cookie";
 import { requestMagicLink } from "@/app/login/actions";
 import { getLoginNotice } from "@/app/login/notices";
 import LoginPage from "@/app/login/page";
@@ -31,10 +37,15 @@ describe("login callback configuration and flow", () => {
     process.env.NEXT_PUBLIC_SITE_URL = "https://moneymachine-eta.vercel.app";
     process.env.VERCEL_ENV = "production";
     process.env.VERCEL_PROJECT_PRODUCTION_URL = "moneymachine-eta.vercel.app";
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://flsfallpputejojncyue.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "test-public-key";
     mocks.incomingHost = "moneymachine-eta.vercel.app";
     mocks.forwardedHost = "moneymachine-eta.vercel.app";
     mocks.forwardedProto = "https";
     mocks.signInWithOtp.mockResolvedValue({ error: null });
+    mocks.cookieStore.getAll.mockReturnValue([
+      { name: "sb-flsfallpputejojncyue-auth-token-code-verifier", value: "test-verifier" },
+    ]);
     mocks.exchangeCodeForSession.mockResolvedValue({ error: null });
     mocks.getSupabaseServerClient.mockResolvedValue({ auth: {
       signInWithOtp: mocks.signInWithOtp,
@@ -112,6 +123,7 @@ describe("login callback configuration and flow", () => {
   it("exchanges a PKCE code and redirects on the configured app origin", async () => {
     const response = await GET(new Request("https://moneymachine-eta.vercel.app/auth/callback?code=opaque-code&next=%2Fdashboard%3Ftab%3Dpaper"));
 
+    expect(mocks.cookieStore.getAll).toHaveBeenCalled();
     expect(mocks.exchangeCodeForSession).toHaveBeenCalledWith("opaque-code");
     expect(response.headers.get("location")).toBe("https://moneymachine-eta.vercel.app/dashboard?tab=paper");
   });
@@ -179,5 +191,64 @@ describe("login callback configuration and flow", () => {
     mocks.exchangeCodeForSession.mockResolvedValue({ error: new Error("provider detail / account@example.test") });
     const response = await GET(new Request("https://moneymachine-eta.vercel.app/auth/callback?code=opaque-code"));
     expect(response.headers.get("location")).toBe("https://moneymachine-eta.vercel.app/login?error=oauth-callback");
+  });
+
+  it("checks only the expected Supabase PKCE verifier cookie names", () => {
+    const projectUrl = "https://flsfallpputejojncyue.supabase.co";
+    expect(hasExpectedPkceVerifierCookie([
+      { name: "sb-flsfallpputejojncyue-auth-token-code-verifier", value: "synthetic-verifier" },
+    ], projectUrl)).toBe(true);
+    expect(hasExpectedPkceVerifierCookie([
+      { name: "sb-flsfallpputejojncyue-auth-token-flow-flow_12345678-code-verifier.0", value: "chunk" },
+    ], projectUrl)).toBe(true);
+    expect(hasExpectedPkceVerifierCookie([
+      { name: "sb-otherproject-auth-token-code-verifier", value: "synthetic-verifier" },
+    ], projectUrl)).toBe(false);
+    expect(hasExpectedPkceVerifierCookie([
+      { name: "sb-flsfallpputejojncyue-auth-token-code-verifier", value: "" },
+    ], projectUrl)).toBe(false);
+  });
+
+  it("does not exchange a callback code when its PKCE verifier cookie is missing", async () => {
+    mocks.cookieStore.getAll.mockReturnValue([]);
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const response = await GET(new Request("https://moneymachine-eta.vercel.app/auth/callback?code=opaque-code"));
+
+    expect(response.headers.get("location")).toBe("https://moneymachine-eta.vercel.app/login?error=oauth-callback");
+    expect(mocks.exchangeCodeForSession).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("AUTH_CALLBACK_DIAGNOSTIC", { event: "AUTH_CALLBACK_PKCE_VERIFIER_MISSING" });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("opaque-code");
+    log.mockRestore();
+  });
+
+  it("emits fixed callback outcomes and allowlists documented Auth error codes", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    mocks.exchangeCodeForSession.mockResolvedValue({ error: { code: "bad_code_verifier", message: "secret detail" } });
+    await GET(new Request("https://moneymachine-eta.vercel.app/auth/callback?code=opaque-code"));
+    expect(log).toHaveBeenCalledWith("AUTH_CALLBACK_DIAGNOSTIC", {
+      event: "AUTH_CALLBACK_EXCHANGE_REJECTED",
+      supabaseErrorCode: "bad_code_verifier",
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("secret detail");
+    expect(safeSupabaseAuthErrorCode({ code: "sensitive_unknown", message: "raw" }))
+      .toBe("SUPABASE_AUTH_ERROR_UNKNOWN");
+
+    mocks.exchangeCodeForSession.mockResolvedValue({ error: null });
+    log.mockClear();
+    await GET(new Request("https://moneymachine-eta.vercel.app/auth/callback?code=opaque-code"));
+    expect(log).toHaveBeenCalledWith("AUTH_CALLBACK_DIAGNOSTIC", { event: "AUTH_CALLBACK_EXCHANGE_SUCCEEDED" });
+    log.mockRestore();
+  });
+
+  it("diagnoses missing code and wrong origin without logging request material", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    await GET(new Request("https://moneymachine-eta.vercel.app/auth/callback"));
+    expect(log).toHaveBeenCalledWith("AUTH_CALLBACK_DIAGNOSTIC", { event: "AUTH_CALLBACK_MISSING_CODE" });
+    log.mockClear();
+    await GET(new Request("https://alias.example/auth/callback?code=synthetic-code"));
+    expect(log).toHaveBeenCalledWith("AUTH_CALLBACK_DIAGNOSTIC", { event: "AUTH_CALLBACK_WRONG_ORIGIN" });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("synthetic-code");
+    expect(mocks.exchangeCodeForSession).not.toHaveBeenCalled();
+    log.mockRestore();
   });
 });
