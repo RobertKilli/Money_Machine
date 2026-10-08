@@ -65,6 +65,44 @@ export class StandingPaperPolicyRepository {
     this.client = postgres(connectionString, { max: 5, prepare: true });
   }
 
+  /** Read the policy/account gate before each worker round. `run` repeats these
+   * checks under its transaction locks before writing, so this is observation,
+   * not a replacement for the repository's authoritative gate. */
+  async getWorkerPolicyState(policyId: string): Promise<{ policyStatus: StandingPaperPolicy["status"]; accountStatus: string | null; accountMode: string | null; accountCurrency: string | null }> {
+    const rows = await this.client<{ policy_status: StandingPaperPolicy["status"]; account_status: string | null; account_mode: string | null; account_currency: string | null }[]>`
+      select p.status as policy_status, a.status as account_status, a.mode as account_mode, a.base_currency_code as account_currency
+      from public.standing_paper_policies p left join public.financial_accounts a on a.id = p.financial_account_id
+      where p.policy_id = ${policyId}
+    `;
+    if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
+    return { policyStatus: rows[0].policy_status, accountStatus: rows[0].account_status, accountMode: rows[0].account_mode, accountCurrency: rows[0].account_currency };
+  }
+
+  async getPolicy(policyId: string): Promise<StandingPaperPolicy | null> {
+    const rows = await this.client<{ policy_json: unknown }[]>`select policy_json from public.standing_paper_policies where policy_id = ${policyId}`;
+    return rows[0] ? structuredClone(parsePolicy(rows[0].policy_json)) : null;
+  }
+
+  /** Select the next durable round ordinal for one worker identity. Concurrent
+   * processes may observe the same ordinal; run() serializes on the policy row
+   * and the stable idempotency key converges identical attempts. */
+  async getNextWorkerRound(policyId: string, workerId: string): Promise<number> {
+    const prefix = `standing-paper-worker/v1/${workerId}/round/`;
+    const rows = await this.client<{ idempotency_key: string }[]>`
+      select idempotency_key from public.standing_paper_runs
+      where policy_id = ${policyId} and left(idempotency_key, ${prefix.length}) = ${prefix}
+    `;
+    let next = 0;
+    for (const row of rows) {
+      const suffix = row.idempotency_key.slice(prefix.length);
+      if (!/^\d{12}$/.test(suffix)) throw new Error("PAPER_WORKER_ROUND_ID_INVALID");
+      const ordinal = Number(suffix);
+      if (!Number.isSafeInteger(ordinal) || ordinal >= 100_000_000) throw new Error("PAPER_WORKER_ROUND_LIMIT_REACHED");
+      next = Math.max(next, ordinal + 1);
+    }
+    return next;
+  }
+
   private async assertLedgerCheckpointMatches(tx: TransactionSql, accountId: string, state: DeterministicBacktestState, lastRunId: string | null): Promise<void> {
     const entries = await tx<{ id: string; ledger_transaction_id: string; financial_account_id: string; code: string; commodity_kind: "MONEY" | "ASSET"; currency: string | null; asset_id: string | null; direction: "DEBIT" | "CREDIT"; amount_atoms: string; occurred_at: Date; recorded_at: Date }[]>`
       select le.id, lt.id as ledger_transaction_id, lt.financial_account_id, la.code, la.commodity_kind, la.commodity_currency_code as currency, la.commodity_asset_id as asset_id, le.direction, le.amount_atoms::text, lt.occurred_at, le.created_at as recorded_at

@@ -60,11 +60,45 @@ are gone. It does not read `DATABASE_URL` and rejects a database URL that is
 not for its task-owned `127.0.0.1/mm_paper_<random-id>` database.
 
 The `standing-paper-postgres` GitHub Actions job runs this command separately
-from the ordinary `npm run test` unit suite. The command requires all seven
-integration cases to pass; a skipped or missing case fails the run. The job
+from the ordinary `npm run test` unit suite. The command requires every named
+integration case to pass; a skipped or missing case fails the run. The job
 runs for pull requests targeting `main` and pushes to `main`, using no hosted
 database credentials or operational pins. Unit CI and this database
 integration job are distinct controls.
+
+## Local standing paper worker
+
+`npm run paper:worker` starts a local worker against one explicitly supplied
+active policy. It does not activate or transition the policy. Supply the
+task-owned local database URL, policy ID, and a stable worker ID explicitly:
+
+```sh
+npm run paper:worker -- --database-url postgresql://postgres:postgres@127.0.0.1:55432/mm_paper_<32-hex-task-id> --policy-id <active-policy-id> --worker-id local-paper-1 --max-rounds 3
+```
+
+The CLI rejects non-loopback databases and database names outside the
+task-owned `mm_paper_<32-hex-task-id>` form. It does not consult `DATABASE_URL`.
+Omit `--max-rounds` for a continuously running local process. Its input stream
+uses deterministic synthetic fixture prices and virtual contributions; it
+has no provider, broker, exchange, or live-trading adapter. Round keys are
+stable by policy, worker ID, and durable round ordinal. A restart continues at
+the next committed ordinal. Concurrent processes using the same worker ID
+converge on a round through the repository's policy lock, transaction, and
+persisted idempotency hash. Each process executes one round at a time.
+
+Worker lifecycle output (`RUNNING`, `WAITING_PAUSED`, `COMPLETED`, `STOPPED`,
+`FAILED`) is separate from policy status. A paused policy is polled without
+writing until it becomes active or stopped. A stopped policy exits. Invalid
+input, an invalid checkpoint, ledger divergence, or another persistence
+failure emits a stable error code and ends the process without retry. Ctrl+C
+and SIGTERM prevent entry into another round; an active database transaction
+is allowed to settle before the repository closes.
+
+Run `npm run paper:worker:demo` for a bounded demonstration. It creates a
+task-owned disposable PostgreSQL database, runs the complete standing paper
+integration suite, provisions a synthetic PAPER account and policy, and runs
+three worker rounds before verifying cleanup. The demo explicitly activates
+its synthetic policy; normal worker startup never activates a policy.
 
 Policy creation requires an empty, dedicated PAPER account. Each durable
 decision round locks the policy row and then the `FinancialAccount` row, and
@@ -114,7 +148,8 @@ ledger transactions, ledger entries, and audit evidence are append-only.
   monetary and audit writes together after an injected failure.
 - The task-owned PostgreSQL suite checks empty-account setup, external ledger
   divergence, strict checkpoint fields, resumption, idempotency, pause/stop,
-  and rollback. Its dedicated `standing-paper-postgres` CI job reports these
+  rollback, and worker restart, concurrency, pause/resume, stop, and failure
+  behavior. Its dedicated `standing-paper-postgres` CI job reports these
   checks separately from the ordinary unit suite.
 
 ## Assumptions and limits

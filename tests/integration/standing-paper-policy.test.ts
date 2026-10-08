@@ -6,6 +6,7 @@ import { price } from "@/domain/financial/price";
 import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
+import { StandingPaperWorker } from "@/application/paper-trading/run-standing-paper-worker";
 
 const enabled = process.env.MONEY_MACHINE_INTEGRATION_TEST === "1";
 const testUrl = process.env.MM_STANDING_PAPER_TEST_DATABASE_URL;
@@ -226,5 +227,113 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
       const transitions = await sql<{ action: string; to_status: string }[]>`select action, to_status from public.standing_paper_policy_transitions where policy_id=${f.policy.policyId} order by occurred_at, id`;
       expect(transitions.map(row => [row.action, row.to_status])).toEqual([["INITIALIZE", "DRAFT"], ["ACTIVATE", "ACTIVE"], [status === "PAUSED" ? "PAUSE" : "STOP", status]]);
     }
+  });
+
+  it("resumes at the next durable round after process restart without replaying settlements", async () => {
+    const f = await setup("worker-restart");
+    const firstWorker = new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "restart-sequence", maxRounds: 2 });
+    const first = await firstWorker.run();
+    expect(first).toMatchObject({ status: "COMPLETED", roundsCompleted: 2 });
+    expect(first.lastRoundIdentity, JSON.stringify(first)).toBe("standing-paper-worker/v1/restart-sequence/round/000000000001");
+    expect(await f.repository.getNextWorkerRound(f.policy.policyId, "restart-sequence")).toBe(2);
+    const restartRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(restartRepository);
+    const resumed = await new StandingPaperWorker(restartRepository, { policyId: f.policy.policyId, workerId: "restart-sequence", maxRounds: 1 }).run();
+    expect(resumed).toMatchObject({ status: "COMPLETED", roundsCompleted: 1 });
+    expect(resumed.lastRoundIdentity).toBe("standing-paper-worker/v1/restart-sequence/round/000000000002");
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "3", contributions: "3" });
+  });
+
+  it("converges two workers starting the same round to one durable settlement", async () => {
+    const f = await setup("worker-concurrent");
+    const secondRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(secondRepository);
+    let arrivals = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const beforeRound = async () => { arrivals += 1; if (arrivals === 2) release(); await barrier; };
+    const outcomes = await Promise.all([
+      new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "shared-worker", maxRounds: 1, beforeRound }).run(),
+      new StandingPaperWorker(secondRepository, { policyId: f.policy.policyId, workerId: "shared-worker", maxRounds: 1, beforeRound }).run(),
+    ]);
+    expect(outcomes.map(item => item.lastRoundIdentity)).toEqual([outcomes[0]!.lastRoundIdentity, outcomes[0]!.lastRoundIdentity]);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+  });
+
+  it("waits without writes while paused and resumes after deterministic policy transition", async () => {
+    const f = await setup("worker-pause-resume");
+    await f.repository.transition(f.policy.policyId, "PAUSE");
+    let waited = false;
+    const statuses: string[] = [];
+    const result = await new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "pause-resume", maxRounds: 1,
+      onStatus: status => statuses.push(status),
+      waitForPolicyChange: async () => {
+        expect(waited).toBe(false);
+        expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
+        waited = true;
+        await f.repository.transition(f.policy.policyId, "ACTIVATE");
+      },
+    }).run();
+    expect(waited).toBe(true);
+    expect(statuses).toContain("WAITING_PAUSED");
+    expect(result.roundsCompleted).toBe(1);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+  });
+
+  it("observes STOPPED as a worker exit state without writing a round", async () => {
+    const f = await setup("worker-stop");
+    await f.repository.transition(f.policy.policyId, "STOP");
+    const statuses: string[] = [];
+    const result = await new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "stopped-worker", maxRounds: 1, onStatus: status => statuses.push(status) }).run();
+    expect(result).toMatchObject({ status: "STOPPED", roundsCompleted: 0 });
+    expect(statuses).toContain("STOPPED");
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
+  });
+
+  it("stops with a checkpoint failure code and leaves the transaction untouched", async () => {
+    const f = await setup("worker-failure");
+    await sql`update public.standing_paper_policies set state_json='{}'::jsonb where policy_id=${f.policy.policyId}`;
+    const before = await counts(f.policy.financialAccountId);
+    const statuses: Array<{ status: string; code?: string }> = [];
+    await expect(new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "failure-worker", maxRounds: 1, onStatus: (status, code) => statuses.push({ status, code }) }).run()).rejects.toThrow("PAPER_WORKER_FAILED:PAPER_CHECKPOINT_INVALID");
+    expect(statuses.at(-1)).toEqual({ status: "FAILED", code: "PAPER_CHECKPOINT_INVALID" });
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+  });
+
+  it("stops on ledger divergence without committing a worker round", async () => {
+    const f = await setup("worker-ledger-failure");
+    await f.repository.run(f.policy.policyId, config("ledger-seed", stamp(10)), pricesAt(stamp(9)), "ledger-seed");
+    await addExternalPosting(f.policy.financialAccountId);
+    const before = await counts(f.policy.financialAccountId);
+    await expect(new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "ledger-failure", maxRounds: 1 }).run()).rejects.toThrow("PAPER_WORKER_FAILED:PAPER_LEDGER_CHECKPOINT_MISMATCH");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+  });
+
+  it("finishes an in-flight transaction after stop signal and enters no next round", async () => {
+    const f = await setup("worker-signal");
+    const control = f.repository as unknown as { client: Sql };
+    const original = control.client;
+    let signalTransactionReady!: () => void;
+    let releaseTransaction!: () => void;
+    const ready = new Promise<void>(resolve => { signalTransactionReady = resolve; });
+    const release = new Promise<void>(resolve => { releaseTransaction = resolve; });
+    control.client = new Proxy(original, { get(target, property, receiver) {
+      if (property !== "begin") return Reflect.get(target, property, receiver);
+      return (work: (tx: TransactionSql) => Promise<unknown>) => original.begin(async tx => {
+        const result = await work(tx);
+        signalTransactionReady();
+        await release;
+        return result;
+      });
+    } });
+    const controller = new AbortController();
+    let running: Promise<{ status: string; roundsCompleted: number }>;
+    try {
+      running = new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "signal-worker", maxRounds: 3, signal: controller.signal }).run();
+      await ready;
+      controller.abort();
+      releaseTransaction();
+      await expect(running!).resolves.toMatchObject({ status: "STOPPED", roundsCompleted: 1 });
+    } finally { control.client = original; }
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
   });
 });
