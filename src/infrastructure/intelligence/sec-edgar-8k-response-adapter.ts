@@ -49,13 +49,17 @@ export type SecEdgar8kResponseAdapterResult =
 /** Fixed, value-free diagnostics. Never includes response values, excerpts, or contact data. */
 export type SecEdgar8kSanitizedDiagnostic = Readonly<{
   stage: "TRANSPORT" | "JSON" | "SUBMISSIONS" | "HISTORY_MANIFEST" | "HISTORY_SUBMISSIONS";
-  reason: "HTTP_STATUS_REJECTED" | "CONTENT_TYPE_REJECTED" | "INVALID_UTF8" | "INVALID_JSON" | "FIELD_MISSING" | "FIELD_INVALID" | "ARRAY_ELEMENT_INVALID" | "PARALLEL_ARRAY_LENGTH_MISMATCH" | "ROW_INVALID";
+  reason: "HTTP_STATUS_REJECTED" | "CONTENT_TYPE_REJECTED" | "INVALID_UTF8" | "INVALID_JSON" | "FIELD_MISSING" | "FIELD_INVALID" | "ARRAY_ELEMENT_INVALID" | "ARRAY_LIMIT_EXCEEDED" | "PARALLEL_ARRAY_LENGTH_MISMATCH" | "ROW_INVALID";
   field?: "root" | "cik" | "filings" | "filings.recent" | "filings.recent.accessionNumber" | "filings.recent.form" | "filings.recent.filingDate" | "filings.recent.acceptanceDateTime" | "filings.recent.primaryDocument" | "filings.files" | "filings.files[].name" | "filings.files[].filingFrom" | "filings.files[].filingTo";
 }>;
 
 type Row = { accession: string; form: string; filingDate: string; acceptanceDateTime: string | null; primaryDocument: string };
 type ParsedSubmissions = { cik: string | null; rows: Row[]; files: { name: string; filingFrom: string; filingTo: string }[] };
 const SCOPE = SEC_EDGAR_8K_LOCAL_SMOKE_SCOPE;
+// The SEC contract guarantees at least a year or the latest 1,000 filings,
+// not a maximum. Keep parser work bounded above that floor; transport also
+// enforces the stricter 2 MiB local-smoke response budget.
+const MAX_RECENT_ARRAY_ENTRIES = 40_000;
 const fail = (code: SecEdgar8kResponseAdapterCode, diagnostic?: SecEdgar8kSanitizedDiagnostic): SecEdgar8kResponseAdapterResult => Object.freeze({ status: "BLOCKED", code, ...(diagnostic ? { diagnostic } : {}) });
 const dateOnly = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(`${v}T00:00:00.000Z`)) && new Date(`${v}T00:00:00.000Z`).toISOString().slice(0, 10) === v;
 const utcMillis = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v) && Number.isFinite(Date.parse(v)) && new Date(v).toISOString() === v;
@@ -81,9 +85,10 @@ const parseJson = (bytes: Buffer): JsonParseResult => {
   try { return Object.freeze({ status: "VALID", value: JSON.parse(text) as unknown }); }
   catch { return Object.freeze({ status: "INVALID_JSON" }); }
 };
-type StringArrayIssue = "FIELD_INVALID" | "ARRAY_ELEMENT_INVALID" | null;
+type StringArrayIssue = "FIELD_INVALID" | "ARRAY_ELEMENT_INVALID" | "ARRAY_LIMIT_EXCEEDED" | null;
 function stringArrayIssue(value: unknown): StringArrayIssue {
-  if (!Array.isArray(value) || value.length > 1000) return "FIELD_INVALID";
+  if (!Array.isArray(value)) return "FIELD_INVALID";
+  if (value.length > MAX_RECENT_ARRAY_ENTRIES) return "ARRAY_LIMIT_EXCEEDED";
   return value.every((entry) => typeof entry === "string") ? null : "ARRAY_ELEMENT_INVALID";
 }
 function parallelArraysUnequal(value: unknown): boolean {
