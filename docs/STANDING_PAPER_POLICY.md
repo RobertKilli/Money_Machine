@@ -78,21 +78,35 @@ npm run paper:worker -- --database-url postgresql://postgres:postgres@127.0.0.1:
 
 The CLI requires an explicit loopback database URL and does not consult
 `DATABASE_URL`. The bounded demo uses a task-owned `mm_paper_<32-hex-task-id>`
-database. Omit `--max-rounds` for a continuously running local process. Its input stream
-uses deterministic synthetic fixture prices and virtual contributions; it
-has no provider, broker, exchange, or live-trading adapter. Round keys are
+database. A bounded run may omit the interval and proceeds as quickly as the
+local database allows, but it must specify `--max-rounds`. Continuous mode
+omits `--max-rounds` and requires `--round-interval-ms` between 1000 and
+86400000 (one second to one day); each committed synthetic contribution round
+waits that long before the next round. There is no unbounded tight loop. A
+continuous example is:
+
+```sh
+npm run paper:worker -- --database-url postgresql://postgres:postgres@127.0.0.1:55432/mm_paper_<32-hex-task-id> --policy-id <active-policy-id> --worker-id local-paper-1 --round-interval-ms 60000
+```
+
+Its input stream uses deterministic synthetic fixture prices and virtual
+contributions; it has no provider, broker, exchange, or live-trading adapter. Round keys are
 stable by policy, worker ID, and durable round ordinal. A restart continues at
 the next committed ordinal. Concurrent processes using the same worker ID
 converge on a round through the repository's policy lock, transaction, and
 persisted idempotency hash. Each process executes one round at a time.
 
-Worker lifecycle output (`RUNNING`, `WAITING_PAUSED`, `COMPLETED`, `STOPPED`,
-`FAILED`) is separate from policy status. A paused policy is polled without
+Worker lifecycle output (`RUNNING`, `WAITING_PAUSED`, `WAITING_INTERVAL`,
+`COMPLETED`, `STOPPED`, `FAILED`) is separate from policy status. A paused policy is polled without
 writing until it becomes active or stopped. A stopped policy exits. Invalid
 input, an invalid checkpoint, ledger divergence, or another persistence
-failure emits a stable error code and ends the process without retry. Ctrl+C
-and SIGTERM prevent entry into another round; an active database transaction
-is allowed to settle before the repository closes.
+failure emits a stable error code and ends the process without retry. Ctrl+C,
+SIGTERM, or the wrapper's `:stop` control input requests a graceful stop over a
+local token-protected loopback channel; the wrapper does not signal-kill its
+worker child. Stop prevents entry into another round and interrupts interval
+or paused-state waits immediately. An active database transaction is allowed
+to settle before the repository closes. The wrapper waits for its child to exit
+and then closes its control listener.
 
 Run `npm run paper:worker:demo` for a bounded demonstration. It creates a
 task-owned disposable PostgreSQL database, runs the complete standing paper

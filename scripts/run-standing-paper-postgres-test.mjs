@@ -138,6 +138,8 @@ try {
     "stops with a checkpoint failure code and leaves the transaction untouched",
     "stops on ledger divergence without committing a worker round",
     "finishes an in-flight transaction after stop signal and enters no next round",
+    "requires a continuous interval and interrupts interval waiting immediately",
+    "stops the actual CLI process through its control channel during a locked settlement",
   ];
   if (probeMode === "failure") {
     if (!suiteError || !assertions.some(item => item.status === "failed")) throw new Error("STANDING_PAPER_FAILURE_PROBE_DID_NOT_FAIL");

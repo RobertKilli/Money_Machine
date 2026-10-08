@@ -3,7 +3,7 @@ import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation }
 import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
 
-export type StandingPaperWorkerStatus = "RUNNING" | "WAITING_PAUSED" | "COMPLETED" | "STOPPED" | "FAILED";
+export type StandingPaperWorkerStatus = "RUNNING" | "WAITING_PAUSED" | "WAITING_INTERVAL" | "COMPLETED" | "STOPPED" | "FAILED";
 export type StandingPaperWorkerResult = { status: "COMPLETED" | "STOPPED"; roundsCompleted: number; lastRoundIdentity: string | null };
 export type StandingPaperWorkerOptions = {
   readonly policyId: string;
@@ -11,10 +11,12 @@ export type StandingPaperWorkerOptions = {
   readonly maxRounds?: number;
   readonly signal?: AbortSignal;
   readonly pollIntervalMs?: number;
+  readonly roundIntervalMs?: number;
   readonly onStatus?: (status: StandingPaperWorkerStatus, code?: string) => void;
   readonly onRound?: (identity: string, result: BacktestResult) => void;
   /** Deterministic orchestration seams used by PostgreSQL integration tests. */
   readonly waitForPolicyChange?: (signal?: AbortSignal) => Promise<void>;
+  readonly waitForRoundInterval?: (signal?: AbortSignal) => Promise<void>;
   readonly beforeRound?: (round: number, identity: string) => Promise<void>;
 };
 
@@ -68,6 +70,8 @@ export class StandingPaperWorker {
     if (!options.policyId.trim()) throw new Error("PAPER_WORKER_POLICY_ID_REQUIRED");
     if (options.maxRounds !== undefined && (!Number.isSafeInteger(options.maxRounds) || options.maxRounds < 1)) throw new Error("PAPER_WORKER_MAX_ROUNDS_INVALID");
     if (options.pollIntervalMs !== undefined && (!Number.isSafeInteger(options.pollIntervalMs) || options.pollIntervalMs < 10)) throw new Error("PAPER_WORKER_POLL_INTERVAL_INVALID");
+    if (options.maxRounds === undefined && options.roundIntervalMs === undefined) throw new Error("PAPER_WORKER_ROUND_INTERVAL_REQUIRED");
+    if (options.roundIntervalMs !== undefined && (!Number.isSafeInteger(options.roundIntervalMs) || options.roundIntervalMs < 1_000 || options.roundIntervalMs > 86_400_000)) throw new Error("PAPER_WORKER_ROUND_INTERVAL_INVALID");
   }
 
   private status(value: StandingPaperWorkerStatus, code?: string) { this.options.onStatus?.(value, code); }
@@ -121,6 +125,12 @@ export class StandingPaperWorker {
         }
         roundsCompleted += 1;
         lastRoundIdentity = identity;
+        if ((this.options.maxRounds === undefined || roundsCompleted < this.options.maxRounds) && this.options.roundIntervalMs !== undefined) {
+          this.status("WAITING_INTERVAL");
+          if (this.options.waitForRoundInterval) await this.options.waitForRoundInterval(this.options.signal);
+          else await wait(this.options.roundIntervalMs, this.options.signal);
+          this.status("RUNNING");
+        }
       }
       this.status("COMPLETED");
       return { status: "COMPLETED", roundsCompleted, lastRoundIdentity };
