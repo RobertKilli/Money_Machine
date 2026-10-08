@@ -6,7 +6,7 @@ import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, 
 import { assertValidPaperPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import type { FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 
-type StoredPolicy = { policy_json: unknown; status: StandingPaperPolicy["status"]; financial_account_id: string; owner_id: string };
+type StoredPolicy = { policy_json: unknown; status: StandingPaperPolicy["status"]; financial_account_id: string };
 const encode = (value: unknown): unknown => {
   if (typeof value === "bigint") return { $type: "bigint", value: value.toString() };
   if (value instanceof Date) return { $type: "date", value: value.toISOString() };
@@ -107,10 +107,13 @@ export class StandingPaperPolicyRepository {
 
   async transition(policyId: string, action: "ACTIVATE" | "PAUSE" | "STOP"): Promise<StandingPaperPolicy> {
     return this.client.begin(async tx => {
-      const rows = await tx<StoredPolicy[]>`select sp.policy_json, sp.status, sp.financial_account_id, fa.owner_id from public.standing_paper_policies sp join public.financial_accounts fa on fa.id = sp.financial_account_id where sp.policy_id = ${policyId} and fa.status = 'ACTIVE' and fa.mode = 'PAPER' for update of sp`;
+      const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
       if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
       const current = parsePolicy(rows[0].policy_json);
       if (current.financialAccountId !== rows[0].financial_account_id || current.status !== rows[0].status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
+      const accounts = await tx<{ status: string; mode: string; base_currency_code: string }[]>`select status, mode, base_currency_code from public.financial_accounts where id = ${current.financialAccountId} for update`;
+      const account = accounts[0];
+      if (!account || account.status !== "ACTIVE" || account.mode !== "PAPER" || account.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
       const next = transitionPaperPolicy(current, action);
       await tx`update public.standing_paper_policies set status = ${next.status}, policy_json = ${tx.json(json(next))}, updated_at = now() where policy_id = ${policyId}`;
       await tx`insert into public.standing_paper_policy_transitions (policy_id, financial_account_id, policy_version, action, from_status, to_status, input_hash) values (${policyId}, ${current.financialAccountId}, ${current.version}, ${action}, ${current.status}, ${next.status}, ${sha256({ current, action, next })})`;
@@ -122,7 +125,7 @@ export class StandingPaperPolicyRepository {
     const snapshot = structuredClone({ config, prices });
     if (!idempotencyKey.trim()) throw new Error("IDEMPOTENCY_KEY_REQUIRED");
     return this.client.begin(async tx => {
-      const rows = await tx<StoredPolicy[]>`select sp.policy_json, sp.status, sp.financial_account_id, fa.owner_id from public.standing_paper_policies sp join public.financial_accounts fa on fa.id = sp.financial_account_id where sp.policy_id = ${policyId} and fa.status = 'ACTIVE' and fa.mode = 'PAPER' for update of sp`;
+      const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
       if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
       const policy = parsePolicy(rows[0].policy_json);
       if (policy.financialAccountId !== rows[0].financial_account_id || policy.status !== rows[0].status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
@@ -136,9 +139,13 @@ export class StandingPaperPolicyRepository {
       }
       if (policy.status !== "ACTIVE") throw new Error("POLICY_NOT_ACTIVE");
 
-      // Match the account-row lock used by ledger write triggers. This protects
-      // reconciliation from any writer that posts through the shared ledger.
-      await tx`select id from public.financial_accounts where id = ${policy.financialAccountId} for update`;
+      // Lock order is policy row, then FinancialAccount row, matching policy
+      // transitions and the account lock used by shared ledger writers. Read
+      // eligibility from the locked row so a concurrent close/mode/currency
+      // change cannot pass a stale join predicate and then receive writes.
+      const lockedAccounts = await tx<{ owner_id: string; status: string; mode: string; base_currency_code: string }[]>`select owner_id, status, mode, base_currency_code from public.financial_accounts where id = ${policy.financialAccountId} for update`;
+      const lockedAccount = lockedAccounts[0];
+      if (!lockedAccount || lockedAccount.status !== "ACTIVE" || lockedAccount.mode !== "PAPER" || lockedAccount.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
 
       const contributionIds = snapshot.config.contributionEvents.map(event => event.eventId);
       if (new Set(contributionIds).size !== contributionIds.length) throw new Error("DUPLICATE_PAPER_CONTRIBUTION_EVENT");
@@ -183,7 +190,7 @@ export class StandingPaperPolicyRepository {
           if (!evidence) throw new Error("PAPER_LEDGER_EVIDENCE_MISSING");
           await tx`insert into public.ledger_entries (id, ledger_transaction_id, ledger_account_id, direction, amount_atoms, created_at) values (${evidence.entryId}, ${journal.id}, ${accountId}, ${entry.direction}, ${entry.amountAtoms.toString()}::numeric, ${evidence.recordedAt})`;
         }
-        await tx`insert into public.audit_events (financial_account_id, actor_id, command_id, command_type, idempotency_key, outcome, policy_versions, ledger_transaction_id, input_hash, output_hash, occurred_at) values (${policy.financialAccountId}, ${rows[0]!.owner_id}, ${commandId}, ${commandType}, ${commandKey}, 'SUCCEEDED', ${tx.json(json({ standingPaperPolicy: policy.version, execution: "m1-market-execution/v1", fee: "m1-fee/v1", rounding: "m1-rounding/v1" }))}, ${journal.id}, ${journalHash}, ${sha256({ ledgerTransactionId: journal.id, entries: journal.entries })}, ${journal.occurredAt})`;
+        await tx`insert into public.audit_events (financial_account_id, actor_id, command_id, command_type, idempotency_key, outcome, policy_versions, ledger_transaction_id, input_hash, output_hash, occurred_at) values (${policy.financialAccountId}, ${lockedAccount.owner_id}, ${commandId}, ${commandType}, ${commandKey}, 'SUCCEEDED', ${tx.json(json({ standingPaperPolicy: policy.version, execution: "m1-market-execution/v1", fee: "m1-fee/v1", rounding: "m1-rounding/v1" }))}, ${journal.id}, ${journalHash}, ${sha256({ ledgerTransactionId: journal.id, entries: journal.entries })}, ${journal.occurredAt})`;
       }
       for (const fill of result.executions) {
         const acquisition = result.persistentState.acquisitions.find(item => item.fillId === fill.fillId);

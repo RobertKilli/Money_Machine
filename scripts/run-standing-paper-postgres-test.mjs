@@ -125,6 +125,7 @@ try {
   const cases = [
     "continues one account across runner instances; replay and concurrent budget use stay idempotent",
     "rejects a pre-existing account ledger and an external ledger change between rounds",
+    "rechecks account eligibility after waiting for the locked account row",
     "rejects malformed checkpoints without writing or resetting loss margin",
     "rollback after persistence writes leaves no partial settlement",
     "deposit and process restart preserve contribution-adjusted loss margin",

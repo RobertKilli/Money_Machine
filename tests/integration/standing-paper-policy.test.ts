@@ -120,6 +120,54 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(await counts(f.policy.financialAccountId)).toEqual(before);
   });
 
+  it("rechecks account eligibility after waiting for the locked account row", async () => {
+    const f = await setup("account-status-race");
+    await f.repository.run(f.policy.policyId, config("status-seed", stamp(10)), pricesAt(stamp(9)), "status-seed");
+    const baselineCounts = await counts(f.policy.financialAccountId);
+    const baselineCheckpoint = await sql<{ state_json: unknown; last_run_id: string | null }[]>`select state_json, last_run_id from public.standing_paper_policies where policy_id=${f.policy.policyId}`;
+
+    let runnerOutcome: Promise<
+      | { status: "resolved"; result: unknown }
+      | { status: "rejected"; error: unknown }
+    >;
+    await sql.begin(async tx => {
+      const accountRows = await tx<{ id: string }[]>`select id from public.financial_accounts where id=${f.policy.financialAccountId} for update`;
+      expect(accountRows).toHaveLength(1);
+      await tx`update public.financial_accounts set status='CLOSED' where id=${f.policy.financialAccountId}`;
+
+      // This uses the repository's independent PostgreSQL connection. Do not
+      // commit the account change until pg_stat_activity proves that run()
+      // has reached and is waiting on the locked FinancialAccount row.
+      runnerOutcome = f.repository.run(f.policy.policyId, config("status-after-close", stamp(11)), pricesAt(stamp(9)), "status-after-close").then(
+        result => ({ status: "resolved" as const, result }),
+        error => ({ status: "rejected" as const, error }),
+      );
+      const deadline = Date.now() + 10_000;
+      let waitingOnAccount = false;
+      while (Date.now() < deadline) {
+        const waiters = await tx<{ pid: number; query: string }[]>`
+          select waiter.pid, waiter.query
+          from pg_stat_activity waiter
+          where waiter.datname=current_database()
+            and waiter.wait_event_type='Lock'
+            and pg_blocking_pids(waiter.pid) @> array[pg_backend_pid()]
+        `;
+        if (waiters.length > 0) { waitingOnAccount = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      expect(waitingOnAccount).toBe(true);
+    });
+
+    const outcome = await runnerOutcome!;
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") expect(String(outcome.error)).toContain("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
+    expect(await counts(f.policy.financialAccountId)).toEqual(baselineCounts);
+    const checkpointAfter = await sql<{ state_json: unknown; last_run_id: string | null }[]>`select state_json, last_run_id from public.standing_paper_policies where policy_id=${f.policy.policyId}`;
+    expect(checkpointAfter).toEqual(baselineCheckpoint);
+    await expect(f.repository.transition(f.policy.policyId, "PAUSE")).rejects.toThrow("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
+    expect(await counts(f.policy.financialAccountId)).toEqual(baselineCounts);
+  }, 20_000);
+
   it("rejects malformed checkpoints without writing or resetting loss margin", async () => {
     const f = await setup("strict-checkpoint");
     await f.repository.run(f.policy.policyId, config("seed", stamp(10)), pricesAt(stamp(9)), "strict-seed");

@@ -60,11 +60,14 @@ are gone. It does not read `DATABASE_URL` and rejects a database URL that is
 not for its task-owned `127.0.0.1/mm_paper_<random-id>` database.
 
 Policy creation requires an empty, dedicated PAPER account. Each durable
-decision round locks the policy row and then the `FinancialAccount` row. New
-ledger transaction and entry writes take that same account-row lock through
-database triggers, so writers using the shared ledger cannot change postings
-between reconciliation and settlement. A writer bypassing the ledger tables
-or disabling those triggers is outside this guarantee.
+decision round locks the policy row and then the `FinancialAccount` row, and
+checks `ACTIVE` / `PAPER` / `NOK` on that locked account row before
+reconciliation or writes. Policy transitions use the same lock order and
+validate their account binding against the locked row. New ledger transaction
+and entry writes take that same account-row lock through database triggers, so
+writers using the shared ledger cannot change postings between reconciliation
+and settlement. A writer bypassing the ledger tables or disabling those
+triggers is outside this guarantee.
 Inside that transaction it checks the run input hash, rejects contribution
 event IDs already processed, evaluates only new events using saved ledger and
 acquisition evidence, inserts run and decision records, creates simulated fill
