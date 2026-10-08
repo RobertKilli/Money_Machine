@@ -1,0 +1,206 @@
+import "server-only";
+
+import { createHash, randomUUID } from "node:crypto";
+import postgres, { type Sql, type TransactionSql } from "postgres";
+import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
+import { assertValidPaperPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import type { FixturePriceObservation } from "@/domain/strategy/fixture-assets";
+
+type StoredPolicy = { policy_json: unknown; status: StandingPaperPolicy["status"]; financial_account_id: string };
+const encode = (value: unknown): unknown => {
+  if (typeof value === "bigint") return { $type: "bigint", value: value.toString() };
+  if (value instanceof Date) return { $type: "date", value: value.toISOString() };
+  if (Array.isArray(value)) return value.map(encode);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encode(item)]));
+  return value;
+};
+const decode = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(decode);
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (record.$type === "bigint" && typeof record.value === "string") return BigInt(record.value);
+    if (record.$type === "date" && typeof record.value === "string") return new Date(record.value);
+    return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, decode(item)]));
+  }
+  return value;
+};
+const normalize = (value: unknown): unknown => {
+  const encoded = encode(value);
+  if (Array.isArray(encoded)) return encoded.map(normalize);
+  if (encoded && typeof encoded === "object") return Object.fromEntries(Object.entries(encoded).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, normalize(item)]));
+  return encoded;
+};
+const stable = (value: unknown) => JSON.stringify(normalize(value));
+const sha256 = (value: unknown) => createHash("sha256").update(stable(value)).digest("hex");
+type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
+const parsePolicy = (raw: unknown): StandingPaperPolicy => {
+  const parsed = typeof raw === "string" ? JSON.parse(raw) as unknown : raw;
+  const policy = decode(parsed) as StandingPaperPolicy;
+  assertValidPaperPolicy(policy);
+  return policy;
+};
+const parseState = (raw: unknown, accountId: string): DeterministicBacktestState => {
+  const parsed = typeof raw === "string" ? JSON.parse(raw) as unknown : raw;
+  const state = decode(parsed) as Record<string, unknown>;
+  const invalid = (): never => { throw new Error("PAPER_CHECKPOINT_INVALID"); };
+  if (!state || !Array.isArray(state.ledger) || !Array.isArray(state.acquisitions) || typeof state.netContributionsMinor !== "bigint" || typeof state.adjustedEquityHighWaterMinor !== "bigint" || typeof state.committedCapitalMinor !== "bigint" || !(state.lastProcessedAt === null || state.lastProcessedAt instanceof Date)) return invalid();
+  if (state.netContributionsMinor < 0n || state.adjustedEquityHighWaterMinor < 0n || state.committedCapitalMinor < 0n || (state.lastProcessedAt instanceof Date && !Number.isFinite(state.lastProcessedAt.getTime()))) return invalid();
+  for (const entry of state.ledger as Record<string, unknown>[]) {
+    if (!entry || typeof entry.entryId !== "string" || typeof entry.transactionId !== "string" || entry.financialAccountId !== accountId || typeof entry.code !== "string" || !["MONEY", "ASSET"].includes(String(entry.commodityKind)) || !["DEBIT", "CREDIT"].includes(String(entry.direction)) || typeof entry.amountAtoms !== "bigint" || entry.amountAtoms <= 0n || !(entry.occurredAt instanceof Date) || !Number.isFinite(entry.occurredAt.getTime()) || !(entry.recordedAt instanceof Date) || !Number.isFinite(entry.recordedAt.getTime())) return invalid();
+    if (entry.commodityKind === "MONEY" ? typeof entry.currency !== "string" || entry.assetId !== null : typeof entry.assetId !== "string" || entry.currency !== null) return invalid();
+  }
+  for (const acquisition of state.acquisitions as Record<string, unknown>[]) {
+    if (!acquisition || typeof acquisition.fillId !== "string" || typeof acquisition.executionId !== "string" || typeof acquisition.ledgerTransactionId !== "string" || acquisition.financialAccountId !== accountId || typeof acquisition.assetId !== "string" || typeof acquisition.quantityAtoms !== "bigint" || acquisition.quantityAtoms <= 0n || !Number.isInteger(acquisition.quantityScale) || typeof acquisition.currency !== "string" || typeof acquisition.grossMinor !== "bigint" || acquisition.grossMinor <= 0n || typeof acquisition.feeMinor !== "bigint" || acquisition.feeMinor < 0n || !(acquisition.executedAt instanceof Date) || !Number.isFinite(acquisition.executedAt.getTime()) || !(acquisition.recordedAt instanceof Date) || !Number.isFinite(acquisition.recordedAt.getTime()) || typeof acquisition.executionPolicyVersion !== "string" || acquisition.executionMatchesFill !== true) return invalid();
+  }
+  if (new Set((state.ledger as { entryId: string }[]).map(item => item.entryId)).size !== state.ledger.length || new Set((state.acquisitions as { fillId: string }[]).map(item => item.fillId)).size !== state.acquisitions.length) return invalid();
+  if ((state.acquisitions as { ledgerTransactionId: string }[]).some(item => !(state.ledger as { transactionId: string }[]).some(entry => entry.transactionId === item.ledgerTransactionId))) return invalid();
+  return state as unknown as DeterministicBacktestState;
+};
+const json = (value: unknown): JsonValue => encode(value) as JsonValue;
+
+/** PostgreSQL UoW for an existing PAPER FinancialAccount. Every round locks its policy row. */
+export class StandingPaperPolicyRepository {
+  private readonly client: Sql;
+  constructor(connectionString: string) {
+    this.client = postgres(connectionString, { max: 5, prepare: true });
+  }
+
+  private async assertLedgerCheckpointMatches(tx: TransactionSql, accountId: string, state: DeterministicBacktestState, lastRunId: string | null): Promise<void> {
+    const entries = await tx<{ id: string; ledger_transaction_id: string; financial_account_id: string; code: string; commodity_kind: "MONEY" | "ASSET"; currency: string | null; asset_id: string | null; direction: "DEBIT" | "CREDIT"; amount_atoms: string; occurred_at: Date; recorded_at: Date }[]>`
+      select le.id, lt.id as ledger_transaction_id, lt.financial_account_id, la.code, la.commodity_kind, la.commodity_currency_code as currency, la.commodity_asset_id as asset_id, le.direction, le.amount_atoms::text, lt.occurred_at, le.created_at as recorded_at
+      from public.ledger_entries le join public.ledger_transactions lt on lt.id=le.ledger_transaction_id join public.ledger_accounts la on la.id=le.ledger_account_id
+      where lt.financial_account_id=${accountId} order by le.id`;
+    const transactions = await tx<{ id: string }[]>`select id from public.ledger_transactions where financial_account_id=${accountId} order by id`;
+    const actualLedger = entries.map(row => ({ entryId: row.id, transactionId: row.ledger_transaction_id, financialAccountId: row.financial_account_id, code: row.code, commodityKind: row.commodity_kind, currency: row.currency, assetId: row.asset_id, direction: row.direction, amountAtoms: BigInt(row.amount_atoms), occurredAt: row.occurred_at, recordedAt: row.recorded_at }));
+    const expectedTransactionIds = [...new Set(state.ledger.map(item => item.transactionId))].sort();
+    const byEntryId = <T extends { entryId: string }>(left: T, right: T) => left.entryId < right.entryId ? -1 : left.entryId > right.entryId ? 1 : 0;
+    const expectedLedger = [...state.ledger].sort(byEntryId);
+    if (sha256(actualLedger) !== sha256(expectedLedger) || sha256(transactions.map(row => row.id)) !== sha256(expectedTransactionIds)) {
+      throw new Error("PAPER_LEDGER_CHECKPOINT_MISMATCH");
+    }
+    const actualAcquisitions = await tx<{ acquisition_json: unknown }[]>`select acquisition_json from public.standing_paper_fills where financial_account_id=${accountId} order by fill_id`;
+    const acquisitions = actualAcquisitions.map(row => decode(typeof row.acquisition_json === "string" ? JSON.parse(row.acquisition_json) : row.acquisition_json));
+    if (sha256(acquisitions) !== sha256([...state.acquisitions].sort((a,b) => a.fillId.localeCompare(b.fillId)))) throw new Error("PAPER_ACQUISITION_CHECKPOINT_MISMATCH");
+    const capital = actualLedger.filter(item => item.code === "VIRTUAL_CONTRIBUTED_CAPITAL").reduce((sum, item) => sum + (item.direction === "CREDIT" ? item.amountAtoms : -item.amountAtoms), 0n);
+    if (capital !== state.netContributionsMinor || state.committedCapitalMinor !== state.acquisitions.reduce((sum, item) => sum + item.grossMinor + item.feeMinor, 0n)) throw new Error("PAPER_CAPITAL_CHECKPOINT_MISMATCH");
+    if (lastRunId) {
+      const run = await tx<{ result_json: unknown }[]>`select result_json from public.standing_paper_runs where id=${lastRunId}`;
+      const result = run[0] && decode(typeof run[0].result_json === "string" ? JSON.parse(run[0].result_json) : run[0].result_json) as BacktestResult | undefined;
+      if (!result || sha256(result.persistentState) !== sha256(state)) throw new Error("PAPER_CHECKPOINT_NOT_LAST_RUN_RESULT");
+    } else if (state.ledger.length || state.acquisitions.length || state.netContributionsMinor !== 0n || state.adjustedEquityHighWaterMinor !== 0n || state.committedCapitalMinor !== 0n || state.lastProcessedAt !== null) {
+      throw new Error("PAPER_CHECKPOINT_WITHOUT_RUN");
+    }
+  }
+
+  async create(policy: StandingPaperPolicy): Promise<void> {
+    assertValidPaperPolicy(policy);
+    if (policy.status !== "DRAFT") throw new Error("PAPER_POLICY_MUST_START_DRAFT");
+    await this.client.begin(async tx => {
+      const accounts = await tx<{ id: string }[]>`select id from public.financial_accounts where id = ${policy.financialAccountId} and mode = 'PAPER' and status = 'ACTIVE' and base_currency_code = 'NOK' for update`;
+      if (!accounts[0]) throw new Error("STANDING_PAPER_REQUIRES_ACTIVE_PAPER_NOK_ACCOUNT");
+      const existingLedger = await tx<{ id: string }[]>`select id from public.ledger_transactions where financial_account_id = ${policy.financialAccountId} limit 1`;
+      if (existingLedger[0]) throw new Error("PAPER_ACCOUNT_NOT_EMPTY_AT_POLICY_CREATION");
+      await tx`insert into public.standing_paper_policies (policy_id, financial_account_id, policy_version, status, policy_json) values (${policy.policyId}, ${policy.financialAccountId}, ${policy.version}, ${policy.status}, ${tx.json(json(policy))})`;
+      await tx`insert into public.standing_paper_policy_transitions (policy_id, financial_account_id, policy_version, action, from_status, to_status, input_hash) values (${policy.policyId}, ${policy.financialAccountId}, ${policy.version}, 'INITIALIZE', null, 'DRAFT', ${sha256(policy)})`;
+    });
+  }
+
+  async transition(policyId: string, action: "ACTIVATE" | "PAUSE" | "STOP"): Promise<StandingPaperPolicy> {
+    return this.client.begin(async tx => {
+      const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
+      if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
+      const current = parsePolicy(rows[0].policy_json);
+      if (current.financialAccountId !== rows[0].financial_account_id || current.status !== rows[0].status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
+      const accounts = await tx<{ status: string; mode: string; base_currency_code: string }[]>`select status, mode, base_currency_code from public.financial_accounts where id = ${current.financialAccountId} for update`;
+      const account = accounts[0];
+      if (!account || account.status !== "ACTIVE" || account.mode !== "PAPER" || account.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
+      const next = transitionPaperPolicy(current, action);
+      await tx`update public.standing_paper_policies set status = ${next.status}, policy_json = ${tx.json(json(next))}, updated_at = now() where policy_id = ${policyId}`;
+      await tx`insert into public.standing_paper_policy_transitions (policy_id, financial_account_id, policy_version, action, from_status, to_status, input_hash) values (${policyId}, ${current.financialAccountId}, ${current.version}, ${action}, ${current.status}, ${next.status}, ${sha256({ current, action, next })})`;
+      return structuredClone(next);
+    });
+  }
+
+  async run(policyId: string, config: Omit<BacktestRunConfig, "standingPaperPolicy">, prices: readonly FixturePriceObservation[], idempotencyKey: string): Promise<BacktestResult> {
+    const snapshot = structuredClone({ config, prices });
+    if (!idempotencyKey.trim()) throw new Error("IDEMPOTENCY_KEY_REQUIRED");
+    return this.client.begin(async tx => {
+      const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
+      if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
+      const policy = parsePolicy(rows[0].policy_json);
+      if (policy.financialAccountId !== rows[0].financial_account_id || policy.status !== rows[0].status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
+      if (snapshot.config.financialAccountId && snapshot.config.financialAccountId !== policy.financialAccountId) throw new Error("PAPER_ACCOUNT_MISMATCH");
+
+      const requestHash = sha256({ policy, ...snapshot });
+      const existing = await tx<{ input_hash: string; result_json: unknown }[]>`select input_hash, result_json from public.standing_paper_runs where financial_account_id = ${policy.financialAccountId} and policy_id = ${policyId} and idempotency_key = ${idempotencyKey}`;
+      if (existing[0]) {
+        if (existing[0].input_hash !== requestHash) throw new Error("IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_INPUT");
+        return decode(typeof existing[0].result_json === "string" ? JSON.parse(existing[0].result_json) : existing[0].result_json) as BacktestResult;
+      }
+      if (policy.status !== "ACTIVE") throw new Error("POLICY_NOT_ACTIVE");
+
+      // Lock order is policy row, then FinancialAccount row, matching policy
+      // transitions and the account lock used by shared ledger writers. Read
+      // eligibility from the locked row so a concurrent close/mode/currency
+      // change cannot pass a stale join predicate and then receive writes.
+      const lockedAccounts = await tx<{ owner_id: string; status: string; mode: string; base_currency_code: string }[]>`select owner_id, status, mode, base_currency_code from public.financial_accounts where id = ${policy.financialAccountId} for update`;
+      const lockedAccount = lockedAccounts[0];
+      if (!lockedAccount || lockedAccount.status !== "ACTIVE" || lockedAccount.mode !== "PAPER" || lockedAccount.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
+
+      const contributionIds = snapshot.config.contributionEvents.map(event => event.eventId);
+      if (new Set(contributionIds).size !== contributionIds.length) throw new Error("DUPLICATE_PAPER_CONTRIBUTION_EVENT");
+      if (contributionIds.length) {
+        const duplicate = await tx<{ event_id: string }[]>`select event_id from public.standing_paper_contributions where financial_account_id = ${policy.financialAccountId} and policy_id = ${policyId} and event_id in ${tx(contributionIds)}`;
+        if (duplicate[0]) throw new Error("PAPER_CONTRIBUTION_ALREADY_PROCESSED");
+      }
+
+      const stateRows = await tx<{ state_json: unknown; last_run_id: string | null }[]>`select state_json, last_run_id from public.standing_paper_policies where policy_id = ${policyId}`;
+      const initial = parseState(stateRows[0]!.state_json, policy.financialAccountId);
+      await this.assertLedgerCheckpointMatches(tx, policy.financialAccountId, initial, stateRows[0]!.last_run_id);
+      const result = runDeterministicBacktest({ ...snapshot.config, financialAccountId: policy.financialAccountId, standingPaperPolicy: policy }, snapshot.prices, initial);
+      const runId = randomUUID();
+      await tx`insert into public.standing_paper_runs (id, policy_id, financial_account_id, idempotency_key, input_hash, result_json) values (${runId}, ${policyId}, ${policy.financialAccountId}, ${idempotencyKey}, ${requestHash}, ${tx.json(json(result))})`;
+
+      for (const event of snapshot.config.contributionEvents) {
+        await tx`insert into public.standing_paper_contributions (policy_id, financial_account_id, event_id, input_hash, run_id) values (${policyId}, ${policy.financialAccountId}, ${event.eventId}, ${sha256(event)}, ${runId})`;
+      }
+      for (const decision of result.paperPolicyDecisions) {
+        const evidence = decision.evidence;
+        await tx`insert into public.standing_paper_decisions (policy_id, financial_account_id, order_id, input_hash, decision_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${decision.orderId}, ${evidence.inputHash}, ${tx.json(json(decision))}, ${runId})`;
+      }
+      for (const journal of result.journals) {
+        const journalHash = sha256(journal);
+        const commandType = journal.type === "VIRTUAL_DEPOSIT" ? "STANDING_PAPER_CONTRIBUTION" : "STANDING_PAPER_EXECUTION";
+        const commandKey = journal.id;
+        const commandId = journal.idempotencyRecordId ?? randomUUID();
+        await tx`insert into public.idempotency_records (id, financial_account_id, command_type, idempotency_key, request_hash, result_json) values (${commandId}, ${policy.financialAccountId}, ${commandType}, ${commandKey}, ${journalHash}, ${tx.json(json({ ledgerTransactionId: journal.id, outcome: "RECORDED" }))})`;
+        for (const entry of journal.entries) {
+          await tx`insert into public.ledger_accounts (id, financial_account_id, code, account_class, normal_balance, commodity_kind, commodity_currency_code, commodity_asset_id) values (${randomUUID()}, ${policy.financialAccountId}, ${entry.ledgerAccount.code}, ${entry.ledgerAccount.accountClass}, ${entry.ledgerAccount.normalBalance}, ${entry.ledgerAccount.commodity.kind}, ${entry.ledgerAccount.commodity.kind === "MONEY" ? entry.ledgerAccount.commodity.currencyCode : null}, ${entry.ledgerAccount.commodity.kind === "ASSET" ? entry.ledgerAccount.commodity.assetId : null}) on conflict (financial_account_id, code) do nothing`;
+        }
+        const accounts = await tx<{ id: string; code: string; account_class: string; normal_balance: string; commodity_kind: string; commodity_currency_code: string | null; commodity_asset_id: string | null }[]>`select id, code, account_class, normal_balance, commodity_kind, commodity_currency_code, commodity_asset_id from public.ledger_accounts where financial_account_id = ${policy.financialAccountId} and code in ${tx(journal.entries.map(entry => entry.ledgerAccount.code))}`;
+        for (const entry of journal.entries) {
+          const account = accounts.find(item => item.code === entry.ledgerAccount.code);
+          const commodity = entry.ledgerAccount.commodity;
+          if (!account || account.account_class !== entry.ledgerAccount.accountClass || account.normal_balance !== entry.ledgerAccount.normalBalance || account.commodity_kind !== commodity.kind || account.commodity_currency_code !== (commodity.kind === "MONEY" ? commodity.currencyCode : null) || account.commodity_asset_id !== (commodity.kind === "ASSET" ? commodity.assetId : null)) throw new Error("PAPER_LEDGER_ACCOUNT_MISMATCH");
+        }
+        await tx`insert into public.ledger_transactions (id, financial_account_id, idempotency_record_id, transaction_type, occurred_at, narrative) values (${journal.id}, ${policy.financialAccountId}, ${journal.type === "VIRTUAL_DEPOSIT" ? commandId : null}, ${journal.type}, ${journal.occurredAt}, ${journal.narrative})`;
+        for (const entry of journal.entries) {
+          const accountId = accounts.find(item => item.code === entry.ledgerAccount.code)!.id;
+          const evidence = result.persistentState.ledger.find(item => item.transactionId === journal.id && item.code === entry.ledgerAccount.code && item.direction === entry.direction && item.amountAtoms === entry.amountAtoms);
+          if (!evidence) throw new Error("PAPER_LEDGER_EVIDENCE_MISSING");
+          await tx`insert into public.ledger_entries (id, ledger_transaction_id, ledger_account_id, direction, amount_atoms, created_at) values (${evidence.entryId}, ${journal.id}, ${accountId}, ${entry.direction}, ${entry.amountAtoms.toString()}::numeric, ${evidence.recordedAt})`;
+        }
+        await tx`insert into public.audit_events (financial_account_id, actor_id, command_id, command_type, idempotency_key, outcome, policy_versions, ledger_transaction_id, input_hash, output_hash, occurred_at) values (${policy.financialAccountId}, ${lockedAccount.owner_id}, ${commandId}, ${commandType}, ${commandKey}, 'SUCCEEDED', ${tx.json(json({ standingPaperPolicy: policy.version, execution: "m1-market-execution/v1", fee: "m1-fee/v1", rounding: "m1-rounding/v1" }))}, ${journal.id}, ${journalHash}, ${sha256({ ledgerTransactionId: journal.id, entries: journal.entries })}, ${journal.occurredAt})`;
+      }
+      for (const fill of result.executions) {
+        const acquisition = result.persistentState.acquisitions.find(item => item.fillId === fill.fillId);
+        if (!acquisition) throw new Error("PAPER_FILL_LEDGER_LINK_MISSING");
+        await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, execution_json, acquisition_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${acquisition.ledgerTransactionId}, ${tx.json(json(fill))}, ${tx.json(json(acquisition))}, ${runId})`;
+      }
+      await tx`update public.standing_paper_policies set state_json = ${tx.json(json(result.persistentState))}, last_run_id = ${runId}, updated_at = now() where policy_id = ${policyId}`;
+      return result;
+    });
+  }
+
+  async close(): Promise<void> { await this.client.end({ timeout: 5 }); }
+}

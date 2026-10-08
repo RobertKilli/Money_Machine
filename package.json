@@ -16,6 +16,7 @@
     "test": "vitest run",
     "paper:demo": "tsx --tsconfig scripts/tsconfig.json scripts/run-paper-policy-demo.ts",
     "test:sec-observation:postgres": "node scripts/run-sec-observation-postgres-test.mjs",
+    "test:standing-paper:postgres": "node scripts/run-standing-paper-postgres-test.mjs",
     "test:sec-observation:postgres-readiness": "node --test scripts/sec-observation-postgres-readiness.test.mjs",
     "test:integration": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts",
     "m5:authority": "tsx --tsconfig scripts/tsconfig.json scripts/provision-m5-manifest-authority.ts",
