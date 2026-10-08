@@ -1,4 +1,12 @@
 type Environment = Record<string, string | undefined>;
+type HeaderReader = { get(name: string): string | null };
+
+const safeLoginErrorCodes = new Set([
+  "invalid-email",
+  "auth-not-configured",
+  "sign-in-unavailable",
+  "oauth-callback",
+]);
 
 function normalizeOrigin(value: string | undefined, allowHostOnly = false): string | null {
   if (!value) return null;
@@ -44,6 +52,41 @@ export function getAuthApplicationOrigin(environment: Environment = process.env)
 export function getAuthCallbackUrl(environment: Environment = process.env): string | null {
   const origin = getAuthApplicationOrigin(environment);
   return origin ? new URL("/auth/callback", origin).toString() : null;
+}
+
+/** Only compares inbound host/proxy headers; none of them are used as a destination. */
+export function requestMatchesAuthOrigin(headers: HeaderReader, trustedOrigin: string): boolean {
+  let expected: URL;
+  try {
+    expected = new URL(trustedOrigin);
+  } catch {
+    return false;
+  }
+
+  const host = headers.get("host")?.trim().toLowerCase();
+  if (!host || host.includes(",") || host !== expected.host.toLowerCase()) return false;
+
+  const forwardedHost = headers.get("x-forwarded-host")?.trim().toLowerCase();
+  if (forwardedHost && (forwardedHost.includes(",") || forwardedHost !== expected.host.toLowerCase())) return false;
+
+  const forwardedProto = headers.get("x-forwarded-proto")?.trim().toLowerCase();
+  const localHttp = expected.protocol === "http:" && (expected.hostname === "localhost" || expected.hostname === "127.0.0.1");
+  if (forwardedProto) return forwardedProto === expected.protocol.slice(0, -1);
+  return localHttp;
+}
+
+export function canonicalLoginUrl(
+  origin: string,
+  params: { error?: string | string[]; sent?: string | string[] },
+): string {
+  const query = new URLSearchParams();
+  if (params.sent === "1") query.set("sent", "1");
+  else if (typeof params.error === "string") {
+    query.set("error", safeLoginErrorCodes.has(params.error) ? params.error : "sign-in-unavailable");
+  }
+  const url = new URL("/login", origin);
+  url.search = query.toString();
+  return url.toString();
 }
 
 export function safePostAuthPath(value: string | null): string {

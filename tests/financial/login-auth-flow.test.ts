@@ -5,9 +5,17 @@ const mocks = vi.hoisted(() => ({
   getSupabaseServerClient: vi.fn(),
   signInWithOtp: vi.fn(),
   exchangeCodeForSession: vi.fn(),
+  incomingHost: "moneymachine-eta.vercel.app",
+  forwardedHost: "moneymachine-eta.vercel.app",
+  forwardedProto: "https",
 }));
 
 vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
+vi.mock("next/headers", () => ({ headers: async () => new Headers({
+  host: mocks.incomingHost,
+  "x-forwarded-host": mocks.forwardedHost,
+  "x-forwarded-proto": mocks.forwardedProto,
+}) }));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: mocks.getSupabaseServerClient }));
 
 import { getAuthApplicationOrigin, getAuthCallbackUrl, safePostAuthPath } from "@/lib/auth/callback-url";
@@ -21,6 +29,11 @@ describe("login callback configuration and flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.NEXT_PUBLIC_SITE_URL = "https://moneymachine-eta.vercel.app";
+    process.env.VERCEL_ENV = "production";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "moneymachine-eta.vercel.app";
+    mocks.incomingHost = "moneymachine-eta.vercel.app";
+    mocks.forwardedHost = "moneymachine-eta.vercel.app";
+    mocks.forwardedProto = "https";
     mocks.signInWithOtp.mockResolvedValue({ error: null });
     mocks.exchangeCodeForSession.mockResolvedValue({ error: null });
     mocks.getSupabaseServerClient.mockResolvedValue({ auth: {
@@ -86,22 +99,85 @@ describe("login callback configuration and flow", () => {
     expect(error).toContain('role="alert"');
   });
 
+  it.each(["__proto__", "constructor", "toString", "unrecognized-error-code"])(
+    "renders prototype-like or unknown error code %s as a safe message",
+    async (error) => {
+      const markup = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ error }) }));
+      expect(markup).toContain("Sign-in did not complete. Please try again.");
+      expect(markup).not.toContain("[object Object]");
+      expect(markup).not.toContain("function Object");
+    },
+  );
+
   it("exchanges a PKCE code and redirects on the configured app origin", async () => {
-    const response = await GET(new Request("https://untrusted.example/auth/callback?code=opaque-code&next=%2Fdashboard%3Ftab%3Dpaper"));
+    const response = await GET(new Request("https://moneymachine-eta.vercel.app/auth/callback?code=opaque-code&next=%2Fdashboard%3Ftab%3Dpaper"));
 
     expect(mocks.exchangeCodeForSession).toHaveBeenCalledWith("opaque-code");
     expect(response.headers.get("location")).toBe("https://moneymachine-eta.vercel.app/dashboard?tab=paper");
   });
 
+  it("uses the preview deployment origin for both the callback and dashboard redirect", async () => {
+    delete process.env.NEXT_PUBLIC_SITE_URL;
+    process.env.VERCEL_ENV = "preview";
+    process.env.VERCEL_URL = "money-machine-git-auth-123.vercel.app";
+    mocks.incomingHost = "money-machine-git-auth-123.vercel.app";
+    mocks.forwardedHost = "money-machine-git-auth-123.vercel.app";
+    const response = await GET(new Request("https://money-machine-git-auth-123.vercel.app/auth/callback?code=opaque-code"));
+    expect(response.headers.get("location")).toBe("https://money-machine-git-auth-123.vercel.app/dashboard");
+    expect(getAuthCallbackUrl()).toBe("https://money-machine-git-auth-123.vercel.app/auth/callback");
+  });
+
+  it("starts the OTP flow on the canonical Preview origin", async () => {
+    delete process.env.NEXT_PUBLIC_SITE_URL;
+    process.env.VERCEL_ENV = "preview";
+    process.env.VERCEL_URL = "money-machine-git-auth-123.vercel.app";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "moneymachine-eta.vercel.app";
+    mocks.incomingHost = "money-machine-git-auth-123.vercel.app";
+    mocks.forwardedHost = "money-machine-git-auth-123.vercel.app";
+    const form = new FormData();
+    form.set("email", "account@example.test");
+
+    await expect(requestMagicLink(form)).rejects.toThrow("REDIRECT:/login?sent=1");
+    expect(mocks.signInWithOtp).toHaveBeenCalledWith({
+      email: "account@example.test",
+      options: { emailRedirectTo: "https://money-machine-git-auth-123.vercel.app/auth/callback" },
+    });
+  });
+
+  it("canonicalizes an alternate login alias before rendering the sign-in flow", async () => {
+    mocks.incomingHost = "money-machine-alias.vercel.app";
+    mocks.forwardedHost = "money-machine-alias.vercel.app";
+    await expect(LoginPage({ searchParams: Promise.resolve({ sent: "1" }) }))
+      .rejects.toThrow("REDIRECT:https://moneymachine-eta.vercel.app/login?sent=1");
+    expect(mocks.signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  it("does not start OTP on an alternate request host", async () => {
+    mocks.incomingHost = "money-machine-alias.vercel.app";
+    mocks.forwardedHost = "money-machine-alias.vercel.app";
+    const form = new FormData();
+    form.set("email", "account@example.test");
+    await expect(requestMagicLink(form)).rejects.toThrow(
+      "REDIRECT:https://moneymachine-eta.vercel.app/login?error=auth-not-configured",
+    );
+    expect(mocks.signInWithOtp).not.toHaveBeenCalled();
+  });
+
   it("rejects external post-auth destinations and does not fall back to request Host", async () => {
-    const response = await GET(new Request("https://untrusted.example/auth/callback?code=opaque-code&next=%2F%2Fevil.example"));
+    const response = await GET(new Request("https://moneymachine-eta.vercel.app/auth/callback?code=opaque-code&next=%2F%2Fevil.example"));
     expect(response.headers.get("location")).toBe("https://moneymachine-eta.vercel.app/dashboard");
     expect(safePostAuthPath("/\\evil.example")).toBe("/dashboard");
   });
 
+  it("rejects callback on an alternate alias before exchanging the PKCE code", async () => {
+    const response = await GET(new Request("https://money-machine-alias.vercel.app/auth/callback?code=opaque-code"));
+    expect(response.status).toBe(400);
+    expect(mocks.exchangeCodeForSession).not.toHaveBeenCalled();
+  });
+
   it("shows a safe callback error when code exchange fails", async () => {
     mocks.exchangeCodeForSession.mockResolvedValue({ error: new Error("provider detail / account@example.test") });
-    const response = await GET(new Request("https://untrusted.example/auth/callback?code=opaque-code"));
+    const response = await GET(new Request("https://moneymachine-eta.vercel.app/auth/callback?code=opaque-code"));
     expect(response.headers.get("location")).toBe("https://moneymachine-eta.vercel.app/login?error=oauth-callback");
   });
 });

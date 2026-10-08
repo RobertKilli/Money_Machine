@@ -1,13 +1,19 @@
 import Link from "next/link";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
-import { getAuthCallbackUrl } from "@/lib/auth/callback-url";
+import { canonicalLoginUrl, getAuthApplicationOrigin, getAuthCallbackUrl, requestMatchesAuthOrigin } from "@/lib/auth/callback-url";
 
 import { requestMagicLink } from "./actions";
 import { getLoginNotice } from "./notices";
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string | string[]; sent?: string | string[] }> }) {
   const params = await searchParams;
+  const origin = getAuthApplicationOrigin();
+  if (origin && !requestMatchesAuthOrigin(await headers(), origin)) {
+    redirect(canonicalLoginUrl(origin, params));
+  }
   const notice = getLoginNotice(params);
   const callbackUrl = getAuthCallbackUrl();
 

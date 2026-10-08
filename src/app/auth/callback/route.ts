@@ -9,6 +9,12 @@ export async function GET(request: Request) {
   const next = requestUrl.searchParams.get("next");
   const origin = getAuthApplicationOrigin();
   if (!origin) return new Response("Sign-in is temporarily unavailable.", { status: 503 });
+  if (requestUrl.origin !== origin) {
+    return new Response("Sign-in callback origin is invalid.", {
+      status: 400,
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
   const safeNext = safePostAuthPath(next);
 
   if (!code) return NextResponse.redirect(new URL("/login?error=oauth-callback", origin));
@@ -19,5 +25,7 @@ export async function GET(request: Request) {
   const { error } = await supabase.auth.exchangeCodeForSession(code);
   if (error) return NextResponse.redirect(new URL("/login?error=oauth-callback", origin));
 
-  return NextResponse.redirect(new URL(safeNext, origin));
+  const destination = new URL(safeNext, origin);
+  if (destination.origin !== origin) return new Response("Sign-in destination is invalid.", { status: 400 });
+  return NextResponse.redirect(destination);
 }
