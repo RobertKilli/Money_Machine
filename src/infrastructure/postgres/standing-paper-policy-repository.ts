@@ -5,6 +5,7 @@ import postgres, { type Sql, type TransactionSql } from "postgres";
 import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
 import { assertValidPaperPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import type { FixturePriceObservation } from "@/domain/strategy/fixture-assets";
+import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill } from "@/application/paper-trading/standing-paper-status";
 
 type StoredPolicy = { policy_json: unknown; status: StandingPaperPolicy["status"]; financial_account_id: string };
 const encode = (value: unknown): unknown => {
@@ -33,6 +34,96 @@ const normalize = (value: unknown): unknown => {
 const stable = (value: unknown) => JSON.stringify(normalize(value));
 const sha256 = (value: unknown) => createHash("sha256").update(stable(value)).digest("hex");
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
+const validDate = (value: unknown): Date => {
+  const date = value instanceof Date ? value : new Date(String(value));
+  if (!Number.isFinite(date.getTime())) throw new Error("PAPER_MATERIAL_INVALID");
+  return date;
+};
+const record = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("PAPER_MATERIAL_INVALID");
+  return value as Record<string, unknown>;
+};
+const signedInteger = (value: unknown): value is string => typeof value === "string" && /^-?\d+$/.test(value);
+const invalidCard = (policyId: string): StandingPaperPolicyStatusCard => ({
+  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", mode: "UNKNOWN", workerStatus: "UNKNOWN",
+  allowedInstrumentIds: [], riskLimits: { capitalBudgetMinor: null, maxOrderMinor: null, maxPositionMinor: null, maxGrossExposureMinor: null, maxLossMinor: null, maxPriceAgeMs: null },
+  lastRound: null, netContributionsMinor: null, committedCapitalMinor: null, remainingCapitalBudgetMinor: null,
+  portfolioValueMinor: null, portfolioValueAsOf: null, currentLossMinor: null, remainingLossMarginMinor: null,
+  decisions: [], fills: [], issueCode: "PAPER_MATERIAL_INVALID",
+});
+
+function validateSavedResult(raw: unknown, state: DeterministicBacktestState, accountId: string): { navMinor: string | null; asOf: string; complete: boolean } {
+  const result = record(raw);
+  const config = record(result.config);
+  const ending = record(result.endingState);
+  const savedState = record(result.persistentState);
+  const startAt = validDate(config.startAt);
+  const endAt = validDate(config.endAt);
+  const contributionEvents = config.contributionEvents;
+  const valuationTimestamps = config.valuationTimestamps;
+  const snapshots = result.portfolioSnapshots;
+  if (result.integrityStatus !== "CONSISTENT" || config.financialAccountId !== accountId || config.baseCurrency !== "NOK" ||
+    startAt.getTime() > endAt.getTime() || !Array.isArray(contributionEvents) || !Array.isArray(valuationTimestamps) || !Array.isArray(snapshots) ||
+    sha256(savedState) !== sha256(state) || !["COMPLETE", "INCOMPLETE"].includes(String(ending.valuationStatus)) || ending.integrityStatus !== (ending.valuationStatus === "COMPLETE" ? "CONSISTENT" : "INCOMPLETE") ||
+    ending.baseCurrency !== "NOK" || typeof ending.asOf !== "string" || !signedInteger(ending.cash) ||
+    !(ending.nav === null || signedInteger(ending.nav)) || !(ending.investedMarketValue === null || signedInteger(ending.investedMarketValue)) ||
+    !(ending.totalOpenCostBasis === null || signedInteger(ending.totalOpenCostBasis)) || !(ending.unrealizedPnl === null || signedInteger(ending.unrealizedPnl))) {
+    throw new Error("PAPER_MATERIAL_INVALID");
+  }
+  const asOf = validDate(ending.asOf).toISOString();
+  const snapshotTimes = snapshots.map(snapshot => validDate(record(snapshot).asOf).getTime());
+  if (snapshotTimes.some((time, index) => index > 0 && time < snapshotTimes[index - 1]!)) throw new Error("PAPER_MATERIAL_INVALID");
+  const expectedSnapshot = snapshots.length ? record(snapshots[snapshots.length - 1]) : null;
+  const expectedAsOf = expectedSnapshot ? validDate(expectedSnapshot.asOf).toISOString() : endAt.toISOString();
+  if (asOf !== expectedAsOf) throw new Error("PAPER_MATERIAL_INVALID");
+  const eventTimes = [
+    ...contributionEvents.map(event => validDate(record(event).availableAt).getTime()),
+    ...valuationTimestamps.map(timestamp => validDate(timestamp).getTime()),
+  ];
+  if (contributionEvents.some(event => {
+    const time = validDate(record(event).availableAt).getTime();
+    return time < startAt.getTime() || time > endAt.getTime();
+  })) throw new Error("PAPER_MATERIAL_INVALID");
+  const lastEventTime = eventTimes.reduce((latest, time) => Math.max(latest, time), Number.NEGATIVE_INFINITY);
+  if (eventTimes.length && (!state.lastProcessedAt || state.lastProcessedAt.getTime() !== lastEventTime)) throw new Error("PAPER_MATERIAL_INVALID");
+  const complete = ending.valuationStatus === "COMPLETE" && ending.nav !== null;
+  if (ending.valuationStatus === "COMPLETE" && !complete) throw new Error("PAPER_MATERIAL_INVALID");
+  return { navMinor: complete ? ending.nav as string : null, asOf, complete };
+}
+
+function validateDecisionRow(row: { policy_id: string; financial_account_id: string; order_id: string; input_hash: string; decision_json: unknown; created_at: Date }, policyId: string, accountId: string): StandingPaperStatusDecision {
+  const decision = record(decode(typeof row.decision_json === "string" ? JSON.parse(row.decision_json) as unknown : row.decision_json));
+  const evidence = record(decision.evidence);
+  const reasonCode = evidence.reasonCode;
+  if (row.policy_id !== policyId || row.financial_account_id !== accountId || !/^[0-9a-f]{64}$/.test(row.input_hash) ||
+    decision.orderId !== row.order_id || typeof decision.decisionId !== "string" || !["SIMULATED_FILLED", "REJECTED"].includes(String(decision.outcome)) ||
+    evidence.policyId !== policyId || evidence.policyVersion !== "standing-paper-policy/v1" || evidence.inputHash !== row.input_hash ||
+    !["POLICY_NOT_ACTIVE", "PRICE_MISSING", "PRICE_STALE", "INSTRUMENT_NOT_ALLOWED", "ORDER_LIMIT_EXCEEDED", "POSITION_LIMIT_EXCEEDED", "EXPOSURE_LIMIT_EXCEEDED", "CAPITAL_BUDGET_EXCEEDED", "LOSS_LIMIT_EXCEEDED", "M1_RISK_REJECTED", "APPROVED"].includes(String(reasonCode)) ||
+    !["APPROVE", "REJECT"].includes(String(evidence.disposition)) ||
+    (decision.outcome === "SIMULATED_FILLED" && (reasonCode !== "APPROVED" || evidence.disposition !== "APPROVE")) ||
+    (decision.outcome === "REJECTED" && (reasonCode === "APPROVED" || evidence.disposition !== "REJECT"))) throw new Error("PAPER_MATERIAL_INVALID");
+  return { orderId: row.order_id, decisionId: decision.decisionId as string, outcome: decision.outcome as StandingPaperStatusDecision["outcome"], reasonCode: reasonCode as string, disposition: evidence.disposition as StandingPaperStatusDecision["disposition"], recordedAt: validDate(row.created_at).toISOString() };
+}
+
+function validateFillRow(row: { policy_id: string; financial_account_id: string; fill_id: string; order_id: string; execution_json: unknown; acquisition_json: unknown }, policyId: string, accountId: string): StandingPaperStatusFill {
+  const fill = record(decode(typeof row.execution_json === "string" ? JSON.parse(row.execution_json) as unknown : row.execution_json));
+  const acquisition = record(decode(typeof row.acquisition_json === "string" ? JSON.parse(row.acquisition_json) as unknown : row.acquisition_json));
+  const quantity = record(fill.quantity); const gross = record(fill.grossNotional); const fee = record(fill.fee); const total = record(fill.totalCashDebit);
+  if (row.policy_id !== policyId || row.financial_account_id !== accountId || fill.fillId !== row.fill_id || fill.proposalId !== row.order_id ||
+    fill.financialAccountId !== accountId || acquisition.fillId !== row.fill_id || acquisition.financialAccountId !== accountId ||
+    acquisition.executionMatchesFill !== true || typeof acquisition.assetId !== "string" ||
+    typeof quantity.atomicUnits !== "bigint" || quantity.atomicUnits <= 0n || !Number.isSafeInteger(quantity.quantityScale) ||
+    typeof gross.minorUnits !== "bigint" || gross.minorUnits <= 0n || gross.currencyCode !== "NOK" ||
+    typeof fee.minorUnits !== "bigint" || fee.minorUnits < 0n || fee.currencyCode !== "NOK" ||
+    typeof total.minorUnits !== "bigint" || total.minorUnits !== gross.minorUnits + fee.minorUnits || total.currencyCode !== "NOK" ||
+    fill.executionPolicyVersion !== "m1-market-execution/v1" || fill.spreadSlippagePolicyVersion !== "m1-spread-slippage/v1" ||
+    fill.feePolicyVersion !== "m1-fee/v1" || fill.roundingPolicyVersion !== "m1-rounding/v1" || !(fill.executionTimestamp instanceof Date) ||
+    !(acquisition.executedAt instanceof Date) || acquisition.executedAt.getTime() !== (fill.executionTimestamp as Date).getTime() ||
+    !Number.isSafeInteger(acquisition.quantityScale) || acquisition.quantityAtoms !== quantity.atomicUnits ||
+    acquisition.grossMinor !== gross.minorUnits || acquisition.feeMinor !== fee.minorUnits || typeof acquisition.ledgerTransactionId !== "string") throw new Error("PAPER_MATERIAL_INVALID");
+  return { fillId: row.fill_id, orderId: row.order_id, instrumentId: acquisition.assetId as string, quantityAtoms: quantity.atomicUnits.toString(), quantityScale: quantity.quantityScale as number, grossMinor: gross.minorUnits.toString(), feeMinor: fee.minorUnits.toString(), currency: "NOK", simulatedAt: (fill.executionTimestamp as Date).toISOString(), executionPolicyVersion: fill.executionPolicyVersion as string };
+}
+
 const parsePolicy = (raw: unknown): StandingPaperPolicy => {
   const parsed = typeof raw === "string" ? JSON.parse(raw) as unknown : raw;
   const policy = decode(parsed) as StandingPaperPolicy;
@@ -81,6 +172,89 @@ export class StandingPaperPolicyRepository {
   async getPolicy(policyId: string): Promise<StandingPaperPolicy | null> {
     const rows = await this.client<{ policy_json: unknown }[]>`select policy_json from public.standing_paper_policies where policy_id = ${policyId}`;
     return rows[0] ? structuredClone(parsePolicy(rows[0].policy_json)) : null;
+  }
+
+  /** Owner-scoped, repeatable-read status projection. No heartbeat is stored,
+   * so the worker's current status is deliberately always UNKNOWN. */
+  async loadOwnedStatus(actorId: string): Promise<StandingPaperStatusReadModel> {
+    return this.client.begin(async tx => {
+      await tx`set transaction isolation level repeatable read, read only`;
+      await tx`set local role authenticated`;
+      await tx`select set_config('request.jwt.claim.sub', ${actorId}, true)`;
+      const rows = await tx<{
+        policy_id: string; financial_account_id: string; policy_version: string; status: string;
+        policy_json: unknown; state_json: unknown; last_run_id: string | null;
+      }[]>`
+        select p.policy_id, p.financial_account_id, p.policy_version, p.status,
+          p.policy_json, p.state_json, p.last_run_id
+        from public.financial_accounts a
+        join public.standing_paper_policies p on p.financial_account_id = a.id
+        where a.owner_id = ${actorId} and a.mode = 'PAPER'
+        order by p.updated_at desc, p.policy_id asc limit 20
+      `;
+      if (!rows.length) return projectStandingPaperStatusReadModel([]);
+
+      const runIds = rows.flatMap(row => row.last_run_id ? [row.last_run_id] : []);
+      const runRows = runIds.length ? await tx<{
+        id: string; policy_id: string; financial_account_id: string; result_json: unknown; created_at: Date;
+      }[]>`select id, policy_id, financial_account_id, result_json, created_at from public.standing_paper_runs where id in ${tx(runIds)}` : [];
+      const policyIds = rows.map(row => row.policy_id);
+      const decisionRows = await tx<{
+        policy_id: string; financial_account_id: string; order_id: string; input_hash: string;
+        decision_json: unknown; run_id: string; created_at: Date;
+      }[]>`
+        with ranked as (
+          select d.policy_id, d.financial_account_id, d.order_id, d.input_hash, d.decision_json, d.run_id, d.created_at,
+            row_number() over (partition by d.policy_id order by r.created_at desc, d.order_id asc) as policy_rank
+          from public.standing_paper_decisions d
+          join public.standing_paper_runs r on r.id = d.run_id
+          where d.policy_id in ${tx(policyIds)}
+        )
+        select policy_id, financial_account_id, order_id, input_hash, decision_json, run_id, created_at
+        from ranked where policy_rank <= 20
+        order by policy_id asc, policy_rank asc
+      `;
+      const fillRows = await tx<{
+        policy_id: string; financial_account_id: string; fill_id: string; order_id: string;
+        execution_json: unknown; acquisition_json: unknown; run_id: string; created_at: Date;
+      }[]>`
+        with ranked as (
+          select f.policy_id, f.financial_account_id, f.fill_id, f.order_id, f.execution_json,
+            f.acquisition_json, f.run_id, f.created_at,
+            row_number() over (partition by f.policy_id order by r.created_at desc, f.fill_id asc) as policy_rank
+          from public.standing_paper_fills f
+          join public.standing_paper_runs r on r.id = f.run_id
+          where f.policy_id in ${tx(policyIds)}
+        )
+        select policy_id, financial_account_id, fill_id, order_id, execution_json, acquisition_json, run_id, created_at
+        from ranked where policy_rank <= 20
+        order by policy_id asc, policy_rank asc
+      `;
+      const cards: StandingPaperPolicyStatusCard[] = [];
+      for (const row of rows) {
+        try {
+          const policy = parsePolicy(row.policy_json);
+          if (policy.policyId !== row.policy_id || policy.financialAccountId !== row.financial_account_id || policy.version !== row.policy_version || policy.status !== row.status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
+          const state = parseState(row.state_json, row.financial_account_id);
+          await this.assertLedgerCheckpointMatches(tx, row.financial_account_id, state, row.last_run_id);
+          const run = runRows.find(item => item.id === row.last_run_id);
+          if (row.last_run_id && (!run || run.policy_id !== row.policy_id || run.financial_account_id !== row.financial_account_id)) throw new Error("PAPER_CHECKPOINT_INVALID");
+          if (!row.last_run_id && (state.lastProcessedAt !== null || state.ledger.length || state.acquisitions.length)) throw new Error("PAPER_CHECKPOINT_INVALID");
+          const result = run ? decode(typeof run.result_json === "string" ? JSON.parse(run.result_json) as unknown : run.result_json) : null;
+          const valuation = run ? validateSavedResult(result, state, row.financial_account_id) : null;
+          const decisions = decisionRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateDecisionRow(item, policy.policyId, row.financial_account_id));
+          const fills = fillRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateFillRow(item, policy.policyId, row.financial_account_id));
+          if (!run && (decisions.length || fills.length)) throw new Error("PAPER_MATERIAL_INVALID");
+          cards.push(projectStandingPaperStatusCard({
+            policy, state, run: run && valuation ? { id: run.id, createdAt: validDate(run.created_at).toISOString(), result: result as BacktestResult, valuation } : null,
+            decisions, fills,
+          }));
+        } catch {
+          cards.push(invalidCard(row.policy_id));
+        }
+      }
+      return projectStandingPaperStatusReadModel(cards);
+    });
   }
 
   /** Select the next durable round ordinal for one worker identity. Concurrent
@@ -241,4 +415,11 @@ export class StandingPaperPolicyRepository {
   }
 
   async close(): Promise<void> { await this.client.end({ timeout: 5 }); }
+}
+
+let statusRepository: StandingPaperPolicyRepository | undefined;
+export function getStandingPaperStatusRepository(): StandingPaperPolicyRepository | undefined {
+  const url = process.env.DATABASE_URL;
+  if (!url) return undefined;
+  return statusRepository ??= new StandingPaperPolicyRepository(url);
 }
