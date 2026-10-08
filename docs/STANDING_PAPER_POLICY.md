@@ -59,6 +59,13 @@ suite, then verifies that the container, volume, report, and temporary folder
 are gone. It does not read `DATABASE_URL` and rejects a database URL that is
 not for its task-owned `127.0.0.1/mm_paper_<random-id>` database.
 
+The `standing-paper-postgres` GitHub Actions job runs this command separately
+from the ordinary `npm run test` unit suite. The command requires all seven
+integration cases to pass; a skipped or missing case fails the run. The job
+runs for pull requests targeting `main` and pushes to `main`, using no hosted
+database credentials or operational pins. Unit CI and this database
+integration job are distinct controls.
+
 Policy creation requires an empty, dedicated PAPER account. Each durable
 decision round locks the policy row and then the `FinancialAccount` row, and
 checks `ACTIVE` / `PAPER` / `NOK` on that locked account row before
@@ -107,8 +114,8 @@ ledger transactions, ledger entries, and audit evidence are append-only.
   monetary and audit writes together after an injected failure.
 - The task-owned PostgreSQL suite checks empty-account setup, external ledger
   divergence, strict checkpoint fields, resumption, idempotency, pause/stop,
-  and rollback. The standard GitHub CI workflow does not run this PostgreSQL
-  suite, so green CI alone does not prove those tests passed.
+  and rollback. Its dedicated `standing-paper-postgres` CI job reports these
+  checks separately from the ordinary unit suite.
 
 ## Assumptions and limits
 
