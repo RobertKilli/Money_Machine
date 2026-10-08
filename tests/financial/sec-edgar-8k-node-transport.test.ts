@@ -543,6 +543,46 @@ describe("SEC EDGAR bounded local smoke transport", () => {
     expect(mocks.request).toHaveBeenCalledTimes(1);
   }, 20000);
 
+  it("distinguishes missing arrays, wrong field types, and invalid array elements", async () => {
+    const missing = recentSubmission();
+    delete ((missing.filings as Record<string, unknown>).recent as Record<string, unknown>).accessionNumber;
+    installBodySequence([JSON.stringify(missing)]);
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_SCHEMA_INVALID", diagnostic: { stage: "SUBMISSIONS", reason: "FIELD_MISSING", field: "filings.recent.accessionNumber" } });
+
+    mocks.request.mockReset();
+    freshPermit();
+    const wrongType = recentSubmission();
+    (wrongType.filings.recent as Record<string, unknown>).accessionNumber = 12;
+    installBodySequence([JSON.stringify(wrongType)]);
+    expect(await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact })).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_SCHEMA_INVALID", diagnostic: { stage: "SUBMISSIONS", reason: "FIELD_INVALID", field: "filings.recent.accessionNumber" } });
+
+    mocks.request.mockReset();
+    freshPermit();
+    const invalidElement = recentSubmission();
+    (invalidElement.filings.recent as Record<string, unknown>).accessionNumber = [null];
+    installBodySequence([JSON.stringify(invalidElement)]);
+    const result = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(result).toEqual({ status: "BLOCKED", code: "SEC_SUBMISSIONS_SCHEMA_INVALID", diagnostic: { stage: "SUBMISSIONS", reason: "ARRAY_ELEMENT_INVALID", field: "filings.recent.accessionNumber" } });
+    expect(JSON.stringify(result)).not.toContain("null");
+    expect(JSON.stringify(result)).not.toContain(contact);
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+  }, 20000);
+
+  it("validates recent-list structure but applies target filing identity only to the selected accession", async () => {
+    const current = recentSubmission();
+    const recent = current.filings.recent as Record<string, unknown[]>;
+    const otherRow: Record<string, string> = {
+      accessionNumber: "0000320193-23-106611", form: "10-K", filingDate: "2023-10-02", reportDate: "2023-09-30",
+      acceptanceDateTime: "2023-10-02T12:00:00.000Z", primaryDocument: "annual-report.htm", primaryDocDescription: "Annual report",
+    };
+    for (const [key, values] of Object.entries(recent)) values.unshift(otherRow[key]!);
+    installBodySequence([JSON.stringify(current), filingIndex()]);
+    const result = await runSecEdgar8kLocalSmoke({ initialPlan: plans[0], operatorContact: contact });
+    expect(result.status).toBe("VERIFIED");
+    expect(mocks.request).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(result)).not.toContain(contact);
+  }, 15000);
+
   it("rejects conflicting available acceptance timestamps rather than choosing a source", async () => {
     const current = recentSubmission();
     installBodySequence([JSON.stringify(current), filingIndex({ accepted: "2023-10-13 08:37:33" })]);

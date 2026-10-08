@@ -49,7 +49,7 @@ export type SecEdgar8kResponseAdapterResult =
 /** Fixed, value-free diagnostics. Never includes response values, excerpts, or contact data. */
 export type SecEdgar8kSanitizedDiagnostic = Readonly<{
   stage: "TRANSPORT" | "JSON" | "SUBMISSIONS" | "HISTORY_MANIFEST" | "HISTORY_SUBMISSIONS";
-  reason: "HTTP_STATUS_REJECTED" | "CONTENT_TYPE_REJECTED" | "INVALID_UTF8" | "INVALID_JSON" | "FIELD_MISSING" | "FIELD_INVALID" | "PARALLEL_ARRAY_LENGTH_MISMATCH" | "ROW_INVALID";
+  reason: "HTTP_STATUS_REJECTED" | "CONTENT_TYPE_REJECTED" | "INVALID_UTF8" | "INVALID_JSON" | "FIELD_MISSING" | "FIELD_INVALID" | "ARRAY_ELEMENT_INVALID" | "PARALLEL_ARRAY_LENGTH_MISMATCH" | "ROW_INVALID";
   field?: "root" | "cik" | "filings" | "filings.recent" | "filings.recent.accessionNumber" | "filings.recent.form" | "filings.recent.filingDate" | "filings.recent.acceptanceDateTime" | "filings.recent.primaryDocument" | "filings.files" | "filings.files[].name" | "filings.files[].filingFrom" | "filings.files[].filingTo";
 }>;
 
@@ -81,7 +81,11 @@ const parseJson = (bytes: Buffer): JsonParseResult => {
   try { return Object.freeze({ status: "VALID", value: JSON.parse(text) as unknown }); }
   catch { return Object.freeze({ status: "INVALID_JSON" }); }
 };
-const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.length <= 1000 && value.every((x) => typeof x === "string");
+type StringArrayIssue = "FIELD_INVALID" | "ARRAY_ELEMENT_INVALID" | null;
+function stringArrayIssue(value: unknown): StringArrayIssue {
+  if (!Array.isArray(value) || value.length > 1000) return "FIELD_INVALID";
+  return value.every((entry) => typeof entry === "string") ? null : "ARRAY_ELEMENT_INVALID";
+}
 function parallelArraysUnequal(value: unknown): boolean {
   if (!isRecord(value)) return false;
   const filings = isRecord(value.filings) ? value.filings : value;
@@ -129,10 +133,14 @@ function submissions(value: unknown, allowMissingCik = false): SubmissionsValida
   const columns = names.map((name) => source[name]);
   for (let i = 0; i < names.length; i++) {
     if (source[names[i]!] === undefined) return schemaIssue(stage, "FIELD_MISSING", diagnosticField(names[i]!));
-    if (!isStringArray(columns[i])) return schemaIssue(stage, "FIELD_INVALID", diagnosticField(names[i]!));
+    const issue = stringArrayIssue(columns[i]);
+    if (issue) return schemaIssue(stage, issue, diagnosticField(names[i]!));
   }
   const acceptancePresent = source.acceptanceDateTime !== undefined;
-  if (acceptancePresent && !isStringArray(source.acceptanceDateTime)) return schemaIssue(stage, "FIELD_INVALID", "filings.recent.acceptanceDateTime");
+  if (acceptancePresent) {
+    const issue = stringArrayIssue(source.acceptanceDateTime);
+    if (issue) return schemaIssue(stage, issue, "filings.recent.acceptanceDateTime");
+  }
   const accessions = columns[0] as string[];
   const forms = columns[1] as string[];
   const filingDates = columns[2] as string[];
