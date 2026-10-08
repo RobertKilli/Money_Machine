@@ -125,3 +125,20 @@ jobs:
         run: npm run test:sec-observation:postgres-readiness
       - name: Run SEC observation PostgreSQL integration
         run: npm run test:sec-observation:postgres
+
+  standing-paper-postgres:
+    name: standing-paper-postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run standing paper PostgreSQL integration
+        run: npm run test:standing-paper:postgres
