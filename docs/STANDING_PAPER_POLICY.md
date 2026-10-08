@@ -162,9 +162,12 @@ ledger transactions, ledger entries, and audit evidence are append-only.
   monetary and audit writes together after an injected failure.
 - The task-owned PostgreSQL suite checks empty-account setup, external ledger
   divergence, strict checkpoint fields, resumption, idempotency, pause/stop,
-  rollback, and worker restart, concurrency, pause/resume, stop, and failure
-  behavior. Its dedicated `standing-paper-postgres` CI job reports these
-  checks separately from the ordinary unit suite.
+  rollback, worker restart, concurrency, pause/resume, stop, and failure
+  behavior. It also verifies owner-bound dashboard transitions, stale-status
+  and double-click rejection, and that pause/stop wait for an in-flight worker
+  transaction before blocking the next round. Its dedicated
+  `standing-paper-postgres` CI job reports these checks separately from the
+  ordinary unit suite.
 
 ## Assumptions and limits
 
@@ -182,10 +185,12 @@ ledger transactions, ledger entries, and audit evidence are append-only.
   decisions and the existing ledger remains authoritative for the synthetic
   FinancialAccount; its risk checkpoint is updated in the same transaction.
 
-## Read-only status view
+## Status view and policy controls
 
 The authenticated dashboard at `/dashboard/paper` reads the caller's own PAPER accounts and policies through a read-only, repeatable-read PostgreSQL snapshot. The API checks the authenticated user before querying account data, returns private `no-store` responses, and limits history to the latest 20 decisions and fills per policy. Stored policies, checkpoints, run results, decisions, fills, and acquisition evidence are validated before projection; corrupt or incomplete material is shown as such rather than silently repaired.
 
-Displayed balances and portfolio values are the latest saved simulation snapshot, with its effective timestamp. They are not fresh market prices. The view labels the mode `PAPER_ONLY`, prices as synthetic, and fills as simulated. Worker status remains `UNKNOWN`: a stored completed round does not prove a worker is currently running, and this version has no heartbeat evidence. The page is read-only and offers no policy or trading controls.
+Displayed balances and portfolio values are the latest saved simulation snapshot, with its effective timestamp. They are not fresh market prices. The view labels the mode `PAPER_ONLY`, prices as synthetic, and fills as simulated. Worker status remains `UNKNOWN`: a stored completed round does not prove a worker is currently running, and this version has no heartbeat evidence.
+
+The dashboard can pause an `ACTIVE` policy, resume a `PAUSED` policy, or stop a `DRAFT`, `ACTIVE`, or `PAUSED` policy. It does not create policies or offer first-time activation. Stop requires explicit confirmation and follows the domain's terminal `STOPPED` rule. Each command includes the exact policy ID and expected status. The server authenticates first, rejects cross-origin requests, and checks account ownership, policy state, account eligibility, and expected status in one transaction. It locks the policy row before the account row, matching paper-round and ledger-writer lock order. A second click or stale tab is rejected without another transition-history row. A round already holding those locks commits before pause or stop; later rounds observe the updated policy status. The private status read is refreshed after a confirmed transition. Transition history remains append-only and `workerStatus` remains `UNKNOWN` because there is no heartbeat evidence.
 
 The history query selects the latest 20 decisions and fills independently for each policy using row-number ranking in SQL. The additive status-read grants are defined in `20261008130000_standing_paper_status_read_grants.sql`; they provide `SELECT` only and leave the existing owner-scoped RLS policies in place. Snapshot `asOf` is validated against the saved final portfolio snapshot (or `config.endAt` when the run has no snapshots). The run creation timestamp, configured end time, and snapshot timestamp have distinct meanings and are not required to be equal.
