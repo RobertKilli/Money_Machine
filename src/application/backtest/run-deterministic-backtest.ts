@@ -4,17 +4,22 @@ import { money } from "@/domain/financial/money";
 import { createLedgerTransaction, createVirtualDepositTransaction, ledgerEntry, type LedgerAccount, type LedgerTransaction } from "@/domain/ledger/ledger";
 import { projectPortfolio, type AcquisitionEvidence, type PortfolioEvidence, type PortfolioProjection, type PortfolioLedgerEvidence } from "@/domain/portfolio/portfolio-projection";
 import { assessProposal } from "@/domain/risk/m1-risk";
+import { assessStandingPaperPolicy, type PaperPolicyEvidence, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { basisPoints } from "@/domain/financial/basis-points";
+import { feeCeiling, buyExecutionPrice, buySettlementNotional } from "@/domain/financial/rounding";
 import { CONTRIBUTION_REBALANCING_VERSION, FIXTURE_ASSETS, FIXTURE_ASSET_REGISTRY_VERSION, FIXTURE_DATASET_VERSION, latestAvailablePrice, contributionRebalancing, type FixturePriceObservation, type DecisionPortfolioState, type StrategyDecision } from "@/domain/strategy/fixture-assets";
 
 export const BACKTEST_REPLAY_VERSION = "backtest-replay/v1";
 export interface ContributionEvent { readonly eventId: string; readonly availableAt: string; readonly amountMinor: string; readonly currency: "NOK"; }
 export interface BacktestRunConfig {
   readonly startAt: string; readonly endAt: string; readonly baseCurrency: "NOK";
+  readonly financialAccountId?: string;
   readonly contributionEvents: readonly ContributionEvent[]; readonly valuationTimestamps: readonly string[];
   readonly strategyVersion: typeof CONTRIBUTION_REBALANCING_VERSION; readonly riskPolicyVersion: "m1-risk-policy/v1";
   readonly executionPolicyVersion: "m1-market-execution/v1"; readonly portfolioValuationVersion: "portfolio-valuation/v1";
   readonly fifoCostBasisVersion: "fifo-cost-basis/v1"; readonly assetRegistryVersion: typeof FIXTURE_ASSET_REGISTRY_VERSION;
   readonly marketDatasetVersion: typeof FIXTURE_DATASET_VERSION;
+  readonly standingPaperPolicy?: StandingPaperPolicy;
 }
 export interface BacktestResult {
   readonly runId: string; readonly configHash: string; readonly config: BacktestRunConfig;
@@ -22,6 +27,7 @@ export interface BacktestResult {
   readonly executions: readonly SimulationFill[]; readonly journals: readonly LedgerTransaction[];
   readonly portfolioSnapshots: readonly PortfolioProjection[]; readonly endingState: PortfolioProjection;
   readonly integrityStatus: "CONSISTENT";
+  readonly paperPolicyDecisions: readonly { readonly decisionId: string; readonly orderId: string; readonly outcome: "SIMULATED_FILLED" | "REJECTED"; readonly riskCodes: readonly string[]; readonly evidence: PaperPolicyEvidence }[];
 }
 
 const canonical = (value: unknown): string => JSON.stringify(value, (_, v) => typeof v === "bigint" ? v.toString() : v instanceof Date ? v.toISOString() : v, 0);
@@ -42,12 +48,15 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
   validate(config);
   const canonicalConfig = canonical({ ...config, contributionEvents: [...config.contributionEvents].sort((a,b) => date(a.availableAt).getTime()-date(b.availableAt).getTime() || a.eventId.localeCompare(b.eventId)), valuationTimestamps: [...config.valuationTimestamps].sort() });
   const configHash = hash(canonicalConfig); const runId = hash(`${configHash}:${config.marketDatasetVersion}`);
-  const financialAccountId = id(runId, "account");
+  const financialAccountId = config.financialAccountId ?? id(runId, "account");
+  if (!financialAccountId.trim()) throw new Error("INVALID_FINANCIAL_ACCOUNT_ID");
   const cash = account(financialAccountId, "CASH", { kind: "MONEY", currencyCode: "NOK" }, "ASSET", "DEBIT", runId);
   const capital = account(financialAccountId, "VIRTUAL_CONTRIBUTED_CAPITAL", { kind: "MONEY", currencyCode: "NOK" }, "EQUITY", "CREDIT", runId);
   const fee = account(financialAccountId, "FEE_EXPENSE", { kind: "MONEY", currencyCode: "NOK" }, "EXPENSE", "DEBIT", runId);
   const ledger: PortfolioLedgerEvidence[] = []; const journals: LedgerTransaction[] = []; const acquisitions: AcquisitionEvidence[] = [];
   const decisions: StrategyDecision[] = []; const risks: ReturnType<typeof assessProposal>[] = []; const executions: SimulationFill[] = []; const snapshots: PortfolioProjection[] = [];
+  const paperPolicyDecisions: { decisionId: string; orderId: string; outcome: "SIMULATED_FILLED" | "REJECTED"; riskCodes: readonly string[]; evidence: PaperPolicyEvidence }[] = [];
+  let committedCapitalMinor = 0n; let peakNavMinor = 0n;
   const source = (): PortfolioEvidence => ({ financialAccountId, baseCurrency: "NOK", ledger, acquisitions, assets: FIXTURE_ASSETS, prices: prices.filter(p => p.datasetVersion === config.marketDatasetVersion) });
   const stateAt = (at: Date): { projection: PortfolioProjection; state: DecisionPortfolioState } => { const projection = projectPortfolio(source(), at); if (projection.valuationStatus === "INCOMPLETE" || projection.nav === null) throw new Error("INCOMPLETE_DECISION_PORTFOLIO"); const values = Object.fromEntries(projection.holdings.map(h => [h.assetId, BigInt(h.marketValueMinor!)])); return { projection, state: { cashMinor: BigInt(projection.cash), decisionNavMinor: BigInt(projection.nav), holdings: projection.holdings.map(h => ({ assetId: h.assetId, marketValueMinor: BigInt(h.marketValueMinor!) })), existingMarketValueByAsset: values, priceRecordIds: projection.provenance.priceRecordIds } }; };
   const events = [...config.contributionEvents.map(e => ({ kind: "CONTRIBUTION" as const, at: date(e.availableAt), event: e })), ...config.valuationTimestamps.map(t => ({ kind: "VALUATION" as const, at: date(t) }))].sort((a,b) => a.at.getTime()-b.at.getTime() || (a.kind === "CONTRIBUTION" ? -1 : 1) || (a.kind === "CONTRIBUTION" && b.kind === "CONTRIBUTION" ? a.event.eventId.localeCompare(b.event.eventId) : 0));
@@ -55,11 +64,51 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
     if (event.kind === "CONTRIBUTION") {
       const transaction = createVirtualDepositTransaction({ id: id(runId, `journal:${event.event.eventId}:deposit`), financialAccountId, occurredAt: event.at, amount: money("NOK", BigInt(event.event.amountMinor)), idempotencyRecordId: id(runId, `command:${event.event.eventId}`), cashAccount: cash, contributedCapitalAccount: capital });
       journals.push(transaction); transaction.entries.forEach((entry, i) => ledger.push({ entryId: id(runId, `entry:${transaction.id}:${i}`), transactionId: transaction.id, financialAccountId, code: entry.ledgerAccount.code, commodityKind: entry.ledgerAccount.commodity.kind, currency: entry.ledgerAccount.commodity.kind === "MONEY" ? entry.ledgerAccount.commodity.currencyCode : null, assetId: entry.ledgerAccount.commodity.kind === "ASSET" ? entry.ledgerAccount.commodity.assetId : null, direction: entry.direction, amountAtoms: entry.amountAtoms, occurredAt: event.at, recordedAt: event.at }));
+      const openingPortfolio = stateAt(event.at).projection;
+      if (openingPortfolio.nav !== null && BigInt(openingPortfolio.nav) > peakNavMinor) peakNavMinor = BigInt(openingPortfolio.nav);
       const { state } = stateAt(event.at); const decision = contributionRebalancing({ financialAccountId, decisionId: id(runId, `decision:${event.event.eventId}`), cash: money("NOK", state.cashMinor), decisionTimestamp: event.at, prices: prices.filter(p => p.datasetVersion === config.marketDatasetVersion), portfolioState: state }); decisions.push(decision);
-      for (const order of decision.proposedOrders) { const asset = FIXTURE_ASSETS.find(a => a.assetId === order.assetId)!; const reference = latestAvailablePrice(prices.filter(p => p.datasetVersion === config.marketDatasetVersion), order.assetId, event.at); if (!reference) continue; const risk = assessProposal(order, { accountActive: true, simulationMode: true, strategyEnabled: true, strategyVersion: decision.strategyVersion, accountCurrency: "NOK", availableCash: money("NOK", state.cashMinor), decisionNav: money("NOK", state.decisionNavMinor), decisionTimestamp: event.at, assets: FIXTURE_ASSETS, prices: prices.filter(p => p.datasetVersion === config.marketDatasetVersion), portfolioState: state }); risks.push(risk); if (risk.disposition !== "APPROVE") continue; const fill = executeSimulationBuy({ financialAccountId, actorId: financialAccountId, accountActive: true, simulationMode: true, decisionApproved: true, riskApproved: true, proposal: order, asset, referencePrice: reference, availableCash: money("NOK", state.cashMinor), decisionNav: money("NOK", state.decisionNavMinor), executionTimestamp: event.at, alreadySettled: false }); executions.push(fill); const holding = account(financialAccountId, `ASSET_HOLDING:${asset.assetId}`, { kind: "ASSET", assetId: asset.assetId }, "ASSET", "DEBIT", runId); const clearing = account(financialAccountId, `ASSET_CLEARING:${asset.assetId}`, { kind: "ASSET", assetId: asset.assetId }, "CLEARING", "CREDIT", runId); const cost = account(financialAccountId, `ASSET_COST_BASIS:${asset.assetId}`, { kind: "MONEY", currencyCode: "NOK" }, "ASSET", "DEBIT", runId); const tx = createLedgerTransaction({ id: id(runId, `journal:${event.event.eventId}:${order.assetId}`), financialAccountId, type: "SIMULATED_BUY_SETTLEMENT", occurredAt: event.at, narrative: "Deterministic backtest BUY settlement", entries: [ledgerEntry(cost, "DEBIT", fill.grossNotional.minorUnits), ledgerEntry(cash, "CREDIT", fill.grossNotional.minorUnits), ledgerEntry(fee, "DEBIT", fill.fee.minorUnits), ledgerEntry(cash, "CREDIT", fill.fee.minorUnits), ledgerEntry(holding, "DEBIT", fill.quantity.atomicUnits), ledgerEntry(clearing, "CREDIT", fill.quantity.atomicUnits)] }); journals.push(tx); tx.entries.forEach((entry,i) => ledger.push({ entryId:id(runId,`entry:${tx.id}:${i}`), transactionId:tx.id, financialAccountId, code:entry.ledgerAccount.code, commodityKind:entry.ledgerAccount.commodity.kind, currency:entry.ledgerAccount.commodity.kind === "MONEY" ? entry.ledgerAccount.commodity.currencyCode : null, assetId:entry.ledgerAccount.commodity.kind === "ASSET" ? entry.ledgerAccount.commodity.assetId : null, direction:entry.direction, amountAtoms:entry.amountAtoms, occurredAt:event.at, recordedAt:event.at })); acquisitions.push({ fillId: fill.fillId, executionId: id(runId, `execution:${event.event.eventId}:${order.assetId}`), ledgerTransactionId: tx.id, financialAccountId, assetId: order.assetId, quantityAtoms: fill.quantity.atomicUnits, quantityScale: fill.quantity.quantityScale, currency: "NOK", grossMinor: fill.grossNotional.minorUnits, feeMinor: fill.fee.minorUnits, executedAt: event.at, recordedAt: event.at, executionPolicyVersion: fill.executionPolicyVersion, executionMatchesFill: true }); }
+      for (const order of decision.proposedOrders) {
+        const live = stateAt(event.at);
+        if (live.projection.nav === null) throw new Error("INCOMPLETE_DECISION_PORTFOLIO");
+        const asset = FIXTURE_ASSETS.find(a => a.assetId === order.assetId)!;
+        const reference = latestAvailablePrice(prices.filter(p => p.datasetVersion === config.marketDatasetVersion), order.assetId, event.at);
+        if (!reference) continue;
+        const risk = assessProposal(order, { accountActive: true, simulationMode: true, strategyEnabled: true, strategyVersion: decision.strategyVersion, accountCurrency: "NOK", availableCash: money("NOK", live.state.cashMinor), decisionNav: money("NOK", live.state.decisionNavMinor), decisionTimestamp: event.at, assets: FIXTURE_ASSETS, prices: prices.filter(p => p.datasetVersion === config.marketDatasetVersion), portfolioState: live.state });
+        risks.push(risk);
+        let policyEvidence: PaperPolicyEvidence | undefined;
+        if (config.standingPaperPolicy) {
+          const executionPrice = buyExecutionPrice(reference.price, basisPoints(5n), basisPoints(5n));
+          const notional = buySettlementNotional(order.quantity, executionPrice);
+          const estimatedFee = feeCeiling(notional, basisPoints(10n), money("NOK", 100n));
+          const holdingValue = live.projection.holdings.find(item => item.assetId === asset.assetId)?.marketValueMinor;
+          const grossExposure = live.projection.holdings.reduce((sum, item) => sum + BigInt(item.marketValueMinor ?? "0"), 0n);
+          policyEvidence = assessStandingPaperPolicy(config.standingPaperPolicy, order, {
+            now: event.at, assets: FIXTURE_ASSETS, prices, openOrderReservationsMinor: [], committedCapitalMinor,
+            currentCashMinor: live.state.cashMinor, currentPositionMinor: BigInt(holdingValue ?? "0"),
+            currentGrossExposureMinor: grossExposure, currentLossMinor: peakNavMinor > BigInt(live.projection.nav) ? peakNavMinor - BigInt(live.projection.nav) : 0n,
+            prospectiveOrderDebitMinor: notional.minorUnits + estimatedFee.minorUnits,
+          });
+        }
+        if (risk.disposition !== "APPROVE") {
+          if (config.standingPaperPolicy && policyEvidence) paperPolicyDecisions.push({ decisionId: decision.decisionId, orderId: order.proposalId, outcome: "REJECTED", riskCodes: risk.violations.map(item => item.code), evidence: { ...policyEvidence, disposition: "REJECT", reasonCode: "M1_RISK_REJECTED" } });
+          continue;
+        }
+        if (policyEvidence?.disposition === "REJECT") {
+          paperPolicyDecisions.push({ decisionId: decision.decisionId, orderId: order.proposalId, outcome: "REJECTED", riskCodes: [], evidence: policyEvidence });
+          continue;
+        }
+        const fill = executeSimulationBuy({ financialAccountId, actorId: financialAccountId, accountActive: true, simulationMode: true, decisionApproved: true, riskApproved: true, proposal: order, asset, referencePrice: reference, availableCash: money("NOK", live.state.cashMinor), decisionNav: money("NOK", live.state.decisionNavMinor), executionTimestamp: event.at, alreadySettled: false });
+        if (policyEvidence) paperPolicyDecisions.push({ decisionId: decision.decisionId, orderId: order.proposalId, outcome: "SIMULATED_FILLED", riskCodes: [], evidence: policyEvidence });
+        executions.push(fill); committedCapitalMinor += fill.totalCashDebit.minorUnits;
+        const holding = account(financialAccountId, `ASSET_HOLDING:${asset.assetId}`, { kind: "ASSET", assetId: asset.assetId }, "ASSET", "DEBIT", runId); const clearing = account(financialAccountId, `ASSET_CLEARING:${asset.assetId}`, { kind: "ASSET", assetId: asset.assetId }, "CLEARING", "CREDIT", runId); const cost = account(financialAccountId, `ASSET_COST_BASIS:${asset.assetId}`, { kind: "MONEY", currencyCode: "NOK" }, "ASSET", "DEBIT", runId);
+        const tx = createLedgerTransaction({ id: id(runId, `journal:${event.event.eventId}:${order.assetId}`), financialAccountId, type: "SIMULATED_BUY_SETTLEMENT", occurredAt: event.at, narrative: "Deterministic paper simulation BUY settlement", entries: [ledgerEntry(cost, "DEBIT", fill.grossNotional.minorUnits), ledgerEntry(cash, "CREDIT", fill.grossNotional.minorUnits), ledgerEntry(fee, "DEBIT", fill.fee.minorUnits), ledgerEntry(cash, "CREDIT", fill.fee.minorUnits), ledgerEntry(holding, "DEBIT", fill.quantity.atomicUnits), ledgerEntry(clearing, "CREDIT", fill.quantity.atomicUnits)] }); journals.push(tx);
+        tx.entries.forEach((entry,i) => ledger.push({ entryId:id(runId,`entry:${tx.id}:${i}`), transactionId:tx.id, financialAccountId, code:entry.ledgerAccount.code, commodityKind:entry.ledgerAccount.commodity.kind, currency:entry.ledgerAccount.commodity.kind === "MONEY" ? entry.ledgerAccount.commodity.currencyCode : null, assetId:entry.ledgerAccount.commodity.kind === "ASSET" ? entry.ledgerAccount.commodity.assetId : null, direction:entry.direction, amountAtoms:entry.amountAtoms, occurredAt:event.at, recordedAt:event.at }));
+        acquisitions.push({ fillId: fill.fillId, executionId: id(runId, `execution:${event.event.eventId}:${order.assetId}`), ledgerTransactionId: tx.id, financialAccountId, assetId: order.assetId, quantityAtoms: fill.quantity.atomicUnits, quantityScale: fill.quantity.quantityScale, currency: "NOK", grossMinor: fill.grossNotional.minorUnits, feeMinor: fill.fee.minorUnits, executedAt: event.at, recordedAt: event.at, executionPolicyVersion: fill.executionPolicyVersion, executionMatchesFill: true });
+        const afterFill = stateAt(event.at); if (afterFill.projection.nav !== null && BigInt(afterFill.projection.nav) > peakNavMinor) peakNavMinor = BigInt(afterFill.projection.nav);
+      }
     }
     snapshots.push(projectPortfolio(source(), event.at));
   }
   const endingState = snapshots.at(-1) ?? projectPortfolio(source(), date(config.endAt));
-  return Object.freeze({ runId, configHash, config, decisions: Object.freeze(decisions), riskAssessments: Object.freeze(risks), executions: Object.freeze(executions), journals: Object.freeze(journals), portfolioSnapshots: Object.freeze(snapshots), endingState, integrityStatus: "CONSISTENT" as const });
+  return Object.freeze({ runId, configHash, config, decisions: Object.freeze(decisions), riskAssessments: Object.freeze(risks), executions: Object.freeze(executions), journals: Object.freeze(journals), portfolioSnapshots: Object.freeze(snapshots), endingState, integrityStatus: "CONSISTENT" as const, paperPolicyDecisions: Object.freeze(paperPolicyDecisions) });
 }
