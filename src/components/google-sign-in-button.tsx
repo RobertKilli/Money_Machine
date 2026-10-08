@@ -4,20 +4,20 @@ import { useState } from "react";
 
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-export function GoogleSignInButton() {
+export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string | null }) {
   const [error, setError] = useState(false);
 
   async function signInWithGoogle() {
     setError(false);
     const supabase = getSupabaseBrowserClient();
-    if (!supabase) {
+    if (!supabase || !callbackUrl) {
       setError(true);
       return;
     }
 
     const { data, error: signInError } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+      options: { redirectTo: callbackUrl },
     });
     if (signInError || !data.url) {
       setError(true);
