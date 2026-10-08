@@ -14,6 +14,7 @@ const container = `mm-standing-paper-test-${token}`;
 const volume = `mm-standing-paper-test-${token}`;
 const database = `mm_paper_${token}`;
 const probeMode = process.argv.find(value => value.startsWith("--probe="))?.slice("--probe=".length);
+const workerDemo = process.argv.includes("--worker-demo");
 const password = "postgres";
 const temporary = await mkdtemp(join(tmpdir(), "mm-standing-paper-test-"));
 const report = join(temporary, "vitest-report.json");
@@ -130,6 +131,15 @@ try {
     "rollback after persistence writes leaves no partial settlement",
     "deposit and process restart preserve contribution-adjusted loss margin",
     "pause and stop block new rounds before orders are written",
+    "resumes at the next durable round after process restart without replaying settlements",
+    "converges two workers starting the same round to one durable settlement",
+    "waits without writes while paused and resumes after deterministic policy transition",
+    "observes STOPPED as a worker exit state without writing a round",
+    "stops with a checkpoint failure code and leaves the transaction untouched",
+    "stops on ledger divergence without committing a worker round",
+    "finishes an in-flight transaction after stop signal and enters no next round",
+    "requires a continuous interval and interrupts interval waiting immediately",
+    "stops the actual CLI process through its control channel during a locked settlement",
   ];
   if (probeMode === "failure") {
     if (!suiteError || !assertions.some(item => item.status === "failed")) throw new Error("STANDING_PAPER_FAILURE_PROBE_DID_NOT_FAIL");
@@ -143,6 +153,11 @@ try {
   ensureWorkNotInterrupted();
   if (suiteError) throw suiteError;
   if (probeMode !== "failure") console.log("Confirmed all standing paper PostgreSQL cases passed (not skipped).");
+  if (workerDemo) {
+    ensureWorkNotInterrupted();
+    const tsx = resolve(root, "node_modules", "tsx", "dist", "cli.mjs");
+    await run(process.execPath, ["--conditions=react-server", tsx, "--tsconfig", resolve(root, "scripts", "tsconfig.json"), resolve(root, "scripts", "standing-paper-worker-demo.ts")], { env });
+  }
 } catch (error) { primaryError = interrupted && probeMode?.startsWith("interrupt-") ? new Error("STANDING_PAPER_TEST_INTERRUPTED_AS_EXPECTED", { cause: error }) : error; }
 finally {
   try { await cleanup(); }

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
@@ -6,6 +8,7 @@ import { price } from "@/domain/financial/price";
 import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
+import { StandingPaperWorker } from "@/application/paper-trading/run-standing-paper-worker";
 
 const enabled = process.env.MONEY_MACHINE_INTEGRATION_TEST === "1";
 const testUrl = process.env.MM_STANDING_PAPER_TEST_DATABASE_URL;
@@ -225,6 +228,205 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
       expect(await counts(f.policy.financialAccountId)).toEqual({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
       const transitions = await sql<{ action: string; to_status: string }[]>`select action, to_status from public.standing_paper_policy_transitions where policy_id=${f.policy.policyId} order by occurred_at, id`;
       expect(transitions.map(row => [row.action, row.to_status])).toEqual([["INITIALIZE", "DRAFT"], ["ACTIVATE", "ACTIVE"], [status === "PAUSED" ? "PAUSE" : "STOP", status]]);
+    }
+  });
+
+  it("resumes at the next durable round after process restart without replaying settlements", async () => {
+    const f = await setup("worker-restart");
+    const firstWorker = new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "restart-sequence", maxRounds: 2 });
+    const first = await firstWorker.run();
+    expect(first).toMatchObject({ status: "COMPLETED", roundsCompleted: 2 });
+    expect(first.lastRoundIdentity, JSON.stringify(first)).toBe("standing-paper-worker/v1/restart-sequence/round/000000000001");
+    expect(await f.repository.getNextWorkerRound(f.policy.policyId, "restart-sequence")).toBe(2);
+    const restartRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(restartRepository);
+    const resumed = await new StandingPaperWorker(restartRepository, { policyId: f.policy.policyId, workerId: "restart-sequence", maxRounds: 1 }).run();
+    expect(resumed).toMatchObject({ status: "COMPLETED", roundsCompleted: 1 });
+    expect(resumed.lastRoundIdentity).toBe("standing-paper-worker/v1/restart-sequence/round/000000000002");
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "3", contributions: "3" });
+  });
+
+  it("converges two workers starting the same round to one durable settlement", async () => {
+    const f = await setup("worker-concurrent");
+    const secondRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(secondRepository);
+    let arrivals = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const beforeRound = async () => { arrivals += 1; if (arrivals === 2) release(); await barrier; };
+    const outcomes = await Promise.all([
+      new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "shared-worker", maxRounds: 1, beforeRound }).run(),
+      new StandingPaperWorker(secondRepository, { policyId: f.policy.policyId, workerId: "shared-worker", maxRounds: 1, beforeRound }).run(),
+    ]);
+    expect(outcomes.map(item => item.lastRoundIdentity)).toEqual([outcomes[0]!.lastRoundIdentity, outcomes[0]!.lastRoundIdentity]);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+  });
+
+  it("waits without writes while paused and resumes after deterministic policy transition", async () => {
+    const f = await setup("worker-pause-resume");
+    await f.repository.transition(f.policy.policyId, "PAUSE");
+    let waited = false;
+    const statuses: string[] = [];
+    const result = await new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "pause-resume", maxRounds: 1,
+      onStatus: status => statuses.push(status),
+      waitForPolicyChange: async () => {
+        expect(waited).toBe(false);
+        expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
+        waited = true;
+        await f.repository.transition(f.policy.policyId, "ACTIVATE");
+      },
+    }).run();
+    expect(waited).toBe(true);
+    expect(statuses).toContain("WAITING_PAUSED");
+    expect(result.roundsCompleted).toBe(1);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+  });
+
+  it("observes STOPPED as a worker exit state without writing a round", async () => {
+    const f = await setup("worker-stop");
+    await f.repository.transition(f.policy.policyId, "STOP");
+    const statuses: string[] = [];
+    const result = await new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "stopped-worker", maxRounds: 1, onStatus: status => statuses.push(status) }).run();
+    expect(result).toMatchObject({ status: "STOPPED", roundsCompleted: 0 });
+    expect(statuses).toContain("STOPPED");
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
+  });
+
+  it("stops with a checkpoint failure code and leaves the transaction untouched", async () => {
+    const f = await setup("worker-failure");
+    await sql`update public.standing_paper_policies set state_json='{}'::jsonb where policy_id=${f.policy.policyId}`;
+    const before = await counts(f.policy.financialAccountId);
+    const statuses: Array<{ status: string; code?: string }> = [];
+    await expect(new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "failure-worker", maxRounds: 1, onStatus: (status, code) => statuses.push({ status, code }) }).run()).rejects.toThrow("PAPER_WORKER_FAILED:PAPER_CHECKPOINT_INVALID");
+    expect(statuses.at(-1)).toEqual({ status: "FAILED", code: "PAPER_CHECKPOINT_INVALID" });
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+  });
+
+  it("stops on ledger divergence without committing a worker round", async () => {
+    const f = await setup("worker-ledger-failure");
+    await f.repository.run(f.policy.policyId, config("ledger-seed", stamp(10)), pricesAt(stamp(9)), "ledger-seed");
+    await addExternalPosting(f.policy.financialAccountId);
+    const before = await counts(f.policy.financialAccountId);
+    await expect(new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "ledger-failure", maxRounds: 1 }).run()).rejects.toThrow("PAPER_WORKER_FAILED:PAPER_LEDGER_CHECKPOINT_MISMATCH");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+  });
+
+  it("finishes an in-flight transaction after stop signal and enters no next round", async () => {
+    const f = await setup("worker-signal");
+    const control = f.repository as unknown as { client: Sql };
+    const original = control.client;
+    let signalTransactionReady!: () => void;
+    let releaseTransaction!: () => void;
+    const ready = new Promise<void>(resolve => { signalTransactionReady = resolve; });
+    const release = new Promise<void>(resolve => { releaseTransaction = resolve; });
+    control.client = new Proxy(original, { get(target, property, receiver) {
+      if (property !== "begin") return Reflect.get(target, property, receiver);
+      return (work: (tx: TransactionSql) => Promise<unknown>) => original.begin(async tx => {
+        const result = await work(tx);
+        signalTransactionReady();
+        await release;
+        return result;
+      });
+    } });
+    const controller = new AbortController();
+    let running: Promise<{ status: string; roundsCompleted: number }>;
+    try {
+      running = new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "signal-worker", maxRounds: 3, signal: controller.signal }).run();
+      await ready;
+      controller.abort();
+      releaseTransaction();
+      await expect(running!).resolves.toMatchObject({ status: "STOPPED", roundsCompleted: 1 });
+    } finally { control.client = original; }
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+  });
+
+  it("requires a continuous interval and interrupts interval waiting immediately", async () => {
+    const f = await setup("worker-interval");
+    expect(() => new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "interval-missing" })).toThrow("PAPER_WORKER_ROUND_INTERVAL_REQUIRED");
+    const controller = new AbortController();
+    let intervalStarted!: () => void;
+    const waiting = new Promise<void>(resolve => { intervalStarted = resolve; });
+    const statuses: string[] = [];
+    const run = new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "interval-test", roundIntervalMs: 60_000, signal: controller.signal,
+      onStatus: status => statuses.push(status), waitForRoundInterval: async signal => {
+        expect(signal).toBe(controller.signal);
+        intervalStarted();
+        await new Promise<void>((resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(Object.assign(new Error("stop"), { code: "PAPER_WORKER_STOP_REQUESTED" })), { once: true });
+        });
+      },
+    }).run();
+    await waiting;
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+    expect(statuses).toContain("WAITING_INTERVAL");
+    controller.abort();
+    await expect(run).resolves.toMatchObject({ status: "STOPPED", roundsCompleted: 1 });
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+  });
+
+  it("stops the actual CLI process through its control channel during a locked settlement", async () => {
+    const f = await setup("worker-cli-stop");
+    const processUrl = new URL(testUrl!);
+    processUrl.searchParams.set("application_name", "standing-paper-cli-stop-test");
+    // Keep the lock in an explicit transaction until after the wrapper receives
+    // wrapper receives a stop command and sends it over loopback.
+    const lockClient = postgres(testUrl!, { max: 1, prepare: true });
+    let unlock!: () => void;
+    const locked = new Promise<void>(resolve => { unlock = resolve; });
+    let lockReady!: () => void;
+    const ready = new Promise<void>(resolve => { lockReady = resolve; });
+    const lockTransaction = lockClient.begin(async tx => {
+      await tx`select id from public.financial_accounts where id=${f.policy.financialAccountId} for update`;
+      lockReady();
+      await locked;
+    });
+    await ready;
+    const cli = resolve(process.cwd(), "scripts", "run-standing-paper-worker.mjs");
+    const child = spawn(process.execPath, [cli, "--database-url", processUrl.toString(), "--policy-id", f.policy.policyId, "--worker-id", "cli-stop", "--max-rounds", "3", "--round-interval-ms", "60000"], { cwd: process.cwd(), env: process.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk.toString(); });
+    child.stderr.on("data", chunk => { output += chunk.toString(); });
+    const exit = new Promise<number>((resolveExit, reject) => {
+      const timeout = setTimeout(() => reject(new Error("PAPER_WORKER_CLI_STOP_TIMEOUT")), 20_000);
+      child.once("error", reject);
+      child.once("close", (code, signal) => { clearTimeout(timeout); resolveExit(code ?? (signal ? 1 : 0)); });
+    });
+    try {
+      // Observe the worker blocked on the account row before requesting stop.
+      const deadline = Date.now() + 15_000;
+      let blocked = false;
+      while (Date.now() < deadline) {
+        const activity = await sql<{ waiting: boolean }[]>`select exists(select 1 from pg_stat_activity where application_name='standing-paper-cli-stop-test' and wait_event_type='Lock') as waiting`;
+        if (activity[0]?.waiting) { blocked = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      expect(blocked, output).toBe(true);
+      const stopReceived = new Promise<void>((resolveStop, rejectStop) => {
+        if (output.includes('"status":"STOP_RECEIVED"')) return resolveStop();
+        const onData = () => {
+          if (output.includes('"status":"STOP_RECEIVED"')) { clearTimeout(timeout); resolveStop(); }
+        };
+        child.stdout.on("data", onData);
+        const timeout = setTimeout(() => rejectStop(new Error("PAPER_WORKER_CONTROL_STOP_NOT_ACKNOWLEDGED")), 5_000);
+      });
+      child.stdin.write(":stop\n"); // Exercise the real wrapper-to-worker control channel, including on Windows.
+      await stopReceived;
+      unlock();
+      await lockTransaction;
+      const exitCode = await exit;
+      expect(exitCode, output).toBe(0);
+      expect(output).toContain('"status":"STOPPED"');
+      expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+      const remaining = await sql<{ count: string }[]>`select count(*)::text as count from pg_stat_activity where application_name='standing-paper-cli-stop-test'`;
+      expect(remaining[0]?.count).toBe("0");
+    } finally {
+      unlock();
+      await lockTransaction.catch(() => undefined);
+      await lockClient.end({ timeout: 5 });
+      if (child.exitCode === null && child.signalCode === null) {
+        child.stdin.write(":stop\n");
+        await exit.catch(() => undefined);
+      }
     }
   });
 });

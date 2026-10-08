@@ -15,6 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "paper:demo": "tsx --tsconfig scripts/tsconfig.json scripts/run-paper-policy-demo.ts",
+    "paper:worker": "node scripts/run-standing-paper-worker.mjs",
+    "paper:worker:demo": "node scripts/run-standing-paper-postgres-test.mjs --worker-demo",
     "test:sec-observation:postgres": "node scripts/run-sec-observation-postgres-test.mjs",
     "test:standing-paper:postgres": "node scripts/run-standing-paper-postgres-test.mjs",
     "test:sec-observation:postgres-readiness": "node --test scripts/sec-observation-postgres-readiness.test.mjs",
