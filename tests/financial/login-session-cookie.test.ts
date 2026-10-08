@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   cookieStore: {
-    getAll: vi.fn(() => []),
+    getAll: vi.fn(() => [{ name: "sb-flsfallpputejojncyue-auth-token-code-verifier", value: "test-verifier" }]),
     set: vi.fn(),
   },
   createServerClient: vi.fn(),
