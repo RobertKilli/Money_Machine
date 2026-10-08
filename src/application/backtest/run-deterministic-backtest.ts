@@ -56,16 +56,25 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
   const ledger: PortfolioLedgerEvidence[] = []; const journals: LedgerTransaction[] = []; const acquisitions: AcquisitionEvidence[] = [];
   const decisions: StrategyDecision[] = []; const risks: ReturnType<typeof assessProposal>[] = []; const executions: SimulationFill[] = []; const snapshots: PortfolioProjection[] = [];
   const paperPolicyDecisions: { decisionId: string; orderId: string; outcome: "SIMULATED_FILLED" | "REJECTED"; riskCodes: readonly string[]; evidence: PaperPolicyEvidence }[] = [];
-  let committedCapitalMinor = 0n; let peakNavMinor = 0n;
+  let committedCapitalMinor = 0n; let netContributionsMinor = 0n; let adjustedEquityHighWaterMinor = 0n;
   const source = (): PortfolioEvidence => ({ financialAccountId, baseCurrency: "NOK", ledger, acquisitions, assets: FIXTURE_ASSETS, prices: prices.filter(p => p.datasetVersion === config.marketDatasetVersion) });
   const stateAt = (at: Date): { projection: PortfolioProjection; state: DecisionPortfolioState } => { const projection = projectPortfolio(source(), at); if (projection.valuationStatus === "INCOMPLETE" || projection.nav === null) throw new Error("INCOMPLETE_DECISION_PORTFOLIO"); const values = Object.fromEntries(projection.holdings.map(h => [h.assetId, BigInt(h.marketValueMinor!)])); return { projection, state: { cashMinor: BigInt(projection.cash), decisionNavMinor: BigInt(projection.nav), holdings: projection.holdings.map(h => ({ assetId: h.assetId, marketValueMinor: BigInt(h.marketValueMinor!) })), existingMarketValueByAsset: values, priceRecordIds: projection.provenance.priceRecordIds } }; };
   const events = [...config.contributionEvents.map(e => ({ kind: "CONTRIBUTION" as const, at: date(e.availableAt), event: e })), ...config.valuationTimestamps.map(t => ({ kind: "VALUATION" as const, at: date(t) }))].sort((a,b) => a.at.getTime()-b.at.getTime() || (a.kind === "CONTRIBUTION" ? -1 : 1) || (a.kind === "CONTRIBUTION" && b.kind === "CONTRIBUTION" ? a.event.eventId.localeCompare(b.event.eventId) : 0));
   for (const event of events) {
     if (event.kind === "CONTRIBUTION") {
+      const preContributionPortfolio = stateAt(event.at).projection;
+      if (preContributionPortfolio.nav !== null) {
+        const adjustedEquity = BigInt(preContributionPortfolio.nav) - netContributionsMinor;
+        if (adjustedEquity > adjustedEquityHighWaterMinor) adjustedEquityHighWaterMinor = adjustedEquity;
+      }
+      netContributionsMinor += BigInt(event.event.amountMinor);
       const transaction = createVirtualDepositTransaction({ id: id(runId, `journal:${event.event.eventId}:deposit`), financialAccountId, occurredAt: event.at, amount: money("NOK", BigInt(event.event.amountMinor)), idempotencyRecordId: id(runId, `command:${event.event.eventId}`), cashAccount: cash, contributedCapitalAccount: capital });
       journals.push(transaction); transaction.entries.forEach((entry, i) => ledger.push({ entryId: id(runId, `entry:${transaction.id}:${i}`), transactionId: transaction.id, financialAccountId, code: entry.ledgerAccount.code, commodityKind: entry.ledgerAccount.commodity.kind, currency: entry.ledgerAccount.commodity.kind === "MONEY" ? entry.ledgerAccount.commodity.currencyCode : null, assetId: entry.ledgerAccount.commodity.kind === "ASSET" ? entry.ledgerAccount.commodity.assetId : null, direction: entry.direction, amountAtoms: entry.amountAtoms, occurredAt: event.at, recordedAt: event.at }));
       const openingPortfolio = stateAt(event.at).projection;
-      if (openingPortfolio.nav !== null && BigInt(openingPortfolio.nav) > peakNavMinor) peakNavMinor = BigInt(openingPortfolio.nav);
+      if (openingPortfolio.nav !== null) {
+        const adjustedEquity = BigInt(openingPortfolio.nav) - netContributionsMinor;
+        if (adjustedEquity > adjustedEquityHighWaterMinor) adjustedEquityHighWaterMinor = adjustedEquity;
+      }
       const { state } = stateAt(event.at); const decision = contributionRebalancing({ financialAccountId, decisionId: id(runId, `decision:${event.event.eventId}`), cash: money("NOK", state.cashMinor), decisionTimestamp: event.at, prices: prices.filter(p => p.datasetVersion === config.marketDatasetVersion), portfolioState: state }); decisions.push(decision);
       for (const order of decision.proposedOrders) {
         const live = stateAt(event.at);
@@ -85,7 +94,8 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
           policyEvidence = assessStandingPaperPolicy(config.standingPaperPolicy, order, {
             now: event.at, assets: FIXTURE_ASSETS, prices, openOrderReservationsMinor: [], committedCapitalMinor,
             currentCashMinor: live.state.cashMinor, currentPositionMinor: BigInt(holdingValue ?? "0"),
-            currentGrossExposureMinor: grossExposure, currentLossMinor: peakNavMinor > BigInt(live.projection.nav) ? peakNavMinor - BigInt(live.projection.nav) : 0n,
+            currentGrossExposureMinor: grossExposure,
+            currentLossMinor: adjustedEquityHighWaterMinor > BigInt(live.projection.nav) - netContributionsMinor ? adjustedEquityHighWaterMinor - (BigInt(live.projection.nav) - netContributionsMinor) : 0n,
             prospectiveOrderDebitMinor: notional.minorUnits + estimatedFee.minorUnits,
           });
         }
@@ -104,10 +114,19 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
         const tx = createLedgerTransaction({ id: id(runId, `journal:${event.event.eventId}:${order.assetId}`), financialAccountId, type: "SIMULATED_BUY_SETTLEMENT", occurredAt: event.at, narrative: "Deterministic paper simulation BUY settlement", entries: [ledgerEntry(cost, "DEBIT", fill.grossNotional.minorUnits), ledgerEntry(cash, "CREDIT", fill.grossNotional.minorUnits), ledgerEntry(fee, "DEBIT", fill.fee.minorUnits), ledgerEntry(cash, "CREDIT", fill.fee.minorUnits), ledgerEntry(holding, "DEBIT", fill.quantity.atomicUnits), ledgerEntry(clearing, "CREDIT", fill.quantity.atomicUnits)] }); journals.push(tx);
         tx.entries.forEach((entry,i) => ledger.push({ entryId:id(runId,`entry:${tx.id}:${i}`), transactionId:tx.id, financialAccountId, code:entry.ledgerAccount.code, commodityKind:entry.ledgerAccount.commodity.kind, currency:entry.ledgerAccount.commodity.kind === "MONEY" ? entry.ledgerAccount.commodity.currencyCode : null, assetId:entry.ledgerAccount.commodity.kind === "ASSET" ? entry.ledgerAccount.commodity.assetId : null, direction:entry.direction, amountAtoms:entry.amountAtoms, occurredAt:event.at, recordedAt:event.at }));
         acquisitions.push({ fillId: fill.fillId, executionId: id(runId, `execution:${event.event.eventId}:${order.assetId}`), ledgerTransactionId: tx.id, financialAccountId, assetId: order.assetId, quantityAtoms: fill.quantity.atomicUnits, quantityScale: fill.quantity.quantityScale, currency: "NOK", grossMinor: fill.grossNotional.minorUnits, feeMinor: fill.fee.minorUnits, executedAt: event.at, recordedAt: event.at, executionPolicyVersion: fill.executionPolicyVersion, executionMatchesFill: true });
-        const afterFill = stateAt(event.at); if (afterFill.projection.nav !== null && BigInt(afterFill.projection.nav) > peakNavMinor) peakNavMinor = BigInt(afterFill.projection.nav);
+        const afterFill = stateAt(event.at);
+        if (afterFill.projection.nav !== null) {
+          const adjustedEquity = BigInt(afterFill.projection.nav) - netContributionsMinor;
+          if (adjustedEquity > adjustedEquityHighWaterMinor) adjustedEquityHighWaterMinor = adjustedEquity;
+        }
       }
     }
-    snapshots.push(projectPortfolio(source(), event.at));
+    const snapshot = projectPortfolio(source(), event.at);
+    if (snapshot.nav !== null) {
+      const adjustedEquity = BigInt(snapshot.nav) - netContributionsMinor;
+      if (adjustedEquity > adjustedEquityHighWaterMinor) adjustedEquityHighWaterMinor = adjustedEquity;
+    }
+    snapshots.push(snapshot);
   }
   const endingState = snapshots.at(-1) ?? projectPortfolio(source(), date(config.endAt));
   return Object.freeze({ runId, configHash, config, decisions: Object.freeze(decisions), riskAssessments: Object.freeze(risks), executions: Object.freeze(executions), journals: Object.freeze(journals), portfolioSnapshots: Object.freeze(snapshots), endingState, integrityStatus: "CONSISTENT" as const, paperPolicyDecisions: Object.freeze(paperPolicyDecisions) });

@@ -17,7 +17,13 @@ Each strategy proposal passes the existing `m1-risk-policy/v1`, then the
 standing policy evaluates status/account, price record and age, synthetic
 instrument allowlist, total debit including the existing fee/slippage model,
 position and total exposure, budget including open-order reservations, and
-current portfolio drawdown. The immutable result captures stable reason code,
+contribution-adjusted portfolio drawdown. At each timestamp, adjusted equity is
+`portfolio NAV - cumulative virtual contributions`. Loss is the positive decline
+from the highest adjusted-equity value observed so far (the high-water mark,
+initially zero). A new deposit increases both NAV and cumulative contributions
+by the same amount, so it cannot erase prior loss or restore used loss capacity.
+The policy rejects only when this loss is greater than `maxLossMinor`; equality
+is allowed. The immutable result captures stable reason code,
 policy version, input hash, eligible price record, reservation amount, and
 resulting exposure, exact reference price and timestamp, dataset/strategy/asset
 registry versions, and execution-policy version identifiers. The backtest simulator immediately fills accepted market

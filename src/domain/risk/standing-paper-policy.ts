@@ -43,6 +43,8 @@ export interface PaperPolicyEvidence {
   };
   readonly reservedOpenOrdersMinor: string;
   readonly resultingExposureMinor: string;
+  readonly currentLossMinor: string;
+  readonly maxLossMinor: string;
   readonly reasonCode: PaperDecisionCode;
   readonly disposition: "APPROVE" | "REJECT";
 }
@@ -81,15 +83,34 @@ export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: Pr
   const price = context.prices.find((item) => item.recordId === order.referencePriceRecordId && item.assetId === order.assetId);
   const reserved = context.openOrderReservationsMinor.reduce((sum, value) => sum + value, 0n);
   const exposure = context.currentGrossExposureMinor + reserved + context.prospectiveOrderDebitMinor;
+  const selectedAsset = context.assets.find((asset) => asset.assetId === order.assetId);
   const digest = createHash("sha256").update(JSON.stringify({
-    policyId: policy.policyId, policyVersion: policy.version, status: policy.status, orderId: order.proposalId,
-    accountId: order.financialAccountId, assetId: order.assetId, quantity: order.quantity.atomicUnits.toString(),
+    policyMaterial: {
+      policyId: policy.policyId, version: policy.version, identity: policy.identity, mode: policy.mode,
+      status: policy.status, financialAccountId: policy.financialAccountId,
+      allowedInstrumentIds: [...policy.allowedInstrumentIds].sort(),
+      capitalBudgetMinor: policy.capitalBudgetMinor.toString(), maxOrderMinor: policy.maxOrderMinor.toString(),
+      maxPositionMinor: policy.maxPositionMinor.toString(), maxGrossExposureMinor: policy.maxGrossExposureMinor.toString(),
+      maxLossMinor: policy.maxLossMinor.toString(), maxPriceAgeMs: policy.maxPriceAgeMs,
+    },
+    order: {
+      proposalId: order.proposalId, financialAccountId: order.financialAccountId, assetId: order.assetId,
+      side: order.side, orderType: order.orderType,
+      quantityAtoms: order.quantity.atomicUnits.toString(), quantityScale: order.quantity.quantityScale,
+      referencePriceRecordId: order.referencePriceRecordId,
+      referencePriceAtoms: order.referencePrice.priceAtoms.toString(), referencePriceScale: order.referencePrice.priceScale,
+      referencePriceCurrency: order.referencePrice.currencyCode,
+      referenceNotionalMinor: order.referenceNotional.minorUnits.toString(), referenceNotionalCurrency: order.referenceNotional.currencyCode,
+      decisionTimestamp: order.decisionTimestamp.toISOString(), strategyVersion: order.strategyVersion,
+      assetRegistryVersion: order.registryVersion, datasetVersion: order.datasetVersion,
+    },
+    selectedAsset: selectedAsset ? { ...selectedAsset, minimumQuantityIncrementAtoms: selectedAsset.minimumQuantityIncrementAtoms.toString(), targetWeightBps: selectedAsset.targetWeightBps.toString() } : null,
     priceRecord: price ? { recordId: price.recordId, assetId: price.assetId, priceAtoms: price.price.priceAtoms.toString(), priceScale: price.price.priceScale, currencyCode: price.price.currencyCode, datasetVersion: price.datasetVersion, observedAt: price.observedAt.toISOString(), availableAt: price.availableAt.toISOString(), ingestedAt: price.ingestedAt.toISOString() } : null,
     strategyVersion: order.strategyVersion, assetRegistryVersion: order.registryVersion,
     now: context.now.toISOString(), committed: context.committedCapitalMinor.toString(),
     cash: context.currentCashMinor.toString(), position: context.currentPositionMinor.toString(), exposure: context.currentGrossExposureMinor.toString(),
     reservations: context.openOrderReservationsMinor.map(String), loss: context.currentLossMinor.toString(), debit: context.prospectiveOrderDebitMinor.toString(),
-  })).digest("hex");
+  }, (_, value) => typeof value === "bigint" ? value.toString() : value)).digest("hex");
   let reasonCode: PaperDecisionCode = "APPROVED";
   if (policy.mode !== "PAPER_ONLY" || policy.status !== "ACTIVE" || order.financialAccountId !== policy.financialAccountId) reasonCode = "POLICY_NOT_ACTIVE";
   else if (!price || price.datasetVersion !== order.datasetVersion || price.availableAt.getTime() > context.now.getTime()) reasonCode = "PRICE_MISSING";
@@ -105,6 +126,7 @@ export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: Pr
     referencePriceAtoms: price?.price.priceAtoms.toString() ?? null, referencePriceScale: price?.price.priceScale ?? null,
     datasetVersion: price?.datasetVersion ?? null, strategyVersion: order.strategyVersion, assetRegistryVersion: order.registryVersion,
     executionPolicyVersions: Object.freeze({ execution: SIMULATION_EXECUTION_POLICY_VERSION, spreadSlippage: SPREAD_SLIPPAGE_POLICY_VERSION, fee: FEE_POLICY_VERSION, rounding: M1_ROUNDING_POLICY_VERSION, fillAssumption: "SIMULATED_FULL_OR_NONE" }),
-    reservedOpenOrdersMinor: reserved.toString(), resultingExposureMinor: exposure.toString(), reasonCode,
+    reservedOpenOrdersMinor: reserved.toString(), resultingExposureMinor: exposure.toString(),
+    currentLossMinor: context.currentLossMinor.toString(), maxLossMinor: policy.maxLossMinor.toString(), reasonCode,
     disposition: reasonCode === "APPROVED" ? "APPROVE" : "REJECT" });
 }

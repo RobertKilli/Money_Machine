@@ -76,6 +76,23 @@ describe("standing PAPER_ONLY risk policy", () => {
     expect(reserved.reasonCode).toBe("CAPITAL_BUDGET_EXCEEDED");
   });
 
+  it("hashes identity, account, status, allowlist, and every policy limit", () => {
+    const baseline = assessStandingPaperPolicy(policy, order, context()).inputHash;
+    const variants: StandingPaperPolicy[] = [
+      { ...policy, identity: "other-identity" },
+      { ...policy, financialAccountId: "other-account" },
+      { ...policy, status: "PAUSED" },
+      { ...policy, allowedInstrumentIds: [FIXTURE_ASSETS[1]!.assetId] },
+      { ...policy, capitalBudgetMinor: policy.capitalBudgetMinor - 1n },
+      { ...policy, maxOrderMinor: policy.maxOrderMinor - 1n },
+      { ...policy, maxPositionMinor: policy.maxPositionMinor - 1n },
+      { ...policy, maxGrossExposureMinor: policy.maxGrossExposureMinor - 1n },
+      { ...policy, maxLossMinor: policy.maxLossMinor - 1n },
+      { ...policy, maxPriceAgeMs: policy.maxPriceAgeMs - 1 },
+    ];
+    for (const changed of variants) expect(assessStandingPaperPolicy(changed, order, context()).inputHash).not.toBe(baseline);
+  });
+
   it("runs multiple automatic rounds and labels fills as simulated", () => {
     const result = runDeterministicBacktest({ ...config, standingPaperPolicy: policy }, prices);
     expect(result.decisions).toHaveLength(3);
@@ -84,13 +101,65 @@ describe("standing PAPER_ONLY risk policy", () => {
     expect(result.endingState.integrityStatus).toBe("CONSISTENT");
   });
 
-  it("returns one result under replay and simultaneous attempts, and rejects changed input on a reused key", async () => {
+  it("returns isolated results under replay and simultaneous attempts, and rejects changed input on a reused key", async () => {
     const runner = new StandingPaperPolicyRunner();
     const [first, concurrent, replay] = await Promise.all([
       runner.run(policy, config, prices, "same-command"), runner.run(policy, config, prices, "same-command"), runner.run(policy, config, prices, "same-command"),
     ]);
-    expect(concurrent).toBe(first);
-    expect(replay).toBe(first);
+    expect(concurrent).toEqual(first);
+    expect(replay).toEqual(first);
+    expect(concurrent).not.toBe(first);
+    Reflect.set(first.endingState, "nav", "corrupted-by-caller");
+    first.executions[0]!.executionTimestamp.setUTCFullYear(1999);
+    const isolatedReplay = await runner.run(policy, config, prices, "same-command");
+    expect(isolatedReplay.endingState.nav).not.toBe("corrupted-by-caller");
+    expect(isolatedReplay.executions[0]!.executionTimestamp.getUTCFullYear()).toBe(2026);
     await expect(runner.run(policy, { ...config, endAt: "2026-01-01T14:00:00.000Z" }, prices, "same-command")).rejects.toThrow("IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_INPUT");
+  });
+
+  it("snapshots nested policy, configuration, price arrays, and Dates before deferred execution", async () => {
+    const runner = new StandingPaperPolicyRunner();
+    const expected = await new StandingPaperPolicyRunner().run(structuredClone(policy), structuredClone(config), structuredClone(prices), "snapshot-key");
+    const mutablePolicy = structuredClone(policy);
+    const mutableConfig = structuredClone(config);
+    const mutablePrices = structuredClone(prices);
+    const pending = runner.run(mutablePolicy, mutableConfig, mutablePrices, "snapshot-key");
+
+    Object.assign(mutablePolicy, { identity: "mutated-after-call", maxOrderMinor: 1n });
+    (mutablePolicy.allowedInstrumentIds as string[]).splice(0, mutablePolicy.allowedInstrumentIds.length, "not-an-allowed-asset");
+    Object.assign(mutableConfig.contributionEvents[0]!, { amountMinor: "1" });
+    (mutableConfig.contributionEvents as Array<BacktestRunConfig["contributionEvents"][number]>).reverse();
+    Object.assign(mutablePrices[0]!.price, { priceAtoms: 1n });
+    mutablePrices[0]!.availableAt.setUTCFullYear(2050);
+
+    const actual = await pending;
+    expect(actual).toEqual(expected);
+    const replay = await runner.run(structuredClone(policy), structuredClone(config), structuredClone(prices), "snapshot-key");
+    expect(replay).toEqual(expected);
+  });
+
+  it("keeps an exceeded loss limit after a price fall and a later virtual deposit", async () => {
+    const lossPolicy = { ...policy, maxLossMinor: 1_000n };
+    const changedPrices: FixturePriceObservation[] = [
+      ...prices,
+      ...prices.map((item) => ({
+        ...item,
+        recordId: `${item.recordId}-price-fall`,
+        price: price("NOK", item.price.priceAtoms / 2n, item.price.priceScale),
+        observedAt: new Date("2026-01-01T11:06:00.000Z"),
+        availableAt: new Date("2026-01-01T11:06:00.000Z"),
+        ingestedAt: new Date("2026-01-01T11:06:01.000Z"),
+      })),
+    ];
+    const twoRounds = {
+      ...config,
+      endAt: "2026-01-01T12:00:00.000Z",
+      contributionEvents: config.contributionEvents.slice(0, 2),
+    };
+    const result = await new StandingPaperPolicyRunner().run(lossPolicy, twoRounds, changedPrices, "loss-after-deposit");
+    const secondRound = result.paperPolicyDecisions.filter((item) => item.decisionId === result.decisions[1]!.decisionId);
+    expect(secondRound.length).toBeGreaterThan(0);
+    expect(secondRound.some((item) => item.evidence.reasonCode === "LOSS_LIMIT_EXCEEDED" && BigInt(item.evidence.currentLossMinor) > lossPolicy.maxLossMinor)).toBe(true);
+    expect(result.executions.every((fill) => fill.executionTimestamp.getTime() < Date.parse("2026-01-01T11:07:00.000Z"))).toBe(true);
   });
 });
