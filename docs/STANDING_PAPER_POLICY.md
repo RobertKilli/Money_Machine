@@ -59,7 +59,12 @@ suite, then verifies that the container, volume, report, and temporary folder
 are gone. It does not read `DATABASE_URL` and rejects a database URL that is
 not for its task-owned `127.0.0.1/mm_paper_<random-id>` database.
 
-Each durable decision round locks the policy row with `SELECT ... FOR UPDATE`.
+Policy creation requires an empty, dedicated PAPER account. Each durable
+decision round locks the policy row and then the `FinancialAccount` row. New
+ledger transaction and entry writes take that same account-row lock through
+database triggers, so writers using the shared ledger cannot change postings
+between reconciliation and settlement. A writer bypassing the ledger tables
+or disabling those triggers is outside this guarantee.
 Inside that transaction it checks the run input hash, rejects contribution
 event IDs already processed, evaluates only new events using saved ledger and
 acquisition evidence, inserts run and decision records, creates simulated fill
@@ -67,11 +72,19 @@ evidence, writes contribution idempotency and audit records, appends balanced
 transactions to the existing ledger, and updates the portfolio/risk checkpoint.
 Any error rolls the whole set of writes back. Unique constraints add a second
 idempotency barrier. Separate repository instances serialize on the same
-policy row. Previous contributions and fills are restored from the checkpoint;
-they are never passed through strategy or execution again.
+policy row. Before each new round, the repository compares all account ledger
+transactions and entries, fill acquisitions, net virtual capital, and
+committed capital with the checkpoint and immutable last-run result. Missing,
+extra, or changed postings stop the round. The checkpoint is a continuation
+record, not itself ledger-derived. Drawdown high-water and last-processed time
+are validated against the immutable last-run result because current balances
+cannot independently reconstruct them. Previous contributions and fills are
+restored from checkpoint; they are never passed through strategy or execution
+again.
 
 Migration `20261008120000_standing_paper_persistence.sql` adds policy state,
-run idempotency, contribution claims, decision records, and paper fill links.
+last-run linkage, acquisition evidence, account-row ledger locking, run
+idempotency, contribution claims, decision records, and paper fill links.
 It references existing FinancialAccounts and ledger tables. The migration is
 source only; this change does not apply it to a hosted database. Current policy
 status and checkpoint are mutable. Runs, decisions, contributions, fills,
@@ -89,6 +102,10 @@ ledger transactions, ledger entries, and audit evidence are append-only.
 - The PostgreSQL path resumes the same ledger-derived account in a new runner,
   serializes concurrent rounds, rejects duplicate events, and rolls back all
   monetary and audit writes together after an injected failure.
+- The task-owned PostgreSQL suite checks empty-account setup, external ledger
+  divergence, strict checkpoint fields, resumption, idempotency, pause/stop,
+  and rollback. The standard GitHub CI workflow does not run this PostgreSQL
+  suite, so green CI alone does not prove those tests passed.
 
 ## Assumptions and limits
 

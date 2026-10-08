@@ -8,6 +8,7 @@ create table public.standing_paper_policies (
   status text not null check (status in ('DRAFT', 'ACTIVE', 'PAUSED', 'STOPPED')),
   policy_json jsonb not null,
   state_json jsonb not null default '{"ledger":[],"acquisitions":[],"netContributionsMinor":{"$type":"bigint","value":"0"},"adjustedEquityHighWaterMinor":{"$type":"bigint","value":"0"},"committedCapitalMinor":{"$type":"bigint","value":"0"},"lastProcessedAt":null}'::jsonb,
+  last_run_id uuid,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   check (policy_version = 'standing-paper-policy/v1')
@@ -48,6 +49,8 @@ create table public.standing_paper_runs (
   unique (financial_account_id, policy_id, idempotency_key),
   unique (id, policy_id, financial_account_id)
 );
+alter table public.standing_paper_policies add constraint standing_paper_last_run_fk
+  foreign key (last_run_id) references public.standing_paper_runs(id) on delete restrict;
 
 create table public.standing_paper_contributions (
   policy_id text not null references public.standing_paper_policies(policy_id) on delete restrict,
@@ -81,6 +84,7 @@ create table public.standing_paper_fills (
   order_id text not null,
   ledger_transaction_id uuid not null references public.ledger_transactions(id) on delete restrict,
   execution_json jsonb not null,
+  acquisition_json jsonb not null,
   run_id uuid not null,
   created_at timestamptz not null default now(),
   primary key (financial_account_id, policy_id, fill_id),
@@ -88,6 +92,26 @@ create table public.standing_paper_fills (
   unique (ledger_transaction_id),
   foreign key (run_id, policy_id, financial_account_id) references public.standing_paper_runs(id, policy_id, financial_account_id) on delete restrict
 );
+
+-- Every account ledger writer takes the same account-row lock. This serializes
+-- external ledger mutations with paper reconciliation/runs.
+create function public.lock_financial_account_for_ledger_write() returns trigger
+language plpgsql security invoker set search_path = '' as $$
+declare account_id uuid;
+begin
+  if tg_table_name = 'ledger_transactions' then
+    account_id := case when tg_op = 'DELETE' then old.financial_account_id else new.financial_account_id end;
+  else
+    select lt.financial_account_id into account_id from public.ledger_transactions lt where lt.id = case when tg_op = 'DELETE' then old.ledger_transaction_id else new.ledger_transaction_id end;
+  end if;
+  perform 1 from public.financial_accounts fa where fa.id = account_id for update;
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end; $$;
+create trigger lock_account_before_ledger_transaction before insert or update or delete on public.ledger_transactions
+for each row execute function public.lock_financial_account_for_ledger_write();
+create trigger lock_account_before_ledger_entry before insert or update or delete on public.ledger_entries
+for each row execute function public.lock_financial_account_for_ledger_write();
 
 create function public.standing_paper_append_only() returns trigger
 language plpgsql set search_path = '' as $$ begin raise exception '% records are append-only', tg_table_name; end; $$;

@@ -53,6 +53,14 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     await repository.transition(policy.policyId, "ACTIVATE");
     return { repository, policy };
   }
+  async function addExternalPosting(accountId: string) {
+    // Simulate an out-of-band writer that bypasses the shared ledger triggers;
+    // reconciliation must still detect the resulting transaction-set drift.
+    await sql.begin(async tx => {
+      await tx`set local session_replication_role = replica`;
+      await tx`insert into public.ledger_transactions (financial_account_id, transaction_type, occurred_at, narrative) values (${accountId}, 'SIMULATED_BUY_SETTLEMENT', ${new Date(stamp(9))}, 'out-of-band test posting')`;
+    });
+  }
   async function counts(accountId: string) {
     const rows = await sql`select
       (select count(*)::text from public.standing_paper_runs where financial_account_id=${accountId}) runs,
@@ -95,6 +103,40 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(Number(evidence.journals)).toBe(Number(evidence.audits));
     const duplicates = await sql`select count(*)::text n from public.standing_paper_decisions where financial_account_id=${f.policy.financialAccountId} group by order_id having count(*) > 1`;
     expect(duplicates).toHaveLength(0);
+  });
+
+  it("rejects a pre-existing account ledger and an external ledger change between rounds", async () => {
+    const financialAccountId = await account();
+    await addExternalPosting(financialAccountId);
+    const policy: StandingPaperPolicy = { policyId: `preexisting-${randomUUID()}`, version: "standing-paper-policy/v1", identity: "synthetic-preexisting", mode: "PAPER_ONLY", status: "DRAFT", financialAccountId, allowedInstrumentIds: FIXTURE_ASSETS.map(asset => asset.assetId), capitalBudgetMinor: 1_000_000n, maxOrderMinor: 1_000_000n, maxPositionMinor: 1_000_000n, maxGrossExposureMinor: 1_000_000n, maxLossMinor: 1_000_000n, maxPriceAgeMs: 604_800_000 };
+    const repository = new StandingPaperPolicyRepository(testUrl!); repositories.push(repository);
+    await expect(repository.create(policy)).rejects.toThrow("PAPER_ACCOUNT_NOT_EMPTY_AT_POLICY_CREATION");
+
+    const f = await setup("external-change");
+    await f.repository.run(f.policy.policyId, config("seed", stamp(10)), pricesAt(stamp(9)), "external-first");
+    await addExternalPosting(f.policy.financialAccountId);
+    const before = await counts(f.policy.financialAccountId);
+    await expect(f.repository.run(f.policy.policyId, config("next", stamp(11)), pricesAt(stamp(9)), "external-second")).rejects.toThrow("PAPER_LEDGER_CHECKPOINT_MISMATCH");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+  });
+
+  it("rejects malformed checkpoints without writing or resetting loss margin", async () => {
+    const f = await setup("strict-checkpoint");
+    await f.repository.run(f.policy.policyId, config("seed", stamp(10)), pricesAt(stamp(9)), "strict-seed");
+    const original = await sql<{ state_json: unknown }[]>`select state_json from public.standing_paper_policies where policy_id=${f.policy.policyId}`;
+    const state = original[0]!.state_json;
+    const baseline = await counts(f.policy.financialAccountId);
+    const cases: unknown[] = [{}, { ...(state as object), ledger: null }, { ...(state as object), acquisitions: null }, { ...(state as object), committedCapitalMinor: null }, { ...(state as object), adjustedEquityHighWaterMinor: null }, { ...(state as object), lastProcessedAt: "not-a-date" }];
+    for (const corrupted of cases) {
+      await sql`update public.standing_paper_policies set state_json=${JSON.stringify(corrupted)}::jsonb where policy_id=${f.policy.policyId}`;
+      await expect(f.repository.run(f.policy.policyId, config(`invalid-${randomUUID()}`, stamp(11)), pricesAt(stamp(9)), `invalid-${randomUUID()}`)).rejects.toThrow("PAPER_CHECKPOINT_INVALID");
+      expect(await counts(f.policy.financialAccountId)).toEqual(baseline);
+      const unchanged = await sql<{ state_json: unknown }[]>`select state_json from public.standing_paper_policies where policy_id=${f.policy.policyId}`;
+      const unchangedState = typeof unchanged[0]!.state_json === "string" ? JSON.parse(unchanged[0]!.state_json) as unknown : unchanged[0]!.state_json;
+      expect(unchangedState).toEqual(corrupted);
+    }
+    await sql`update public.standing_paper_policies set state_json=${JSON.stringify(state)}::jsonb where policy_id=${f.policy.policyId}`;
+    await f.repository.run(f.policy.policyId, config("after-restore", stamp(11)), pricesAt(stamp(9)), "strict-after-restore");
   });
 
   it("rollback after persistence writes leaves no partial settlement", async () => {

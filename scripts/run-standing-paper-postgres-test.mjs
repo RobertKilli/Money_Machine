@@ -5,6 +5,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile, lstat } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { waitForSecObservationDatabase } from "./sec-observation-postgres-readiness.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const token = randomUUID().replaceAll("-", "");
@@ -12,12 +13,14 @@ const label = `money-machine.standing-paper-test=${token}`;
 const container = `mm-standing-paper-test-${token}`;
 const volume = `mm-standing-paper-test-${token}`;
 const database = `mm_paper_${token}`;
+const probeMode = process.argv.find(value => value.startsWith("--probe="))?.slice("--probe=".length);
 const password = "postgres";
 const temporary = await mkdtemp(join(tmpdir(), "mm-standing-paper-test-"));
 const report = join(temporary, "vitest-report.json");
 let child;
 let interrupted = false;
 let primaryError;
+function ensureWorkNotInterrupted() { if (interrupted) throw new Error("STANDING_PAPER_TEST_INTERRUPTED"); }
 
 function run(command, args, options = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -31,9 +34,12 @@ function run(command, args, options = {}) {
     }
     if (options.input !== undefined) processChild.stdin.end(options.input);
     processChild.once("error", rejectPromise);
+    let timer;
+    if (options.timeoutMs) timer = setTimeout(() => processChild.kill("SIGTERM"), options.timeoutMs);
     processChild.once("close", (code, signal) => {
+      if (timer) clearTimeout(timer);
       if (child === processChild) child = undefined;
-      if (code === 0) resolvePromise();
+      if (code === 0) resolvePromise({ output });
       else rejectPromise(new Error(`${command} exited ${code ?? signal}${output ? `: ${output.trim().slice(-1200)}` : ""}`));
     });
   });
@@ -77,6 +83,7 @@ async function cleanup() {
 
 try {
   await writeFile(report, "");
+  ensureWorkNotInterrupted();
   await run("docker", ["info", "--format", "{{.ServerVersion}}"], { capture: true });
   const port = await new Promise((resolvePort, rejectPort) => {
     const server = createServer();
@@ -90,37 +97,49 @@ try {
   });
   await run("docker", ["volume", "create", "--label", label, volume], { capture: true });
   await run("docker", ["run", "--detach", "--name", container, "--label", label, "--publish", `127.0.0.1:${port}:5432`, "--volume", `${volume}:/var/lib/postgresql/data`, "--env", "POSTGRES_USER=postgres", "--env", `POSTGRES_PASSWORD=${password}`, "--env", `POSTGRES_DB=${database}`, "postgres:17-alpine"], { capture: true });
-  let ready = false;
-  for (let attempt = 0; attempt < 60; attempt++) {
-    if (interrupted) throw new Error("STANDING_PAPER_TEST_INTERRUPTED");
-    try { await run("docker", ["exec", container, "pg_isready", "-U", "postgres", "-d", database], { capture: true }); ready = true; break; }
-    catch { await new Promise(resolveDelay => setTimeout(resolveDelay, 1000)); }
-  }
-  if (!ready) throw new Error("Task-owned PostgreSQL did not become ready");
+  await waitForSecObservationDatabase({ run, container, database, ensureWorkNotInterrupted });
+  ensureWorkNotInterrupted();
   const bootstrap = `create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls; create schema auth; create table auth.users (id uuid primary key); create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;`;
   await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input: bootstrap, capture: true });
   const migrations = (await readdir(join(root, "supabase", "migrations"))).filter(name => name.endsWith(".sql")).sort();
-  for (const migration of migrations) await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input: await readFile(join(root, "supabase", "migrations", migration), "utf8"), capture: true });
+  for (const migration of migrations) {
+    ensureWorkNotInterrupted();
+    if (probeMode === "interrupt-migration") setTimeout(() => onSignal("SIGINT"), 250).unref();
+    const input = probeMode === "interrupt-migration" ? "select pg_sleep(30);" : await readFile(join(root, "supabase", "migrations", migration), "utf8");
+    await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input, capture: true });
+    ensureWorkNotInterrupted();
+  }
+  if (probeMode === "failure") await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input: "drop table public.standing_paper_policies cascade;", capture: true });
   console.log(`Applied ${migrations.length} migrations to the task-owned local PostgreSQL database.`);
   const env = { ...process.env, MONEY_MACHINE_INTEGRATION_TEST: "1", MM_STANDING_PAPER_TEST_DATABASE_URL: `postgresql://postgres:${password}@127.0.0.1:${port}/${database}` };
   let suiteError;
+  ensureWorkNotInterrupted();
+  if (probeMode === "interrupt-tests") setTimeout(() => onSignal("SIGINT"), 250).unref();
   try { await run(process.execPath, [resolve(root, "node_modules", "vitest", "vitest.mjs"), "run", "--config", "vitest.integration.config.ts", "tests/integration/standing-paper-policy.test.ts", "--reporter=json", `--outputFile=${report}`], { env }); }
   catch (error) { suiteError = error; }
+  if (probeMode === "interrupt-tests") throw new Error(interrupted ? "STANDING_PAPER_TEST_INTERRUPTED_AS_EXPECTED" : "STANDING_PAPER_TEST_INTERRUPT_PROBE_FAILED");
+  if (probeMode === "interrupt-migration") throw new Error(interrupted ? "STANDING_PAPER_TEST_INTERRUPTED_AS_EXPECTED" : "STANDING_PAPER_MIGRATION_INTERRUPT_PROBE_FAILED");
   const output = JSON.parse(await readFile(report, "utf8"));
   const assertions = output.testResults?.flatMap(file => file.assertionResults ?? []) ?? [];
-  console.log(assertions.map(item => `${item.status}: ${item.title}`).join("\n"));
+  console.log(assertions.map(item => `${item.status}: ${item.title}${item.failureMessages?.length ? `\n${item.failureMessages.join("\n")}` : ""}`).join("\n"));
   const cases = ["continues one account across runner instances; replay and concurrent budget use stay idempotent", "rollback after persistence writes leaves no partial settlement", "deposit and process restart preserve contribution-adjusted loss margin", "pause and stop block new rounds before orders are written"];
-  for (const title of cases) {
+  if (probeMode === "failure") {
+    if (!suiteError || !assertions.some(item => item.status === "failed")) throw new Error("STANDING_PAPER_FAILURE_PROBE_DID_NOT_FAIL");
+    console.log("Confirmed deliberate PostgreSQL suite failure; later work stopped and cleanup completed.");
+    suiteError = undefined;
+  }
+  for (const title of probeMode === "failure" ? [] : cases) {
     const test = assertions.find(item => item.title === title);
     if (test?.status !== "passed") throw new Error(`STANDING_PAPER_TEST_CASE_NOT_CONFIRMED ${title}: ${test?.status ?? "missing"}${test?.failureMessages?.length ? `: ${test.failureMessages.join(" | ")}` : ""}`);
   }
+  ensureWorkNotInterrupted();
   if (suiteError) throw suiteError;
-  console.log("Confirmed all standing paper PostgreSQL cases passed (not skipped).");
-} catch (error) { primaryError = error; }
+  if (probeMode !== "failure") console.log("Confirmed all standing paper PostgreSQL cases passed (not skipped).");
+} catch (error) { primaryError = interrupted && probeMode?.startsWith("interrupt-") ? new Error("STANDING_PAPER_TEST_INTERRUPTED_AS_EXPECTED", { cause: error }) : error; }
 finally {
   try { await cleanup(); }
   catch (error) { if (!primaryError) primaryError = error; else console.error(error.message); }
   process.off("SIGINT", onSignal);
   process.off("SIGTERM", onSignal);
 }
-if (primaryError) { console.error(primaryError.message); process.exitCode = interrupted ? 130 : 1; }
+if (primaryError) { console.error(primaryError.message); process.exitCode = interrupted && /INTERRUPTED_AS_EXPECTED/.test(primaryError.message) ? 0 : interrupted ? 130 : 1; }
