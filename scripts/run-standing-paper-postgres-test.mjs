@@ -127,6 +127,8 @@ try {
     "creates one owned empty PAPER/NOK account under concurrent requests without deposits or policy writes",
     "preflights the exact hosted target and rejects wrong account, policy, status, or capital without writes",
     "posts one policy-scoped 200 NOK initial contribution across hosted worker rounds and restart",
+    "settles a one-deposit BUY-SELL-BUY cycle atomically across restart, replay, concurrency, pause, and stop",
+    "runs v2 workers through one seed, concurrent round replay, restart, sale and rebuy",
     "serializes concurrent hosted processes to one policy-scoped initial contribution",
     "rolls back hosted initial capital and all settlement writes after a forced transaction failure",
     "continues one account across runner instances; replay and concurrent budget use stay idempotent",

@@ -8,6 +8,7 @@ import { FIXTURE_DATASET_VERSION, latestAvailablePrice, type FixtureAsset, type 
 export const PORTFOLIO_PROJECTION_VERSION = "portfolio-projection/v1";
 export const PORTFOLIO_VALUATION_VERSION = "portfolio-valuation/v1";
 export const FIFO_VERSION = "fifo-cost-basis/v1";
+export const FIFO_CYCLE_VERSION = "fifo-cost-basis/v2";
 
 export interface PortfolioLedgerEvidence {
   entryId: string; transactionId: string; financialAccountId: string;
@@ -21,9 +22,23 @@ export interface AcquisitionEvidence {
   grossMinor: bigint; feeMinor: bigint; executedAt: Date; recordedAt: Date;
   executionPolicyVersion: string; executionMatchesFill: boolean;
 }
+export interface FifoLotConsumption {
+  readonly fillId: string;
+  readonly quantityAtoms: bigint;
+  readonly costBasisMinor: bigint;
+}
+export interface DisposalEvidence {
+  readonly fillId: string; readonly executionId: string; readonly ledgerTransactionId: string; readonly financialAccountId: string;
+  readonly assetId: string; readonly quantityAtoms: bigint; readonly quantityScale: number; readonly currency: CurrencyCode;
+  readonly grossMinor: bigint; readonly feeMinor: bigint; readonly executedAt: Date; readonly recordedAt: Date;
+  readonly executionPolicyVersion: string; readonly executionMatchesFill: boolean;
+  readonly lotConsumptions: readonly FifoLotConsumption[]; readonly realizedPnlMinor: bigint;
+}
 export interface PortfolioEvidence {
   financialAccountId: string; baseCurrency: CurrencyCode;
   ledger: readonly PortfolioLedgerEvidence[]; acquisitions: readonly AcquisitionEvidence[];
+  /** Omitted for legacy M1 projections; present for the explicit paper-cycle contract. */
+  disposals?: readonly DisposalEvidence[];
   assets: readonly FixtureAsset[]; prices: readonly FixturePriceObservation[];
 }
 export type PortfolioViolation = "NEGATIVE_CASH" | "NEGATIVE_ASSET_QUANTITY" | "MISSING_ASSET_METADATA" | "MISSING_MARKET_PRICE" | "LEDGER_FILL_QUANTITY_MISMATCH" | "INCOMPLETE_COST_BASIS" | "SETTLEMENT_EVIDENCE_MISMATCH";
@@ -31,7 +46,7 @@ export interface OpenCostBasisLot {
   lotId: string; fillId: string; executionId: string; ledgerTransactionId: string;
   acquiredAt: string; quantityAtoms: string; remainingQuantityAtoms: string;
   executedNotionalMinor: string; allocatedBuyFeeMinor: string; openCostBasisMinor: string;
-  fifoVersion: typeof FIFO_VERSION;
+  fifoVersion: typeof FIFO_VERSION | typeof FIFO_CYCLE_VERSION;
 }
 export interface PortfolioHolding {
   assetId: string; code: string; quantityAtoms: string; quantityScale: number | null;
@@ -44,18 +59,43 @@ export interface PortfolioProjection {
   financialAccountId: string; asOf: string; baseCurrency: CurrencyCode;
   cash: string; investedMarketValue: string | null; nav: string | null;
   totalOpenCostBasis: string | null; unrealizedPnl: string | null;
+  realizedPnlMinor?: string;
   valuationStatus: "COMPLETE" | "INCOMPLETE";
   integrityStatus: "CONSISTENT" | "INCOMPLETE";
   cashWeightBps: string | null; allocationRoundingResidueBps: string | null;
   holdings: PortfolioHolding[]; missingPriceAssets: string[]; violations: PortfolioViolation[];
   provenance: { sourceHash: string; ledgerEntryIds: string[]; ledgerTransactionIds: string[]; fillIds: string[]; executionIds: string[]; priceRecordIds: string[]; temporalPolicy: "effective-and-recorded-at-or-before-asOf" };
-  versions: { projection: typeof PORTFOLIO_PROJECTION_VERSION; valuation: typeof PORTFOLIO_VALUATION_VERSION; fifo: typeof FIFO_VERSION; dataset: typeof FIXTURE_DATASET_VERSION };
+  versions: { projection: typeof PORTFOLIO_PROJECTION_VERSION; valuation: typeof PORTFOLIO_VALUATION_VERSION; fifo: typeof FIFO_VERSION | typeof FIFO_CYCLE_VERSION; dataset: typeof FIXTURE_DATASET_VERSION };
 }
 
 const sum = (values: readonly bigint[]) => values.reduce((a, b) => a + b, 0n);
 const signed = (e: PortfolioLedgerEvidence) => e.direction === "DEBIT" ? e.amountAtoms : -e.amountAtoms;
 const unique = (values: readonly string[]) => [...new Set(values)].sort();
 const eligible = (effective: Date, recorded: Date, asOf: Date) => effective <= asOf && recorded <= asOf;
+
+function expectedFifoConsumptions(lots: { fillId: string; remainingQuantityAtoms: bigint; openCostBasisMinor: bigint }[], quantityAtoms: bigint): FifoLotConsumption[] {
+  if (quantityAtoms <= 0n) throw new Error("INVALID_FIFO_DISPOSAL_QUANTITY");
+  let remaining = quantityAtoms;
+  const consumed: FifoLotConsumption[] = [];
+  for (const lot of lots) {
+    if (remaining === 0n) break;
+    const quantity = remaining < lot.remainingQuantityAtoms ? remaining : lot.remainingQuantityAtoms;
+    if (quantity === 0n) continue;
+    const basis = quantity === lot.remainingQuantityAtoms ? lot.openCostBasisMinor : floorDivision(lot.openCostBasisMinor * quantity, lot.remainingQuantityAtoms);
+    consumed.push({ fillId: lot.fillId, quantityAtoms: quantity, costBasisMinor: basis });
+    lot.remainingQuantityAtoms -= quantity;
+    lot.openCostBasisMinor -= basis;
+    remaining -= quantity;
+  }
+  if (remaining !== 0n) throw new Error("FIFO_DISPOSAL_EXCEEDS_AVAILABLE_POSITION");
+  return consumed;
+}
+
+/** Allocate a sale across the currently open FIFO lots. Integer FLOOR is used
+ * for partial-lot basis; the final unit of a lot consumes its exact remainder. */
+export function planFifoLotConsumption(lots: readonly OpenCostBasisLot[], quantityAtoms: bigint): FifoLotConsumption[] {
+  return expectedFifoConsumptions(lots.map(lot => ({ fillId: lot.fillId, remainingQuantityAtoms: BigInt(lot.remainingQuantityAtoms), openCostBasisMinor: BigInt(lot.openCostBasisMinor) })), quantityAtoms);
+}
 
 /** Pure, reconstructable read model. No state, clock reads, randomness, writes or lot consumption. */
 export function projectPortfolio(source: PortfolioEvidence, asOf: Date): PortfolioProjection {
@@ -74,18 +114,27 @@ export function projectPortfolio(source: PortfolioEvidence, asOf: Date): Portfol
     return eligible(f.executedAt, f.recordedAt, asOf);
   }).sort((a, b) => a.executedAt.getTime() - b.executedAt.getTime() || a.fillId.localeCompare(b.fillId));
   const cash = money(source.baseCurrency, sum(ledger.filter(e => e.code === "CASH" && e.commodityKind === "MONEY" && e.currency === source.baseCurrency).map(signed))).minorUnits;
-  const assetIds = unique([...ledger.filter(e => e.commodityKind === "ASSET" && e.code === `ASSET_HOLDING:${e.assetId}`).map(e => e.assetId!), ...fills.map(f => f.assetId)]);
+  const disposalEvidence = source.disposals ?? [];
+  for (const disposal of disposalEvidence) {
+    if (disposal.financialAccountId !== source.financialAccountId || disposal.quantityAtoms <= 0n || disposal.grossMinor <= 0n || disposal.feeMinor < 0n ||
+      !Number.isInteger(disposal.quantityScale) || disposal.currency !== source.baseCurrency || !Number.isFinite(disposal.executedAt.getTime()) ||
+      !Number.isFinite(disposal.recordedAt.getTime()) || !disposal.executionMatchesFill) throw new Error("INVALID_DISPOSAL_EVIDENCE");
+  }
+  if (new Set(disposalEvidence.map(item => item.fillId)).size !== disposalEvidence.length) throw new Error("DUPLICATE_DISPOSAL_EVIDENCE");
+  const disposals = [...disposalEvidence].filter(f => eligible(f.executedAt, f.recordedAt, asOf)).sort((a,b) => a.executedAt.getTime()-b.executedAt.getTime() || a.fillId.localeCompare(b.fillId));
+  const assetIds = unique([...ledger.filter(e => e.commodityKind === "ASSET" && e.code === `ASSET_HOLDING:${e.assetId}`).map(e => e.assetId!), ...fills.map(f => f.assetId), ...disposals.map(f => f.assetId)]);
   const holdings: PortfolioHolding[] = [];
   for (const assetId of assetIds) {
     const entries = ledger.filter(e => e.commodityKind === "ASSET" && e.assetId === assetId && e.code === `ASSET_HOLDING:${assetId}`);
     const atoms = sum(entries.map(signed));
     const acquisitions = fills.filter(f => f.assetId === assetId);
+    const assetDisposals = disposals.filter(f => f.assetId === assetId);
     if (atoms === 0n && acquisitions.length === 0) continue;
     const asset = source.assets.find(a => a.assetId === assetId);
     const violations: PortfolioViolation[] = [];
     if (!asset || !asset.active || asset.quoteCurrencyCode !== source.baseCurrency) violations.push("MISSING_ASSET_METADATA");
     if (atoms < 0n) violations.push("NEGATIVE_ASSET_QUANTITY");
-    if (sum(acquisitions.map(f => f.quantityAtoms)) !== atoms) violations.push("LEDGER_FILL_QUANTITY_MISMATCH");
+    if (sum(acquisitions.map(f => f.quantityAtoms)) - sum(assetDisposals.map(f => f.quantityAtoms)) !== atoms) violations.push("LEDGER_FILL_QUANTITY_MISMATCH");
     if (atoms !== 0n && acquisitions.length === 0) violations.push("INCOMPLETE_COST_BASIS");
     for (const f of acquisitions) {
       const journal = ledger.filter(e => e.transactionId === f.ledgerTransactionId);
@@ -96,9 +145,37 @@ export function projectPortfolio(source: PortfolioEvidence, asOf: Date): Portfol
         violations.push("SETTLEMENT_EVIDENCE_MISMATCH");
       }
     }
+    const mutableLots = acquisitions.sort((a,b) => a.executedAt.getTime()-b.executedAt.getTime() || a.fillId.localeCompare(b.fillId)).map(f => ({
+      lotId: f.fillId, fillId: f.fillId, executionId: f.executionId, ledgerTransactionId: f.ledgerTransactionId,
+      acquiredAt: f.executedAt.toISOString(), quantityAtoms: f.quantityAtoms, remainingQuantityAtoms: f.quantityAtoms,
+      executedNotionalMinor: f.grossMinor, allocatedBuyFeeMinor: f.feeMinor, openCostBasisMinor: f.grossMinor + f.feeMinor,
+    }));
+    for (const disposal of assetDisposals) {
+      const planned = expectedFifoConsumptions(mutableLots, disposal.quantityAtoms);
+      if (planned.length !== disposal.lotConsumptions.length || planned.some((item, index) => item.fillId !== disposal.lotConsumptions[index]?.fillId || item.quantityAtoms !== disposal.lotConsumptions[index]?.quantityAtoms || item.costBasisMinor !== disposal.lotConsumptions[index]?.costBasisMinor)) {
+        violations.push("SETTLEMENT_EVIDENCE_MISMATCH");
+      }
+      const basisRemoved = planned.reduce((total,item) => total + item.costBasisMinor, 0n);
+      const realized = disposal.grossMinor - disposal.feeMinor - basisRemoved;
+      if (disposal.realizedPnlMinor !== realized) violations.push("SETTLEMENT_EVIDENCE_MISMATCH");
+      const journal = ledger.filter(e => e.transactionId === disposal.ledgerTransactionId);
+      const amount = (code: string) => sum(journal.filter(e => e.code === code).map(signed));
+      const gain = disposal.grossMinor > basisRemoved ? disposal.grossMinor - basisRemoved : 0n;
+      const loss = basisRemoved > disposal.grossMinor ? basisRemoved - disposal.grossMinor : 0n;
+      if (amount(`ASSET_HOLDING:${assetId}`) !== -disposal.quantityAtoms || amount(`ASSET_CLEARING:${assetId}`) !== disposal.quantityAtoms ||
+        amount("CASH") !== disposal.grossMinor - disposal.feeMinor || amount("FEE_EXPENSE") !== disposal.feeMinor ||
+        amount(`ASSET_COST_BASIS:${assetId}`) !== -basisRemoved || amount("REALIZED_GAIN") !== -gain || amount("REALIZED_LOSS") !== loss) {
+        violations.push("SETTLEMENT_EVIDENCE_MISMATCH");
+      }
+    }
     const basisComplete = violations.length === 0;
-    const lots: OpenCostBasisLot[] = basisComplete ? acquisitions.map(f => ({ lotId: f.fillId, fillId: f.fillId, executionId: f.executionId, ledgerTransactionId: f.ledgerTransactionId, acquiredAt: f.executedAt.toISOString(), quantityAtoms: f.quantityAtoms.toString(), remainingQuantityAtoms: f.quantityAtoms.toString(), executedNotionalMinor: f.grossMinor.toString(), allocatedBuyFeeMinor: f.feeMinor.toString(), openCostBasisMinor: (f.grossMinor + f.feeMinor).toString(), fifoVersion: FIFO_VERSION })) : [];
-    const basis = basisComplete ? sum(acquisitions.map(f => f.grossMinor + f.feeMinor)) : null;
+    const lots: OpenCostBasisLot[] = basisComplete ? mutableLots.filter(lot => lot.remainingQuantityAtoms > 0n).map(lot => ({
+      lotId: lot.lotId, fillId: lot.fillId, executionId: lot.executionId, ledgerTransactionId: lot.ledgerTransactionId,
+      acquiredAt: lot.acquiredAt, quantityAtoms: lot.quantityAtoms.toString(), remainingQuantityAtoms: lot.remainingQuantityAtoms.toString(),
+      executedNotionalMinor: lot.executedNotionalMinor.toString(), allocatedBuyFeeMinor: lot.allocatedBuyFeeMinor.toString(),
+      openCostBasisMinor: lot.openCostBasisMinor.toString(), fifoVersion: source.disposals === undefined ? FIFO_VERSION : FIFO_CYCLE_VERSION,
+    })) : [];
+    const basis = basisComplete ? sum(mutableLots.map(lot => lot.openCostBasisMinor)) : null;
     const price = asset?.active ? latestAvailablePrice(source.prices.filter(p => p.datasetVersion === FIXTURE_DATASET_VERSION && p.price.currencyCode === source.baseCurrency && p.price.priceAtoms > 0n), assetId, asOf) : undefined;
     if (!price && atoms !== 0n) violations.push("MISSING_MARKET_PRICE");
     const value = atoms === 0n ? 0n : price && asset && atoms > 0n ? floorDivision(atoms * price.price.priceAtoms, 10n ** BigInt(asset.quantityScale + price.price.priceScale)) : null;
@@ -114,13 +191,14 @@ export function projectPortfolio(source: PortfolioEvidence, asOf: Date): Portfol
   const nav = invested !== null ? cash + invested : null;
   const costBasis = holdings.every(h => h.openCostBasisMinor !== null) ? sum(holdings.map(h => BigInt(h.openCostBasisMinor!))) : null;
   const pnl = complete ? sum(holdings.map(h => BigInt(h.unrealizedPnlMinor!))) : null;
+  const realizedPnlMinor = source.disposals === undefined ? undefined : disposals.reduce((total, disposal) => total + disposal.realizedPnlMinor, 0n);
   const cashWeight = nav !== null && nav > 0n ? floorDivision(cash * 10_000n, nav) : null;
   if (nav !== null && nav > 0n) for (const holding of holdings) holding.portfolioWeightBps = floorDivision(BigInt(holding.marketValueMinor!) * 10_000n, nav).toString();
   const residue = cashWeight !== null ? 10_000n - cashWeight - sum(holdings.map(h => BigInt(h.portfolioWeightBps!))) : null;
   const sourceHash = createHash("sha256").update(JSON.stringify({ asOf, account: source.financialAccountId, currency: source.baseCurrency, ledger, fills, holdings }, (_, v) => typeof v === "bigint" ? v.toString() : v)).digest("hex");
-  return { financialAccountId: source.financialAccountId, asOf: asOf.toISOString(), baseCurrency: source.baseCurrency, cash: cash.toString(), investedMarketValue: invested?.toString() ?? null, nav: nav?.toString() ?? null, totalOpenCostBasis: costBasis?.toString() ?? null, unrealizedPnl: pnl?.toString() ?? null,
+  return { financialAccountId: source.financialAccountId, asOf: asOf.toISOString(), baseCurrency: source.baseCurrency, cash: cash.toString(), investedMarketValue: invested?.toString() ?? null, nav: nav?.toString() ?? null, totalOpenCostBasis: costBasis?.toString() ?? null, unrealizedPnl: pnl?.toString() ?? null, ...(realizedPnlMinor === undefined ? {} : { realizedPnlMinor: realizedPnlMinor.toString() }),
     valuationStatus: complete ? "COMPLETE" : "INCOMPLETE", integrityStatus: violations.some(v => v !== "MISSING_MARKET_PRICE") ? "INCOMPLETE" : "CONSISTENT", cashWeightBps: cashWeight?.toString() ?? null, allocationRoundingResidueBps: residue?.toString() ?? null,
     holdings, missingPriceAssets: holdings.filter(h => h.violations.includes("MISSING_MARKET_PRICE")).map(h => h.assetId), violations,
     provenance: { sourceHash, ledgerEntryIds: ledger.map(e => e.entryId), ledgerTransactionIds: unique(ledger.map(e => e.transactionId)), fillIds: fills.map(f => f.fillId), executionIds: unique(fills.map(f => f.executionId)), priceRecordIds: unique(holdings.flatMap(h => h.selectedPrice ? [h.selectedPrice.recordId] : [])), temporalPolicy: "effective-and-recorded-at-or-before-asOf" },
-    versions: { projection: PORTFOLIO_PROJECTION_VERSION, valuation: PORTFOLIO_VALUATION_VERSION, fifo: FIFO_VERSION, dataset: FIXTURE_DATASET_VERSION } };
+    versions: { projection: PORTFOLIO_PROJECTION_VERSION, valuation: PORTFOLIO_VALUATION_VERSION, fifo: source.disposals === undefined ? FIFO_VERSION : FIFO_CYCLE_VERSION, dataset: FIXTURE_DATASET_VERSION } };
 }

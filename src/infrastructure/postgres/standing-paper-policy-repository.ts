@@ -6,6 +6,7 @@ import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, 
 import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, standingPaperActivationConfirmationHash, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { FIXTURE_ASSETS, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import type { ContributionEvent } from "@/application/backtest/run-deterministic-backtest";
+import { planFifoLotConsumption } from "@/domain/portfolio/portfolio-projection";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill, type StandingPaperWorkerInstanceStatus, type StandingPaperWorkerInstanceStatusRecord } from "@/application/paper-trading/standing-paper-status";
 
 type StoredPolicy = { policy_json: unknown; status: StandingPaperPolicy["status"]; financial_account_id: string };
@@ -40,6 +41,10 @@ const validDate = (value: unknown): Date => {
   if (!Number.isFinite(date.getTime())) throw new Error("PAPER_MATERIAL_INVALID");
   return date;
 };
+const isValidIsoString = (value: unknown): value is string => {
+  if (typeof value !== "string") return false;
+  try { return validDate(value).toISOString() === value; } catch { return false; }
+};
 const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("PAPER_MATERIAL_INVALID");
   return value as Record<string, unknown>;
@@ -50,6 +55,7 @@ const invalidCard = (policyId: string): StandingPaperPolicyStatusCard => ({
   status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", activationConfirmationHash: null, mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [], workerInstanceCount: 0, workerInstancesTruncated: false,
   allowedInstrumentIds: [], riskLimits: { capitalBudgetMinor: null, maxOrderMinor: null, maxPositionMinor: null, maxGrossExposureMinor: null, maxLossMinor: null, maxPriceAgeMs: null },
   lastRound: null, netContributionsMinor: null, committedCapitalMinor: null, remainingCapitalBudgetMinor: null,
+  capitalBudgetUsedMinor: null, cumulativeTurnoverMinor: null, realizedPnlMinor: null,
   portfolioValueMinor: null, portfolioValueAsOf: null, currentLossMinor: null, remainingLossMarginMinor: null,
   decisions: [], fills: [], issueCode: "PAPER_MATERIAL_INVALID",
 });
@@ -71,6 +77,21 @@ function validateSavedResult(raw: unknown, state: DeterministicBacktestState, ac
     ending.baseCurrency !== "NOK" || typeof ending.asOf !== "string" || !signedInteger(ending.cash) ||
     !(ending.nav === null || signedInteger(ending.nav)) || !(ending.investedMarketValue === null || signedInteger(ending.investedMarketValue)) ||
     !(ending.totalOpenCostBasis === null || signedInteger(ending.totalOpenCostBasis)) || !(ending.unrealizedPnl === null || signedInteger(ending.unrealizedPnl))) {
+    throw new Error("PAPER_MATERIAL_INVALID");
+  }
+  const cycle = config.paperCycleContractVersion === "standing-paper-cycle/v2";
+  if (cycle) {
+    const exit = record(config.standingPaperExitPolicy);
+    if (config.fifoCostBasisVersion !== "fifo-cost-basis/v2" || exit.version !== "standing-paper-exit-policy/v1" ||
+      state.disposals === undefined || typeof state.realizedPnlMinor !== "bigint" || typeof state.cumulativeTurnoverMinor !== "bigint" ||
+      !signedInteger(ending.realizedPnlMinor) || ending.realizedPnlMinor !== state.realizedPnlMinor.toString() ||
+      !Array.isArray(result.paperCycleDecisions) || result.paperCycleDecisions.some(item => {
+        const decision = record(item); const evidence = record(decision.evidence);
+        return !["BUY", "SELL", "HOLD"].includes(String(decision.action)) || !isValidIsoString(evidence.decisionAt) || !isValidIsoString(evidence.priceAvailableAt) ||
+          typeof evidence.inputHash !== "string" || !/^[0-9a-f]{64}$/.test(evidence.inputHash) || evidence.policyVersion !== "standing-paper-policy/v1" ||
+          evidence.exitPolicyVersion !== exit.version || evidence.strategyVersion !== config.strategyVersion;
+      })) throw new Error("PAPER_MATERIAL_INVALID");
+  } else if (config.paperCycleContractVersion !== undefined || config.standingPaperExitPolicy !== undefined || state.disposals !== undefined || state.realizedPnlMinor !== undefined || state.cumulativeTurnoverMinor !== undefined || ending.realizedPnlMinor !== undefined || result.paperCycleDecisions !== undefined) {
     throw new Error("PAPER_MATERIAL_INVALID");
   }
   const asOf = validDate(ending.asOf).toISOString();
@@ -112,11 +133,27 @@ function validateDecisionRow(row: { policy_id: string; financial_account_id: str
   return { orderId: row.order_id, decisionId: decision.decisionId as string, outcome: decision.outcome as StandingPaperStatusDecision["outcome"], reasonCode: reasonCode as string, disposition: evidence.disposition as StandingPaperStatusDecision["disposition"], recordedAt: validDate(row.created_at).toISOString() };
 }
 
-function validateFillRow(row: { policy_id: string; financial_account_id: string; fill_id: string; order_id: string; execution_json: unknown; acquisition_json: unknown }, policyId: string, accountId: string): StandingPaperStatusFill {
+function validateFillRow(row: { policy_id: string; financial_account_id: string; fill_id: string; order_id: string; side: string; execution_json: unknown; acquisition_json: unknown; disposal_json: unknown }, policyId: string, accountId: string): StandingPaperStatusFill {
   const fill = record(decode(typeof row.execution_json === "string" ? JSON.parse(row.execution_json) as unknown : row.execution_json));
+  const quantity = record(fill.quantity); const gross = record(fill.grossNotional); const fee = record(fill.fee);
+  if (row.side === "SELL") {
+    const disposal = record(decode(typeof row.disposal_json === "string" ? JSON.parse(row.disposal_json) as unknown : row.disposal_json));
+    const net = record(fill.netCashCredit);
+    if (row.policy_id !== policyId || row.financial_account_id !== accountId || fill.fillId !== row.fill_id || fill.proposalId !== row.order_id || fill.financialAccountId !== accountId ||
+      fill.side !== "SELL" || disposal.fillId !== row.fill_id || disposal.financialAccountId !== accountId || disposal.executionMatchesFill !== true ||
+      typeof quantity.atomicUnits !== "bigint" || quantity.atomicUnits <= 0n || disposal.quantityAtoms !== quantity.atomicUnits ||
+      typeof gross.minorUnits !== "bigint" || gross.minorUnits <= 0n || gross.currencyCode !== "NOK" ||
+      typeof fee.minorUnits !== "bigint" || fee.minorUnits < 0n || fee.currencyCode !== "NOK" ||
+      typeof net.minorUnits !== "bigint" || net.minorUnits !== gross.minorUnits - fee.minorUnits || net.currencyCode !== "NOK" ||
+      quantity.quantityScale !== disposal.quantityScale || quantity.assetId !== disposal.assetId || gross.minorUnits !== disposal.grossMinor || fee.minorUnits !== disposal.feeMinor ||
+      !Array.isArray(disposal.lotConsumptions) || typeof disposal.realizedPnlMinor !== "bigint" || !(disposal.executedAt instanceof Date) || !(fill.executionTimestamp instanceof Date) || disposal.executedAt.getTime() !== (fill.executionTimestamp as Date).getTime() || disposal.executionPolicyVersion !== "standing-paper-sell-execution/v1" ||
+      fill.spreadSlippagePolicyVersion !== "m1-spread-slippage/v1" || fill.feePolicyVersion !== "m1-fee/v1" || fill.roundingPolicyVersion !== "m1-rounding/v1") throw new Error("PAPER_MATERIAL_INVALID");
+    return { fillId: row.fill_id, orderId: row.order_id, instrumentId: disposal.assetId as string, quantityAtoms: quantity.atomicUnits.toString(), quantityScale: quantity.quantityScale as number, grossMinor: gross.minorUnits.toString(), feeMinor: fee.minorUnits.toString(), currency: "NOK", simulatedAt: (disposal.executedAt as Date).toISOString(), executionPolicyVersion: disposal.executionPolicyVersion as string, side: "SELL", realizedPnlMinor: disposal.realizedPnlMinor.toString() };
+  }
+  if (row.side !== "BUY" || row.policy_id !== policyId || row.financial_account_id !== accountId) throw new Error("PAPER_MATERIAL_INVALID");
   const acquisition = record(decode(typeof row.acquisition_json === "string" ? JSON.parse(row.acquisition_json) as unknown : row.acquisition_json));
-  const quantity = record(fill.quantity); const gross = record(fill.grossNotional); const fee = record(fill.fee); const total = record(fill.totalCashDebit);
-  if (row.policy_id !== policyId || row.financial_account_id !== accountId || fill.fillId !== row.fill_id || fill.proposalId !== row.order_id ||
+  const total = record(fill.totalCashDebit);
+  if ((fill.side !== undefined && fill.side !== "BUY") || fill.fillId !== row.fill_id || fill.proposalId !== row.order_id ||
     fill.financialAccountId !== accountId || acquisition.fillId !== row.fill_id || acquisition.financialAccountId !== accountId ||
     acquisition.executionMatchesFill !== true || typeof acquisition.assetId !== "string" ||
     typeof quantity.atomicUnits !== "bigint" || quantity.atomicUnits <= 0n || !Number.isSafeInteger(quantity.quantityScale) ||
@@ -128,7 +165,20 @@ function validateFillRow(row: { policy_id: string; financial_account_id: string;
     !(acquisition.executedAt instanceof Date) || acquisition.executedAt.getTime() !== (fill.executionTimestamp as Date).getTime() ||
     !Number.isSafeInteger(acquisition.quantityScale) || acquisition.quantityAtoms !== quantity.atomicUnits ||
     acquisition.grossMinor !== gross.minorUnits || acquisition.feeMinor !== fee.minorUnits || typeof acquisition.ledgerTransactionId !== "string") throw new Error("PAPER_MATERIAL_INVALID");
-  return { fillId: row.fill_id, orderId: row.order_id, instrumentId: acquisition.assetId as string, quantityAtoms: quantity.atomicUnits.toString(), quantityScale: quantity.quantityScale as number, grossMinor: gross.minorUnits.toString(), feeMinor: fee.minorUnits.toString(), currency: "NOK", simulatedAt: (fill.executionTimestamp as Date).toISOString(), executionPolicyVersion: fill.executionPolicyVersion as string };
+  return { fillId: row.fill_id, orderId: row.order_id, instrumentId: acquisition.assetId as string, quantityAtoms: quantity.atomicUnits.toString(), quantityScale: quantity.quantityScale as number, grossMinor: gross.minorUnits.toString(), feeMinor: fee.minorUnits.toString(), currency: "NOK", simulatedAt: (fill.executionTimestamp as Date).toISOString(), executionPolicyVersion: fill.executionPolicyVersion as string, side: "BUY" };
+}
+
+function validateCycleDecisionRow(row: { policy_id: string; financial_account_id: string; decision_id: string; order_id: string; action: string; reason_code: string; input_hash: string; decision_json: unknown; created_at: Date }, policyId: string, accountId: string): StandingPaperStatusDecision {
+  const decision = record(decode(typeof row.decision_json === "string" ? JSON.parse(row.decision_json) as unknown : row.decision_json));
+  const evidence = record(decision.evidence);
+  const validReason = ["BUY_FILLED", "BUY_RISK_REJECTED", "SELL_STOP_LOSS", "SELL_TAKE_PROFIT", "SELL_MAX_HOLD", "SELL_ORDER_LIMIT_REJECTED", "HOLD_NO_EXIT_TRIGGER"].includes(row.reason_code);
+  if (row.policy_id !== policyId || row.financial_account_id !== accountId || !/^[0-9a-f]{64}$/.test(row.input_hash) ||
+    decision.decisionId !== row.decision_id || decision.orderId !== row.order_id || decision.action !== row.action || decision.reasonCode !== row.reason_code || !validReason ||
+    !["BUY", "SELL", "HOLD"].includes(row.action) || evidence.inputHash !== row.input_hash || evidence.policyId !== policyId ||
+    typeof evidence.policyVersion !== "string" || typeof evidence.exitPolicyVersion !== "string" || typeof evidence.strategyVersion !== "string" || !isValidIsoString(evidence.decisionAt) || !isValidIsoString(evidence.priceAvailableAt) ||
+    typeof evidence.assetId !== "string" || typeof evidence.priceRecordId !== "string" || !Number.isSafeInteger(evidence.priceScale) ||
+    typeof evidence.priceAtoms !== "string" || !/^\d+$/.test(evidence.priceAtoms) || !["EXECUTED", "REJECTED", "HOLD"].includes(String(evidence.disposition))) throw new Error("PAPER_MATERIAL_INVALID");
+  return { orderId: row.order_id, decisionId: row.decision_id, action: row.action as "BUY" | "SELL" | "HOLD", outcome: evidence.disposition === "EXECUTED" ? "SIMULATED_FILLED" : evidence.disposition === "REJECTED" ? "REJECTED" : "HOLD", reasonCode: row.reason_code, disposition: evidence.disposition === "EXECUTED" ? "APPROVE" : evidence.disposition === "REJECTED" ? "REJECT" : "HOLD", recordedAt: validDate(row.created_at).toISOString() };
 }
 
 const parsePolicy = (raw: unknown): StandingPaperPolicy => {
@@ -150,6 +200,14 @@ const parseState = (raw: unknown, accountId: string): DeterministicBacktestState
   for (const acquisition of state.acquisitions as Record<string, unknown>[]) {
     if (!acquisition || typeof acquisition.fillId !== "string" || typeof acquisition.executionId !== "string" || typeof acquisition.ledgerTransactionId !== "string" || acquisition.financialAccountId !== accountId || typeof acquisition.assetId !== "string" || typeof acquisition.quantityAtoms !== "bigint" || acquisition.quantityAtoms <= 0n || !Number.isInteger(acquisition.quantityScale) || typeof acquisition.currency !== "string" || typeof acquisition.grossMinor !== "bigint" || acquisition.grossMinor <= 0n || typeof acquisition.feeMinor !== "bigint" || acquisition.feeMinor < 0n || !(acquisition.executedAt instanceof Date) || !Number.isFinite(acquisition.executedAt.getTime()) || !(acquisition.recordedAt instanceof Date) || !Number.isFinite(acquisition.recordedAt.getTime()) || typeof acquisition.executionPolicyVersion !== "string" || acquisition.executionMatchesFill !== true) return invalid();
   }
+  if (state.disposals !== undefined) {
+    if (!Array.isArray(state.disposals) || typeof state.realizedPnlMinor !== "bigint" || typeof state.cumulativeTurnoverMinor !== "bigint" || state.cumulativeTurnoverMinor < 0n) return invalid();
+    for (const disposal of state.disposals as Record<string, unknown>[]) {
+      if (!disposal || typeof disposal.fillId !== "string" || typeof disposal.executionId !== "string" || typeof disposal.ledgerTransactionId !== "string" || disposal.financialAccountId !== accountId || typeof disposal.assetId !== "string" || typeof disposal.quantityAtoms !== "bigint" || disposal.quantityAtoms <= 0n || !Number.isInteger(disposal.quantityScale) || disposal.currency !== "NOK" || typeof disposal.grossMinor !== "bigint" || disposal.grossMinor <= 0n || typeof disposal.feeMinor !== "bigint" || disposal.feeMinor < 0n || !(disposal.executedAt instanceof Date) || !Number.isFinite(disposal.executedAt.getTime()) || !(disposal.recordedAt instanceof Date) || !Number.isFinite(disposal.recordedAt.getTime()) || typeof disposal.executionPolicyVersion !== "string" || disposal.executionMatchesFill !== true || typeof disposal.realizedPnlMinor !== "bigint" || !Array.isArray(disposal.lotConsumptions)) return invalid();
+      if (disposal.lotConsumptions.some((lot: unknown) => { const item = record(lot); return typeof item.fillId !== "string" || typeof item.quantityAtoms !== "bigint" || item.quantityAtoms <= 0n || typeof item.costBasisMinor !== "bigint" || item.costBasisMinor < 0n; })) return invalid();
+    }
+    if (new Set((state.disposals as { fillId: string }[]).map(item => item.fillId)).size !== state.disposals.length) return invalid();
+  } else if (state.realizedPnlMinor !== undefined || state.cumulativeTurnoverMinor !== undefined) return invalid();
   if (new Set((state.ledger as { entryId: string }[]).map(item => item.entryId)).size !== state.ledger.length || new Set((state.acquisitions as { fillId: string }[]).map(item => item.fillId)).size !== state.acquisitions.length) return invalid();
   if ((state.acquisitions as { ledgerTransactionId: string }[]).some(item => !(state.ledger as { transactionId: string }[]).some(entry => entry.transactionId === item.ledgerTransactionId))) return invalid();
   return state as unknown as DeterministicBacktestState;
@@ -366,19 +424,31 @@ export class StandingPaperPolicyRepository {
         from ranked where policy_rank <= 20
         order by policy_id asc, policy_rank asc
       `;
-      const fillRows = await tx<{
-        policy_id: string; financial_account_id: string; fill_id: string; order_id: string;
-        execution_json: unknown; acquisition_json: unknown; run_id: string; created_at: Date;
+      const cycleDecisionRows = await tx<{
+        policy_id: string; financial_account_id: string; decision_id: string; order_id: string; action: string; reason_code: string; input_hash: string; decision_json: unknown; created_at: Date;
       }[]>`
         with ranked as (
-          select f.policy_id, f.financial_account_id, f.fill_id, f.order_id, f.execution_json,
-            f.acquisition_json, f.run_id, f.created_at,
+          select d.policy_id, d.financial_account_id, d.decision_id, d.order_id, d.action, d.reason_code, d.input_hash, d.decision_json, d.created_at,
+            row_number() over (partition by d.policy_id order by r.created_at desc, d.decision_id asc) as policy_rank
+          from public.standing_paper_cycle_decisions d join public.standing_paper_runs r on r.id=d.run_id
+          where d.policy_id in ${tx(policyIds)}
+        )
+        select policy_id, financial_account_id, decision_id, order_id, action, reason_code, input_hash, decision_json, created_at
+        from ranked where policy_rank <= 20 order by policy_id asc, policy_rank asc
+      `;
+      const fillRows = await tx<{
+        policy_id: string; financial_account_id: string; fill_id: string; order_id: string; side: string;
+        execution_json: unknown; acquisition_json: unknown; disposal_json: unknown; run_id: string; created_at: Date;
+      }[]>`
+        with ranked as (
+          select f.policy_id, f.financial_account_id, f.fill_id, f.order_id, f.side, f.execution_json,
+            f.acquisition_json, f.disposal_json, f.run_id, f.created_at,
             row_number() over (partition by f.policy_id order by r.created_at desc, f.fill_id asc) as policy_rank
           from public.standing_paper_fills f
           join public.standing_paper_runs r on r.id = f.run_id
           where f.policy_id in ${tx(policyIds)}
         )
-        select policy_id, financial_account_id, fill_id, order_id, execution_json, acquisition_json, run_id, created_at
+        select policy_id, financial_account_id, fill_id, order_id, side, execution_json, acquisition_json, disposal_json, run_id, created_at
         from ranked where policy_rank <= 20
         order by policy_id asc, policy_rank asc
       `;
@@ -394,7 +464,9 @@ export class StandingPaperPolicyRepository {
           if (!row.last_run_id && (state.lastProcessedAt !== null || state.ledger.length || state.acquisitions.length)) throw new Error("PAPER_CHECKPOINT_INVALID");
           const result = run ? decode(typeof run.result_json === "string" ? JSON.parse(run.result_json) as unknown : run.result_json) : null;
           const valuation = run ? validateSavedResult(result, state, row.financial_account_id) : null;
-          const decisions = decisionRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateDecisionRow(item, policy.policyId, row.financial_account_id));
+          const legacyDecisions = decisionRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateDecisionRow(item, policy.policyId, row.financial_account_id));
+          const cycleDecisions = cycleDecisionRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateCycleDecisionRow(item, policy.policyId, row.financial_account_id));
+          const decisions = cycleDecisions.length ? cycleDecisions : legacyDecisions;
           const fills = fillRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateFillRow(item, policy.policyId, row.financial_account_id));
           if (!run && (decisions.length || fills.length)) throw new Error("PAPER_MATERIAL_INVALID");
           const workers: StandingPaperWorkerInstanceStatusRecord[] = heartbeatRows.filter(item => item.policy_id === row.policy_id).map(item => {
@@ -475,16 +547,45 @@ export class StandingPaperPolicyRepository {
     if (sha256(actualLedger) !== sha256(expectedLedger) || sha256(transactions.map(row => row.id)) !== sha256(expectedTransactionIds)) {
       throw new Error("PAPER_LEDGER_CHECKPOINT_MISMATCH");
     }
-    const actualAcquisitions = await tx<{ acquisition_json: unknown }[]>`select acquisition_json from public.standing_paper_fills where financial_account_id=${accountId} order by fill_id`;
+    const actualAcquisitions = await tx<{ acquisition_json: unknown }[]>`select acquisition_json from public.standing_paper_fills where financial_account_id=${accountId} and side='BUY' order by fill_id`;
     const acquisitions = actualAcquisitions.map(row => decode(typeof row.acquisition_json === "string" ? JSON.parse(row.acquisition_json) : row.acquisition_json));
     if (sha256(acquisitions) !== sha256([...state.acquisitions].sort((a,b) => a.fillId.localeCompare(b.fillId)))) throw new Error("PAPER_ACQUISITION_CHECKPOINT_MISMATCH");
+    const actualDisposals = await tx<{ disposal_json: unknown }[]>`select disposal_json from public.standing_paper_fills where financial_account_id=${accountId} and side='SELL' order by fill_id`;
+    const disposals = actualDisposals.map(row => decode(typeof row.disposal_json === "string" ? JSON.parse(row.disposal_json) : row.disposal_json));
+    if (sha256(disposals) !== sha256([...(state.disposals ?? [])].sort((a,b) => a.fillId.localeCompare(b.fillId)))) throw new Error("PAPER_DISPOSAL_CHECKPOINT_MISMATCH");
+    if (state.disposals !== undefined) {
+      const lots = [...state.acquisitions].sort((a,b) => a.executedAt.getTime()-b.executedAt.getTime() || a.fillId.localeCompare(b.fillId)).map(item => ({
+        lotId: item.fillId, fillId: item.fillId, executionId: item.executionId, ledgerTransactionId: item.ledgerTransactionId,
+        acquiredAt: item.executedAt.toISOString(), quantityAtoms: item.quantityAtoms.toString(), remainingQuantityAtoms: item.quantityAtoms.toString(),
+        executedNotionalMinor: item.grossMinor.toString(), allocatedBuyFeeMinor: item.feeMinor.toString(), openCostBasisMinor: (item.grossMinor + item.feeMinor).toString(), fifoVersion: "fifo-cost-basis/v2" as const,
+      }));
+      for (const disposal of [...state.disposals].sort((a,b) => a.executedAt.getTime()-b.executedAt.getTime() || a.fillId.localeCompare(b.fillId))) {
+        const assetLots = lots.filter(lot => state.acquisitions.find(acquisition => acquisition.fillId === lot.fillId)?.assetId === disposal.assetId);
+        const planned = planFifoLotConsumption(assetLots, disposal.quantityAtoms);
+        if (sha256(planned) !== sha256(disposal.lotConsumptions)) throw new Error("PAPER_FIFO_CHECKPOINT_MISMATCH");
+        const basis = planned.reduce((sum,item) => sum + item.costBasisMinor, 0n);
+        if (disposal.realizedPnlMinor !== disposal.grossMinor - disposal.feeMinor - basis) throw new Error("PAPER_REALIZED_RESULT_CHECKPOINT_MISMATCH");
+        const journal = actualLedger.filter(item => item.transactionId === disposal.ledgerTransactionId);
+        const signedAmount = (code: string) => journal.filter(item => item.code === code).reduce((sum,item) => sum + (item.direction === "DEBIT" ? item.amountAtoms : -item.amountAtoms), 0n);
+        const gain = disposal.grossMinor > basis ? disposal.grossMinor - basis : 0n;
+        const loss = basis > disposal.grossMinor ? basis - disposal.grossMinor : 0n;
+        if (signedAmount("CASH") !== disposal.grossMinor - disposal.feeMinor || signedAmount("FEE_EXPENSE") !== disposal.feeMinor ||
+          signedAmount(`ASSET_HOLDING:${disposal.assetId}`) !== -disposal.quantityAtoms || signedAmount(`ASSET_CLEARING:${disposal.assetId}`) !== disposal.quantityAtoms ||
+          signedAmount(`ASSET_COST_BASIS:${disposal.assetId}`) !== -basis || signedAmount("REALIZED_GAIN") !== -gain || signedAmount("REALIZED_LOSS") !== loss) throw new Error("PAPER_SELL_LEDGER_CHECKPOINT_MISMATCH");
+      }
+    }
     const capital = actualLedger.filter(item => item.code === "VIRTUAL_CONTRIBUTED_CAPITAL").reduce((sum, item) => sum + (item.direction === "CREDIT" ? item.amountAtoms : -item.amountAtoms), 0n);
     if (capital !== state.netContributionsMinor || state.committedCapitalMinor !== state.acquisitions.reduce((sum, item) => sum + item.grossMinor + item.feeMinor, 0n)) throw new Error("PAPER_CAPITAL_CHECKPOINT_MISMATCH");
+    if (state.disposals !== undefined) {
+      const turnover = state.acquisitions.reduce((total, item) => total + item.grossMinor, 0n) + state.disposals.reduce((total, item) => total + item.grossMinor, 0n);
+      const realized = state.disposals.reduce((total, item) => total + item.realizedPnlMinor, 0n);
+      if (turnover !== state.cumulativeTurnoverMinor || realized !== state.realizedPnlMinor) throw new Error("PAPER_CYCLE_CHECKPOINT_MISMATCH");
+    }
     if (lastRunId) {
       const run = await tx<{ result_json: unknown }[]>`select result_json from public.standing_paper_runs where id=${lastRunId}`;
       const result = run[0] && decode(typeof run[0].result_json === "string" ? JSON.parse(run[0].result_json) : run[0].result_json) as BacktestResult | undefined;
       if (!result || sha256(result.persistentState) !== sha256(state)) throw new Error("PAPER_CHECKPOINT_NOT_LAST_RUN_RESULT");
-    } else if (state.ledger.length || state.acquisitions.length || state.netContributionsMinor !== 0n || state.adjustedEquityHighWaterMinor !== 0n || state.committedCapitalMinor !== 0n || state.lastProcessedAt !== null) {
+    } else if (state.ledger.length || state.acquisitions.length || (state.disposals?.length ?? 0) > 0 || state.netContributionsMinor !== 0n || state.adjustedEquityHighWaterMinor !== 0n || state.committedCapitalMinor !== 0n || state.lastProcessedAt !== null) {
       throw new Error("PAPER_CHECKPOINT_WITHOUT_RUN");
     }
   }
@@ -669,9 +770,15 @@ export class StandingPaperPolicyRepository {
         const evidence = decision.evidence;
         await tx`insert into public.standing_paper_decisions (policy_id, financial_account_id, order_id, input_hash, decision_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${decision.orderId}, ${evidence.inputHash}, ${tx.json(json(decision))}, ${runId})`;
       }
+      for (const decision of result.paperCycleDecisions ?? []) {
+        await tx`insert into public.standing_paper_cycle_decisions (policy_id, financial_account_id, decision_id, order_id, action, reason_code, input_hash, decision_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${decision.decisionId}, ${decision.orderId}, ${decision.action}, ${decision.reasonCode}, ${decision.evidence.inputHash}, ${tx.json(json(decision))}, ${runId})`;
+        const decisionHash = sha256(decision);
+        const disposition = decision.evidence.disposition;
+        await tx`insert into public.standing_paper_cycle_decision_audit (policy_id, financial_account_id, actor_id, decision_id, action, reason_code, disposition, input_hash, output_hash, policy_versions, occurred_at) values (${policyId}, ${policy.financialAccountId}, ${lockedAccount.owner_id}, ${decision.decisionId}, ${decision.action}, ${decision.reasonCode}, ${disposition}, ${decision.evidence.inputHash}, ${decisionHash}, ${tx.json(json({ standingPaperPolicy: decision.evidence.policyVersion, cycle: baseSnapshot.config.paperCycleContractVersion, exit: decision.evidence.exitPolicyVersion, strategy: decision.evidence.strategyVersion }))}, ${new Date(decision.evidence.decisionAt)})`;
+      }
       for (const journal of result.journals) {
         const journalHash = sha256(journal);
-        const commandType = journal.type === "VIRTUAL_DEPOSIT" ? "STANDING_PAPER_CONTRIBUTION" : "STANDING_PAPER_EXECUTION";
+        const commandType = journal.type === "VIRTUAL_DEPOSIT" ? "STANDING_PAPER_CONTRIBUTION" : journal.type === "SIMULATED_SELL_SETTLEMENT" ? "STANDING_PAPER_SELL_EXECUTION" : "STANDING_PAPER_EXECUTION";
         const commandKey = journal.id;
         const commandId = journal.idempotencyRecordId ?? randomUUID();
         await tx`insert into public.idempotency_records (id, financial_account_id, command_type, idempotency_key, request_hash, result_json) values (${commandId}, ${policy.financialAccountId}, ${commandType}, ${commandKey}, ${journalHash}, ${tx.json(json({ ledgerTransactionId: journal.id, outcome: "RECORDED" }))})`;
@@ -691,12 +798,17 @@ export class StandingPaperPolicyRepository {
           if (!evidence) throw new Error("PAPER_LEDGER_EVIDENCE_MISSING");
           await tx`insert into public.ledger_entries (id, ledger_transaction_id, ledger_account_id, direction, amount_atoms, created_at) values (${evidence.entryId}, ${journal.id}, ${accountId}, ${entry.direction}, ${entry.amountAtoms.toString()}::numeric, ${evidence.recordedAt})`;
         }
-        await tx`insert into public.audit_events (financial_account_id, actor_id, command_id, command_type, idempotency_key, outcome, policy_versions, ledger_transaction_id, input_hash, output_hash, occurred_at) values (${policy.financialAccountId}, ${lockedAccount.owner_id}, ${commandId}, ${commandType}, ${commandKey}, 'SUCCEEDED', ${tx.json(json({ standingPaperPolicy: policy.version, execution: "m1-market-execution/v1", fee: "m1-fee/v1", rounding: "m1-rounding/v1" }))}, ${journal.id}, ${journalHash}, ${sha256({ ledgerTransactionId: journal.id, entries: journal.entries })}, ${journal.occurredAt})`;
+        await tx`insert into public.audit_events (financial_account_id, actor_id, command_id, command_type, idempotency_key, outcome, policy_versions, ledger_transaction_id, input_hash, output_hash, occurred_at) values (${policy.financialAccountId}, ${lockedAccount.owner_id}, ${commandId}, ${commandType}, ${commandKey}, 'SUCCEEDED', ${tx.json(json({ standingPaperPolicy: policy.version, ...(baseSnapshot.config.paperCycleContractVersion ? { cycle: baseSnapshot.config.paperCycleContractVersion, exit: baseSnapshot.config.standingPaperExitPolicy?.version, fifo: baseSnapshot.config.fifoCostBasisVersion } : {}), execution: "m1-market-execution/v1", fee: "m1-fee/v1", rounding: "m1-rounding/v1" }))}, ${journal.id}, ${journalHash}, ${sha256({ ledgerTransactionId: journal.id, entries: journal.entries })}, ${journal.occurredAt})`;
       }
       for (const fill of result.executions) {
         const acquisition = result.persistentState.acquisitions.find(item => item.fillId === fill.fillId);
-        if (!acquisition) throw new Error("PAPER_FILL_LEDGER_LINK_MISSING");
-        await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, execution_json, acquisition_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${acquisition.ledgerTransactionId}, ${tx.json(json(fill))}, ${tx.json(json(acquisition))}, ${runId})`;
+        if (acquisition) {
+          await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, side, execution_json, acquisition_json, disposal_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${acquisition.ledgerTransactionId}, 'BUY', ${tx.json(json(fill))}, ${tx.json(json(acquisition))}, null, ${runId})`;
+          continue;
+        }
+        const disposal = result.persistentState.disposals?.find(item => item.fillId === fill.fillId);
+        if (!disposal) throw new Error("PAPER_FILL_LEDGER_LINK_MISSING");
+        await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, side, execution_json, acquisition_json, disposal_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${disposal.ledgerTransactionId}, 'SELL', ${tx.json(json(fill))}, null, ${tx.json(json(disposal))}, ${runId})`;
       }
       await tx`update public.standing_paper_policies set state_json = ${tx.json(json(result.persistentState))}, last_run_id = ${runId}, updated_at = now() where policy_id = ${policyId}`;
       return result;

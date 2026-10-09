@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { StandingPaperPolicyRunner } from "../src/application/paper-trading/run-standing-paper-policy";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "../src/domain/strategy/fixture-assets";
 import { transitionPaperPolicy, type StandingPaperPolicy } from "../src/domain/risk/standing-paper-policy";
-import type { BacktestRunConfig } from "../src/application/backtest/run-deterministic-backtest";
+import { runDeterministicBacktest, type BacktestRunConfig } from "../src/application/backtest/run-deterministic-backtest";
+import { PAPER_CYCLE_CONTRACT_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "../src/domain/risk/standing-paper-exit-policy";
 
 const accountId = "paper-demo-synthetic-account";
 const policy: StandingPaperPolicy = transitionPaperPolicy({
@@ -27,6 +28,22 @@ const config: Omit<BacktestRunConfig, "standingPaperPolicy"> = {
 };
 const key = createHash("sha256").update(JSON.stringify(config)).digest("hex");
 const result = await new StandingPaperPolicyRunner().run(policy, config, prices, key);
+const cyclePolicy = { ...policy, policyId: "paper-policy-local-cycle-v2-demo", capitalBudgetMinor: 20_000n, maxOrderMinor: 20_000n, maxPositionMinor: 20_000n, maxGrossExposureMinor: 20_000n };
+const cycleStart = "2026-01-01T10:00:00.000Z"; const cycleExit = "2026-01-01T11:00:00.000Z";
+const cyclePrices: FixturePriceObservation[] = FIXTURE_ASSETS.flatMap((asset, index) => [
+  { recordId: `cycle-demo-entry-${index}`, assetId: asset.assetId, price: { currencyCode: "NOK", priceAtoms: BigInt((index + 1) * 1_000_000), priceScale: 4 }, observedAt: new Date(cycleStart), availableAt: new Date(cycleStart), ingestedAt: new Date(cycleStart), datasetVersion: FIXTURE_DATASET_VERSION },
+  { recordId: `cycle-demo-exit-${index}`, assetId: asset.assetId, price: { currencyCode: "NOK", priceAtoms: BigInt((index + 1) * 2_000_000), priceScale: 4 }, observedAt: new Date(cycleExit), availableAt: new Date(cycleExit), ingestedAt: new Date(cycleExit), datasetVersion: FIXTURE_DATASET_VERSION },
+]);
+const cycleResult = runDeterministicBacktest({
+  startAt: cycleStart, endAt: cycleExit, baseCurrency: "NOK", financialAccountId: accountId,
+  contributionEvents: [{ eventId: "cycle-demo-one-200-nok", availableAt: cycleStart, amountMinor: "20000", currency: "NOK" }],
+  strategyEvaluationTimestamps: [cycleExit], valuationTimestamps: [cycleStart, cycleExit],
+  strategyVersion: "contribution-rebalancing/v1", riskPolicyVersion: "m1-risk-policy/v1", executionPolicyVersion: "m1-market-execution/v1",
+  portfolioValuationVersion: "portfolio-valuation/v1", fifoCostBasisVersion: "fifo-cost-basis/v2", paperCycleContractVersion: PAPER_CYCLE_CONTRACT_VERSION,
+  standingPaperExitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1_000 },
+  assetRegistryVersion: "fixture-asset-registry/v1", marketDatasetVersion: FIXTURE_DATASET_VERSION,
+  standingPaperPolicy: cyclePolicy,
+}, cyclePrices);
 const output = {
   classification: "LOCAL SYNTHETIC PAPER SIMULATION ONLY",
   note: "A policy-authorized simulated fill is not an exchange execution, investment forecast, or live mandate.",
@@ -35,5 +52,11 @@ const output = {
   decisions: result.paperPolicyDecisions.map(({ decisionId, orderId, outcome, riskCodes, evidence }) => ({ decisionId, orderId, outcome, riskCodes, ...evidence })),
   simulatedFills: result.executions.map((fill) => ({ type: "SIMULATED_PAPER_FILL", orderId: fill.proposalId, assetId: fill.quantity.assetId, quantityAtoms: fill.quantity.atomicUnits.toString(), referencePriceAtoms: fill.referencePrice.priceAtoms.toString(), simulatedExecutionPriceAtoms: fill.executionPrice.priceAtoms.toString(), feeMinor: fill.fee.minorUnits.toString(), policyVersions: { execution: fill.executionPolicyVersion, spreadSlippage: fill.spreadSlippagePolicyVersion, fee: fill.feePolicyVersion, rounding: fill.roundingPolicyVersion } })),
   endingPortfolio: result.endingState,
+  explicitBuySellBuyCycle: {
+    contractVersion: PAPER_CYCLE_CONTRACT_VERSION, startingVirtualCapitalMinor: "20000", netContributionsMinor: cycleResult.persistentState.netContributionsMinor.toString(),
+    turnoverMinor: cycleResult.persistentState.cumulativeTurnoverMinor?.toString(), realizedPnlMinor: cycleResult.persistentState.realizedPnlMinor?.toString(),
+    decisions: cycleResult.paperCycleDecisions, simulatedFills: cycleResult.executions.map(fill => ({ orderId: fill.proposalId, side: "side" in fill ? fill.side : "BUY", grossMinor: fill.grossNotional.minorUnits.toString(), feeMinor: fill.fee.minorUnits.toString(), executionPolicyVersion: fill.executionPolicyVersion })),
+    endingPortfolio: cycleResult.endingState,
+  },
 };
 process.stdout.write(`${JSON.stringify(output, (_, value) => typeof value === "bigint" ? value.toString() : value, 2)}\n`);

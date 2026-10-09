@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { BacktestResult, BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import type { StandingPaperExitPolicy } from "@/domain/risk/standing-paper-exit-policy";
+import { PAPER_CYCLE_CONTRACT_VERSION } from "@/domain/risk/standing-paper-exit-policy";
 import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
 
 export type StandingPaperWorkerStatus = "RUNNING" | "WAITING_PAUSED" | "WAITING_INTERVAL" | "COMPLETED" | "STOPPED" | "FAILED";
@@ -16,9 +18,11 @@ export type StandingPaperWorkerOptions = {
   readonly expectedAccountId?: string;
   readonly expectedOwnerId?: string;
   readonly policyScopedRoundOrdinal?: boolean;
-  /** Hosted-only mode: make one policy-scoped contribution once, then evaluate
-   * later rounds against existing cash and holdings without further deposits. */
+  /** Make one policy-scoped contribution once, then evaluate later rounds
+   * against existing cash and holdings. Required for explicit cycle v2. */
   readonly initialCapitalMinor?: bigint;
+  /** Explicit opt-in for the new local cycle contract. Hosted entrypoints do not set this. */
+  readonly exitPolicy?: StandingPaperExitPolicy;
   readonly onStatus?: (status: StandingPaperWorkerStatus, code?: string) => void;
   readonly onRound?: (identity: string, result: BacktestResult) => void;
   /** Deterministic orchestration seams used by PostgreSQL integration tests. */
@@ -29,20 +33,22 @@ export type StandingPaperWorkerOptions = {
 
 const roundKey = (workerId: string, round: number) => `standing-paper-worker/v1/${workerId}/round/${String(round).padStart(12, "0")}`;
 const roundAt = (round: number) => new Date(Date.UTC(2026, 0, 1, 9, 0, 0) + round * 60_000);
-const pricesForRound = (round: number): FixturePriceObservation[] => {
+const pricesForRound = (round: number, cycleMode = false): FixturePriceObservation[] => {
   const at = roundAt(round);
   const availableAt = new Date(at.getTime() - 60 * 60 * 1000);
+  const cyclePriceBase = cycleMode ? 1_000_000n : 10_000n;
+  const cycleMultiplierBps = cycleMode ? ([10_000n, 5_000n, 10_000n, 5_000n] as const)[round % 4]! : 10_000n;
   return FIXTURE_ASSETS.map((asset, index) => ({
     recordId: `standing-paper-worker-synthetic-${String(round).padStart(12, "0")}-${index + 1}`,
     assetId: asset.assetId,
-    price: { currencyCode: "NOK", priceAtoms: BigInt((index + 1) * 10_000), priceScale: 4 },
+    price: { currencyCode: "NOK", priceAtoms: BigInt(index + 1) * cyclePriceBase * cycleMultiplierBps / 10_000n, priceScale: 4 },
     observedAt: availableAt,
     availableAt,
     ingestedAt: new Date(availableAt.getTime() + 1_000),
     datasetVersion: FIXTURE_DATASET_VERSION,
   }));
 };
-const configForRound = (policy: StandingPaperPolicy, workerId: string, round: number, hostedSeeded: boolean): Omit<BacktestRunConfig, "standingPaperPolicy"> => {
+const configForRound = (policy: StandingPaperPolicy, workerId: string, round: number, hostedSeeded: boolean, exitPolicy?: StandingPaperExitPolicy): Omit<BacktestRunConfig, "standingPaperPolicy"> => {
   const at = roundAt(round).toISOString();
   return {
     startAt: at,
@@ -50,13 +56,14 @@ const configForRound = (policy: StandingPaperPolicy, workerId: string, round: nu
     baseCurrency: "NOK",
     financialAccountId: policy.financialAccountId,
     contributionEvents: hostedSeeded ? [] : [{ eventId: `standing-paper-worker-${workerId}-contribution-${String(round).padStart(12, "0")}`, availableAt: at, amountMinor: "100000", currency: "NOK" }],
-    ...(hostedSeeded ? { strategyEvaluationTimestamps: [at] } : {}),
+    ...(hostedSeeded || exitPolicy ? { strategyEvaluationTimestamps: [at] } : {}),
     valuationTimestamps: [],
     strategyVersion: "contribution-rebalancing/v1",
     riskPolicyVersion: "m1-risk-policy/v1",
     executionPolicyVersion: "m1-market-execution/v1",
     portfolioValuationVersion: "portfolio-valuation/v1",
-    fifoCostBasisVersion: "fifo-cost-basis/v1",
+    fifoCostBasisVersion: exitPolicy ? "fifo-cost-basis/v2" : "fifo-cost-basis/v1",
+    ...(exitPolicy ? { paperCycleContractVersion: PAPER_CYCLE_CONTRACT_VERSION, standingPaperExitPolicy: exitPolicy } : {}),
     assetRegistryVersion: "fixture-asset-registry/v1",
     marketDatasetVersion: FIXTURE_DATASET_VERSION,
   };
@@ -86,6 +93,7 @@ export class StandingPaperWorker {
     if (options.expectedOwnerId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(options.expectedOwnerId)) throw new Error("PAPER_WORKER_OWNER_ID_INVALID");
     if (options.maxRounds !== undefined && (!Number.isSafeInteger(options.maxRounds) || options.maxRounds < 1)) throw new Error("PAPER_WORKER_MAX_ROUNDS_INVALID");
     if (options.initialCapitalMinor !== undefined && options.initialCapitalMinor <= 0n) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_INVALID");
+    if (options.exitPolicy && options.initialCapitalMinor === undefined) throw new Error("PAPER_CYCLE_INITIAL_CAPITAL_REQUIRED");
     if (options.pollIntervalMs !== undefined && (!Number.isSafeInteger(options.pollIntervalMs) || options.pollIntervalMs < 10)) throw new Error("PAPER_WORKER_POLL_INTERVAL_INVALID");
     if (options.maxRounds === undefined && options.roundIntervalMs === undefined) throw new Error("PAPER_WORKER_ROUND_INTERVAL_REQUIRED");
     if (options.roundIntervalMs !== undefined && (!Number.isSafeInteger(options.roundIntervalMs) || options.roundIntervalMs < 1_000 || options.roundIntervalMs > 86_400_000)) throw new Error("PAPER_WORKER_ROUND_INTERVAL_INVALID");
@@ -174,7 +182,7 @@ export class StandingPaperWorker {
         if (!policy) throw new Error("PAPER_POLICY_NOT_FOUND");
         if (this.options.expectedAccountId && policy.financialAccountId !== this.options.expectedAccountId) throw new Error("PAPER_WORKER_ACCOUNT_MISMATCH");
         const hostedSeeded = this.options.initialCapitalMinor !== undefined;
-        const config = configForRound(policy, this.options.workerId, round, hostedSeeded);
+        const config = configForRound(policy, this.options.workerId, round, hostedSeeded, this.options.exitPolicy);
         const initialContribution = hostedSeeded ? {
           eventId: `standing-paper-hosted-capital/v1/${policy.policyId}`,
           availableAt: roundAt(0).toISOString(),
@@ -183,7 +191,7 @@ export class StandingPaperWorker {
         } : undefined;
         try {
           if (this.options.signal?.aborted) throw abortError();
-          const result = await this.repository.run(this.options.policyId, config, pricesForRound(round), identity, {
+          const result = await this.repository.run(this.options.policyId, config, pricesForRound(round, this.options.exitPolicy !== undefined), identity, {
             ...(initialContribution ? { initialContribution } : {}),
             ...(this.options.expectedOwnerId ? { expectedOwnerId: this.options.expectedOwnerId } : {}),
           });
