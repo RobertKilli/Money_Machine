@@ -111,8 +111,8 @@ describe("standing paper status view", () => {
     expect(html).toContain("PAPER_ONLY");
     expect(html).toContain("Syntetiske priser");
     expect(html).toContain("simulerte fills");
-    expect(html).toContain("Worker: ukjent");
-    expect(html).toContain("heartbeat ikke lagret");
+    expect(html).toContain("Worker-status");
+    expect(html).toContain("ingen heartbeat-evidens");
     expect(html).toContain("2000.00 NOK");
     expect(html).toContain("PRICE_STALE");
     expect(html).toContain("Simulert");
@@ -121,6 +121,48 @@ describe("standing paper status view", () => {
     expect(html).not.toContain("Aktiver");
     expect(html).not.toContain("Pause policy");
     expect(html).not.toContain("Kjøp");
+  });
+
+  it("validates and renders per-process heartbeat evidence without inferring liveness from old rounds", () => {
+    const workers = [
+      { workerId: "local-worker", processInstanceId: "123e4567-e89b-42d3-a456-426614174000", status: "RUNNING" as const, lastHeartbeatAt: "2026-10-08T10:00:00.000Z" },
+      { workerId: "local-worker", processInstanceId: "123e4567-e89b-42d3-a456-426614174001", status: "STALE" as const, lastHeartbeatAt: "2026-10-08T09:58:00.000Z" },
+    ];
+    const card = projectStandingPaperStatusCard({ policy: testPolicy, state: testResult.persistentState, run: null, workers });
+    const heartbeatModel = projectStandingPaperStatusReadModel([card]);
+    expect(card.workerStatus).toBe("RUNNING");
+    expect(card.workerInstances).toHaveLength(2);
+    expect(parseStandingPaperStatus(heartbeatModel)).toEqual(heartbeatModel);
+    const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: heartbeatModel }} />);
+    expect(html).toContain("Kjører");
+    expect(html).toContain("Foreldet heartbeat");
+    expect(html).toContain("2026");
+
+    const oldRoundWithoutHeartbeat = projectStandingPaperStatusCard({ policy: testPolicy, state: testResult.persistentState, run: { id: "old", createdAt: "2026-10-08T10:00:00.000Z", result: testResult, valuation: { navMinor: testResult.endingState.nav, asOf: testResult.endingState.asOf, complete: true } } });
+    expect(oldRoundWithoutHeartbeat.workerStatus).toBe("UNKNOWN");
+    expect(oldRoundWithoutHeartbeat.workerInstances).toEqual([]);
+    expect(parseStandingPaperStatus({ ...heartbeatModel, policies: [{ ...card, workerStatus: "STALE" }] })).toBeNull();
+  });
+
+  it("accepts an aggregate worker status beyond the capped detail list and labels truncation", () => {
+    const workers = Array.from({ length: 20 }, (_, index) => ({
+      workerId: `ended-${index}`,
+      processInstanceId: `123e4567-e89b-42d3-a456-${String(index).padStart(12, "0")}`,
+      status: "ENDED" as const,
+      lastHeartbeatAt: "2026-10-08T10:01:00.000Z",
+    }));
+    const card = projectStandingPaperStatusCard({
+      policy: testPolicy, state: testResult.persistentState, run: null, workers,
+      workerSummary: { status: "RUNNING", count: 21, truncated: true },
+    });
+    const heartbeatModel = projectStandingPaperStatusReadModel([card]);
+    expect(card.workerStatus).toBe("RUNNING");
+    expect(card.workerInstances).toHaveLength(20);
+    expect(parseStandingPaperStatus(heartbeatModel)).toEqual(heartbeatModel);
+    const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: heartbeatModel }} />);
+    expect(html).toContain("Viser de 20 siste av 21 worker-instanser");
+    expect(parseStandingPaperStatus({ ...heartbeatModel, policies: [{ ...card, workerInstanceCount: 20 }] })).toBeNull();
+    expect(parseStandingPaperStatus({ ...heartbeatModel, policies: [{ ...card, workerInstancesTruncated: false }] })).toBeNull();
   });
 
   it("shows only the policy transitions allowed by the current status", () => {

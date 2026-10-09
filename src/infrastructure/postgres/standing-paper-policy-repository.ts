@@ -5,7 +5,7 @@ import postgres, { type Sql, type TransactionSql } from "postgres";
 import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
 import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import type { FixturePriceObservation } from "@/domain/strategy/fixture-assets";
-import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill } from "@/application/paper-trading/standing-paper-status";
+import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill, type StandingPaperWorkerInstanceStatus, type StandingPaperWorkerInstanceStatusRecord } from "@/application/paper-trading/standing-paper-status";
 
 type StoredPolicy = { policy_json: unknown; status: StandingPaperPolicy["status"]; financial_account_id: string };
 const encode = (value: unknown): unknown => {
@@ -44,8 +44,9 @@ const record = (value: unknown): Record<string, unknown> => {
   return value as Record<string, unknown>;
 };
 const signedInteger = (value: unknown): value is string => typeof value === "string" && /^-?\d+$/.test(value);
+const isProcessInstanceUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const invalidCard = (policyId: string): StandingPaperPolicyStatusCard => ({
-  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", mode: "UNKNOWN", workerStatus: "UNKNOWN",
+  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [], workerInstanceCount: 0, workerInstancesTruncated: false,
   allowedInstrumentIds: [], riskLimits: { capitalBudgetMinor: null, maxOrderMinor: null, maxPositionMinor: null, maxGrossExposureMinor: null, maxLossMinor: null, maxPriceAgeMs: null },
   lastRound: null, netContributionsMinor: null, committedCapitalMinor: null, remainingCapitalBudgetMinor: null,
   portfolioValueMinor: null, portfolioValueAsOf: null, currentLossMinor: null, remainingLossMarginMinor: null,
@@ -169,13 +170,52 @@ export class StandingPaperPolicyRepository {
     return { policyStatus: rows[0].policy_status, accountStatus: rows[0].account_status, accountMode: rows[0].account_mode, accountCurrency: rows[0].account_currency };
   }
 
+  /** Heartbeat rows have their own short transaction and process-instance key.
+   * They never acquire the settlement checkpoint or append ledger material. */
+  async startWorkerHeartbeat(policyId: string, workerId: string, processInstanceId: string): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(workerId) || !isProcessInstanceUuid(processInstanceId)) throw new Error("PAPER_WORKER_HEARTBEAT_ID_INVALID");
+    const rows = await this.client<{ policy_id: string }[]>`
+      insert into public.standing_paper_worker_heartbeats
+        (policy_id, financial_account_id, worker_id, process_instance_id, status)
+      select p.policy_id, p.financial_account_id, ${workerId}, ${processInstanceId}::uuid,
+        case when p.status = 'PAUSED' then 'WAITING_PAUSED' else 'RUNNING' end
+      from public.standing_paper_policies p
+      join public.financial_accounts a on a.id = p.financial_account_id
+      where p.policy_id = ${policyId} and p.status in ('ACTIVE', 'PAUSED', 'STOPPED')
+        and a.status = 'ACTIVE' and a.mode = 'PAPER' and a.base_currency_code = 'NOK'
+      returning policy_id
+    `;
+    if (!rows[0]) throw new Error("PAPER_WORKER_HEARTBEAT_POLICY_NOT_RUNNABLE");
+  }
+
+  async refreshWorkerHeartbeat(policyId: string, workerId: string, processInstanceId: string, status: "RUNNING" | "WAITING_PAUSED" | "WAITING_INTERVAL"): Promise<void> {
+    const rows = await this.client<{ policy_id: string }[]>`
+      update public.standing_paper_worker_heartbeats
+      set status = ${status}, heartbeat_at = clock_timestamp()
+      where policy_id = ${policyId} and worker_id = ${workerId} and process_instance_id = ${processInstanceId}::uuid and ended_at is null
+      returning policy_id
+    `;
+    if (!rows[0]) throw new Error("PAPER_WORKER_HEARTBEAT_NOT_ACTIVE");
+  }
+
+  async endWorkerHeartbeat(policyId: string, workerId: string, processInstanceId: string, reason: "COMPLETED" | "STOPPED" | "FAILED"): Promise<void> {
+    const rows = await this.client<{ policy_id: string }[]>`
+      update public.standing_paper_worker_heartbeats
+      set status = 'ENDED', exit_reason = ${reason}, heartbeat_at = clock_timestamp(), ended_at = clock_timestamp()
+      where policy_id = ${policyId} and worker_id = ${workerId} and process_instance_id = ${processInstanceId}::uuid and ended_at is null
+      returning policy_id
+    `;
+    if (!rows[0]) throw new Error("PAPER_WORKER_HEARTBEAT_NOT_ACTIVE");
+  }
+
   async getPolicy(policyId: string): Promise<StandingPaperPolicy | null> {
     const rows = await this.client<{ policy_json: unknown }[]>`select policy_json from public.standing_paper_policies where policy_id = ${policyId}`;
     return rows[0] ? structuredClone(parsePolicy(rows[0].policy_json)) : null;
   }
 
-  /** Owner-scoped, repeatable-read status projection. No heartbeat is stored,
-   * so the worker's current status is deliberately always UNKNOWN. */
+  /** Owner-scoped, repeatable-read status projection with database-timed,
+   * per-process worker evidence. Missing rows remain UNKNOWN; old full rounds
+   * are not treated as heartbeat evidence. */
   async loadOwnedStatus(actorId: string): Promise<StandingPaperStatusReadModel> {
     return this.client.begin(async tx => {
       await tx`set transaction isolation level repeatable read, read only`;
@@ -199,6 +239,38 @@ export class StandingPaperPolicyRepository {
         id: string; policy_id: string; financial_account_id: string; result_json: unknown; created_at: Date;
       }[]>`select id, policy_id, financial_account_id, result_json, created_at from public.standing_paper_runs where id in ${tx(runIds)}` : [];
       const policyIds = rows.map(row => row.policy_id);
+      // Aggregate every owned policy heartbeat in this repeatable-read snapshot;
+      // the separate ranked query below is intentionally only a detail page.
+      const heartbeatSummaries = await tx<{
+        policy_id: string; instance_count: number; has_running: boolean; has_waiting_paused: boolean;
+        has_waiting_interval: boolean; has_stale: boolean; has_account_mismatch: boolean;
+      }[]>`
+        select h.policy_id, count(*)::int as instance_count,
+          coalesce(bool_or(h.status = 'RUNNING' and h.heartbeat_at >= transaction_timestamp() - interval '90 seconds'), false) as has_running,
+          coalesce(bool_or(h.status = 'WAITING_PAUSED' and h.heartbeat_at >= transaction_timestamp() - interval '90 seconds'), false) as has_waiting_paused,
+          coalesce(bool_or(h.status = 'WAITING_INTERVAL' and h.heartbeat_at >= transaction_timestamp() - interval '90 seconds'), false) as has_waiting_interval,
+          coalesce(bool_or(h.status <> 'ENDED' and h.heartbeat_at < transaction_timestamp() - interval '90 seconds'), false) as has_stale,
+          coalesce(bool_or(h.financial_account_id <> p.financial_account_id), false) as has_account_mismatch
+        from public.standing_paper_worker_heartbeats h
+        join public.standing_paper_policies p on p.policy_id = h.policy_id
+        where h.policy_id in ${tx(policyIds)}
+        group by h.policy_id
+      `;
+      const heartbeatRows = await tx<{
+        policy_id: string; financial_account_id: string; worker_id: string; process_instance_id: string; status: string; heartbeat_at: Date;
+        is_stale: boolean;
+      }[]>`
+        with ranked as (
+          select policy_id, financial_account_id, worker_id, process_instance_id::text as process_instance_id, status, heartbeat_at,
+            row_number() over (partition by policy_id order by heartbeat_at desc, worker_id asc, process_instance_id asc) as policy_rank
+          from public.standing_paper_worker_heartbeats
+          where policy_id in ${tx(policyIds)}
+        )
+        select policy_id, financial_account_id, worker_id, process_instance_id, status, heartbeat_at,
+          (status <> 'ENDED' and heartbeat_at < transaction_timestamp() - interval '90 seconds') as is_stale
+        from ranked where policy_rank <= 20
+        order by policy_id asc, heartbeat_at desc, worker_id asc, process_instance_id asc
+      `;
       const decisionRows = await tx<{
         policy_id: string; financial_account_id: string; order_id: string; input_hash: string;
         decision_json: unknown; run_id: string; created_at: Date;
@@ -245,9 +317,22 @@ export class StandingPaperPolicyRepository {
           const decisions = decisionRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateDecisionRow(item, policy.policyId, row.financial_account_id));
           const fills = fillRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateFillRow(item, policy.policyId, row.financial_account_id));
           if (!run && (decisions.length || fills.length)) throw new Error("PAPER_MATERIAL_INVALID");
+          const workers: StandingPaperWorkerInstanceStatusRecord[] = heartbeatRows.filter(item => item.policy_id === row.policy_id).map(item => {
+            if (item.financial_account_id !== row.financial_account_id || !/^[A-Za-z0-9_-]{1,64}$/.test(item.worker_id) || !isProcessInstanceUuid(item.process_instance_id) || !["RUNNING", "WAITING_PAUSED", "WAITING_INTERVAL", "ENDED"].includes(item.status)) throw new Error("PAPER_WORKER_HEARTBEAT_INVALID");
+            const status: StandingPaperWorkerInstanceStatus = item.is_stale ? "STALE" : item.status as StandingPaperWorkerInstanceStatus;
+            return { workerId: item.worker_id, processInstanceId: item.process_instance_id, status, lastHeartbeatAt: validDate(item.heartbeat_at).toISOString() };
+          });
+          const summary = heartbeatSummaries.find(item => item.policy_id === row.policy_id);
+          if (summary?.has_account_mismatch) throw new Error("PAPER_WORKER_HEARTBEAT_INVALID");
+          const workerSummary = !summary ? { status: "UNKNOWN" as const, count: 0, truncated: false }
+            : { status: summary.has_running ? "RUNNING" as const
+              : summary.has_waiting_paused ? "WAITING_PAUSED" as const
+                : summary.has_waiting_interval ? "WAITING_INTERVAL" as const
+                  : summary.has_stale ? "STALE" as const : "ENDED" as const,
+              count: summary.instance_count, truncated: summary.instance_count > 20 };
           cards.push(projectStandingPaperStatusCard({
             policy, state, run: run && valuation ? { id: run.id, createdAt: validDate(run.created_at).toISOString(), result: result as BacktestResult, valuation } : null,
-            decisions, fills,
+            decisions, fills, workers, workerSummary,
           }));
         } catch {
           cards.push(invalidCard(row.policy_id));

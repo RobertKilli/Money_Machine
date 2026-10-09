@@ -369,6 +369,84 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
   });
 
+  it("persists per-instance heartbeat, paused wait, normal exit, stale liveness and owner scope", async () => {
+    const f = await setup("worker-heartbeat");
+    await f.repository.transition(f.policy.policyId, "PAUSE");
+    let releaseWait!: () => void;
+    const policyWait = new Promise<void>(resolve => { releaseWait = resolve; });
+    let markReady!: () => void;
+    const ready = new Promise<void>(resolve => { markReady = resolve; });
+    let readyCount = 0;
+    const onWaiting = () => { readyCount += 1; if (readyCount === 2) markReady(); };
+    const waitForPolicyChange = () => policyWait;
+    const secondHeartbeatRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(secondHeartbeatRepository);
+    const workers = [
+      new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "multi-instance", maxRounds: 1, onStatus: status => { if (status === "WAITING_PAUSED") onWaiting(); }, waitForPolicyChange }),
+      new StandingPaperWorker(secondHeartbeatRepository, { policyId: f.policy.policyId, workerId: "multi-instance", maxRounds: 1, onStatus: status => { if (status === "WAITING_PAUSED") onWaiting(); }, waitForPolicyChange }),
+    ];
+    const executions = workers.map(worker => worker.run());
+    await ready;
+    const paused = await sql<{ worker_id: string; process_instance_id: string; status: string; heartbeat_at: Date; started_at: Date }[]>`
+      select worker_id, process_instance_id::text as process_instance_id, status, heartbeat_at, started_at
+      from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId} order by process_instance_id`;
+    expect(paused).toHaveLength(2);
+    expect(new Set(paused.map(row => row.process_instance_id)).size).toBe(2);
+    expect(paused.map(row => row.status)).toEqual(["WAITING_PAUSED", "WAITING_PAUSED"]);
+    expect(paused.every(row => row.heartbeat_at.getTime() >= row.started_at.getTime())).toBe(true);
+    const owner = await f.repository.loadOwnedStatus(f.ownerId);
+    expect(owner.policies[0]?.workerStatus).toBe("WAITING_PAUSED");
+    expect(owner.policies[0]?.workerInstances).toHaveLength(2);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
+
+    await f.repository.transition(f.policy.policyId, "ACTIVATE");
+    releaseWait();
+    await expect(Promise.all(executions)).resolves.toHaveLength(2);
+    const ended = await sql<{ status: string; exit_reason: string; ended_at: Date | null }[]>`
+      select status, exit_reason, ended_at from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    expect(ended).toHaveLength(2);
+    expect(ended.every(row => row.status === "ENDED" && row.exit_reason === "COMPLETED" && row.ended_at instanceof Date)).toBe(true);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+    await sql`update public.standing_paper_worker_heartbeats set heartbeat_at=clock_timestamp() - interval '2 minutes', ended_at=clock_timestamp() - interval '2 minutes' where policy_id=${f.policy.policyId} and status='ENDED'`;
+
+    const staleInstance = randomUUID();
+    await f.repository.startWorkerHeartbeat(f.policy.policyId, "crashed-worker", staleInstance);
+    await sql`update public.standing_paper_worker_heartbeats set heartbeat_at=clock_timestamp() - interval '2 minutes' where policy_id=${f.policy.policyId} and worker_id='crashed-worker' and process_instance_id=${staleInstance}::uuid`;
+    const withStale = await f.repository.loadOwnedStatus(f.ownerId);
+    expect(withStale.policies[0]?.workerInstances.filter(worker => worker.status === "ENDED")).toHaveLength(2);
+    expect(withStale.policies[0]?.workerInstances).toContainEqual(expect.objectContaining({ workerId: "crashed-worker", processInstanceId: staleInstance, status: "STALE" }));
+    const other = await setup("heartbeat-other-owner");
+    const otherStatus = await f.repository.loadOwnedStatus(other.ownerId);
+    expect(otherStatus).toMatchObject({ status: "NO_ROUNDS", policies: [{ policyId: other.policy.policyId, workerInstances: [] }] });
+  });
+
+  it("summarizes all owned heartbeat instances while returning a capped detail list", async () => {
+    const f = await setup("heartbeat-summary-unbounded");
+    for (let i = 0; i < 20; i += 1) {
+      const instanceId = randomUUID();
+      const workerId = `ended-${String(i).padStart(2, "0")}`;
+      await f.repository.startWorkerHeartbeat(f.policy.policyId, workerId, instanceId);
+      await f.repository.endWorkerHeartbeat(f.policy.policyId, workerId, instanceId, "COMPLETED");
+    }
+    const liveInstance = randomUUID();
+    await f.repository.startWorkerHeartbeat(f.policy.policyId, "still-live", liveInstance);
+    // Make every completed instance newer than the active instance. The latest
+    // 20 detail rows therefore omit the RUNNING row, while the aggregate must not.
+    await sql`update public.standing_paper_worker_heartbeats
+      set heartbeat_at=clock_timestamp() + interval '1 minute', ended_at=clock_timestamp() + interval '1 minute'
+      where policy_id=${f.policy.policyId} and status='ENDED'`;
+
+    const owned = await f.repository.loadOwnedStatus(f.ownerId);
+    const card = owned.policies[0];
+    expect(card).toMatchObject({ workerStatus: "RUNNING", workerInstanceCount: 21, workerInstancesTruncated: true });
+    expect(card?.workerInstances).toHaveLength(20);
+    expect(card?.workerInstances.every(worker => worker.status === "ENDED")).toBe(true);
+    expect(card?.workerInstances.some(worker => worker.processInstanceId === liveInstance)).toBe(false);
+
+    const other = await setup("heartbeat-summary-other-owner");
+    const otherOwnerView = await f.repository.loadOwnedStatus(other.ownerId);
+    expect(otherOwnerView).toMatchObject({ workerStatus: "UNKNOWN", policies: [{ workerStatus: "UNKNOWN", workerInstanceCount: 0, workerInstancesTruncated: false, workerInstances: [] }] });
+  });
+
   it("observes STOPPED as a worker exit state without writing a round", async () => {
     const f = await setup("worker-stop");
     await f.repository.transition(f.policy.policyId, "STOP");
@@ -387,6 +465,8 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     await expect(new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "failure-worker", maxRounds: 1, onStatus: (status, code) => statuses.push({ status, code }) }).run()).rejects.toThrow("PAPER_WORKER_FAILED:PAPER_CHECKPOINT_INVALID");
     expect(statuses.at(-1)).toEqual({ status: "FAILED", code: "PAPER_CHECKPOINT_INVALID" });
     expect(await counts(f.policy.financialAccountId)).toEqual(before);
+    const heartbeat = await sql<{ status: string; exit_reason: string }[]>`select status, exit_reason from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId} and worker_id='failure-worker'`;
+    expect(heartbeat).toEqual([{ status: "ENDED", exit_reason: "FAILED" }]);
   });
 
   it("stops on ledger divergence without committing a worker round", async () => {
@@ -538,7 +618,7 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     await secondRepository.transition(policyTwo.policyId, "ACTIVATE");
 
     const one = await first.repository.loadOwnedStatus(ownerOne);
-    expect(one.status).toBe("AVAILABLE");
+    expect(one.status, JSON.stringify(one)).toBe("AVAILABLE");
     expect(one.workerStatus).toBe("UNKNOWN");
     expect(one.policies).toHaveLength(1);
     expect(one.policies[0]).toMatchObject({ policyId: first.policy.policyId, status: "AVAILABLE", policyStatus: "ACTIVE", mode: "PAPER_ONLY", workerStatus: "UNKNOWN" });
@@ -553,6 +633,10 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     const ownerOneViaSecondConnection = await secondRepository.loadOwnedStatus(ownerOne);
     expect(ownerOneViaSecondConnection).toMatchObject({ status: "AVAILABLE", policies: [{ policyId: first.policy.policyId }] });
     expect(ownerOneViaSecondConnection.policies.some(policy => policy.policyId === policyTwo.policyId)).toBe(false);
+
+    const emptyOwner = randomUUID();
+    await sql`insert into auth.users (id) values (${emptyOwner})`;
+    await expect(first.repository.loadOwnedStatus(emptyOwner)).resolves.toMatchObject({ status: "NO_POLICY", policies: [] });
   });
 
   it("bounds history independently for each policy and accepts distinct runner timestamps", async () => {
@@ -597,11 +681,11 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
       select tables.table_name, has_table_privilege('authenticated', format('public.%I', tables.table_name), 'select') as can_select,
         cls.relrowsecurity as rls_enabled
       from (values ('financial_accounts'), ('ledger_accounts'), ('ledger_transactions'), ('ledger_entries'),
-        ('standing_paper_policies'), ('standing_paper_runs'), ('standing_paper_decisions'), ('standing_paper_fills')) as tables(table_name)
+        ('standing_paper_policies'), ('standing_paper_runs'), ('standing_paper_decisions'), ('standing_paper_fills'), ('standing_paper_worker_heartbeats')) as tables(table_name)
       join pg_class cls on cls.relname=tables.table_name join pg_namespace ns on ns.oid=cls.relnamespace and ns.nspname='public'
       order by tables.table_name
     `;
-    expect(privileges).toHaveLength(8);
+    expect(privileges).toHaveLength(9);
     expect(privileges.every(row => row.can_select && row.rls_enabled)).toBe(true);
   });
 });
