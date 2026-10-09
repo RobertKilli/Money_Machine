@@ -3,7 +3,7 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
-import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, standingPaperActivationConfirmationHash, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import type { FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill, type StandingPaperWorkerInstanceStatus, type StandingPaperWorkerInstanceStatusRecord } from "@/application/paper-trading/standing-paper-status";
 
@@ -46,7 +46,7 @@ const record = (value: unknown): Record<string, unknown> => {
 const signedInteger = (value: unknown): value is string => typeof value === "string" && /^-?\d+$/.test(value);
 const isProcessInstanceUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const invalidCard = (policyId: string): StandingPaperPolicyStatusCard => ({
-  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [], workerInstanceCount: 0, workerInstancesTruncated: false,
+  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", activationConfirmationHash: null, mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [], workerInstanceCount: 0, workerInstancesTruncated: false,
   allowedInstrumentIds: [], riskLimits: { capitalBudgetMinor: null, maxOrderMinor: null, maxPositionMinor: null, maxGrossExposureMinor: null, maxLossMinor: null, maxPriceAgeMs: null },
   lastRound: null, netContributionsMinor: null, committedCapitalMinor: null, remainingCapitalBudgetMinor: null,
   portfolioValueMinor: null, portfolioValueAsOf: null, currentLossMinor: null, remainingLossMarginMinor: null,
@@ -402,6 +402,43 @@ export class StandingPaperPolicyRepository {
     });
   }
 
+  /** Lists only the owner's currently eligible, unused, ledger-empty PAPER accounts. */
+  async listOwnedEmptyPaperAccounts(actorId: string): Promise<readonly { financialAccountId: string }[]> {
+    if (!actorId.trim()) throw new Error("PAPER_POLICY_NOT_FOUND");
+    const rows = await this.client<{ id: string }[]>`
+      select a.id::text as id
+      from public.financial_accounts a
+      where a.owner_id = ${actorId} and a.mode = 'PAPER' and a.status = 'ACTIVE' and a.base_currency_code = 'NOK'
+        and not exists (select 1 from public.ledger_transactions lt where lt.financial_account_id = a.id)
+        and not exists (select 1 from public.standing_paper_policies p where p.financial_account_id = a.id)
+      order by a.id
+    `;
+    return rows.map(row => ({ financialAccountId: row.id }));
+  }
+
+  /** Creates a DRAFT under the shared account lock after checking ownership,
+   * account eligibility, an empty ledger, and absence of an existing policy. */
+  async createOwnedDraft(actorId: string, policy: StandingPaperPolicy): Promise<void> {
+    if (!actorId.trim()) throw new Error("PAPER_ACCOUNT_NOT_FOUND");
+    assertValidPaperPolicy(policy);
+    if (policy.status !== "DRAFT") throw new Error("PAPER_POLICY_MUST_START_DRAFT");
+    await this.client.begin(async tx => {
+      const accounts = await tx<{ id: string; owner_id: string; status: string; mode: string; base_currency_code: string }[]>`
+        select id::text as id, owner_id, status, mode, base_currency_code
+        from public.financial_accounts where id = ${policy.financialAccountId} for update
+      `;
+      const account = accounts[0];
+      if (!account || account.owner_id !== actorId) throw new Error("PAPER_ACCOUNT_NOT_FOUND");
+      if (account.status !== "ACTIVE" || account.mode !== "PAPER" || account.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
+      const existingLedger = await tx<{ id: string }[]>`select id from public.ledger_transactions where financial_account_id = ${policy.financialAccountId} limit 1`;
+      if (existingLedger[0]) throw new Error("PAPER_ACCOUNT_NOT_EMPTY_AT_POLICY_CREATION");
+      const existingPolicy = await tx<{ policy_id: string }[]>`select policy_id from public.standing_paper_policies where financial_account_id = ${policy.financialAccountId} limit 1`;
+      if (existingPolicy[0]) throw new Error("PAPER_ACCOUNT_ALREADY_HAS_POLICY");
+      await tx`insert into public.standing_paper_policies (policy_id, financial_account_id, policy_version, status, policy_json) values (${policy.policyId}, ${policy.financialAccountId}, ${policy.version}, 'DRAFT', ${tx.json(json(policy))})`;
+      await tx`insert into public.standing_paper_policy_transitions (policy_id, financial_account_id, policy_version, action, from_status, to_status, input_hash) values (${policy.policyId}, ${policy.financialAccountId}, ${policy.version}, 'INITIALIZE', null, 'DRAFT', ${sha256(policy)})`;
+    });
+  }
+
   async transition(policyId: string, action: "ACTIVATE" | "PAUSE" | "STOP"): Promise<StandingPaperPolicy> {
     assertStandingPaperPolicyTransitionAction(action);
     return this.transitionTransaction(null, policyId, action);
@@ -423,11 +460,19 @@ export class StandingPaperPolicyRepository {
     return this.transitionTransaction(actorId, policyId, action === "RESUME" ? "ACTIVATE" : action, expectedStatus);
   }
 
+  /** Explicit first activation is bound to the exact DRAFT material reviewed by the owner. */
+  async activateOwnedDraft(actorId: string, policyId: string, expectedConfirmationHash: string): Promise<StandingPaperPolicy> {
+    if (!actorId.trim() || !policyId.trim()) throw new Error("PAPER_POLICY_NOT_FOUND");
+    if (!/^[0-9a-f]{64}$/.test(expectedConfirmationHash)) throw new Error("PAPER_POLICY_CONFIRMATION_INVALID");
+    return this.transitionTransaction(actorId, policyId, "ACTIVATE", "DRAFT", expectedConfirmationHash);
+  }
+
   private async transitionTransaction(
     actorId: string | null,
     policyId: string,
     action: "ACTIVATE" | "PAUSE" | "STOP",
     expectedStatus?: StandingPaperPolicy["status"],
+    expectedConfirmationHash?: string,
   ): Promise<StandingPaperPolicy> {
     return this.client.begin(async tx => {
       const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
@@ -439,6 +484,7 @@ export class StandingPaperPolicyRepository {
       if (actorId !== null && (!account || account.owner_id !== actorId)) throw new Error("PAPER_POLICY_NOT_FOUND");
       if (!account || account.status !== "ACTIVE" || account.mode !== "PAPER" || account.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
       if (expectedStatus !== undefined && current.status !== expectedStatus) throw new Error("PAPER_POLICY_STALE_STATUS");
+      if (actorId !== null && action === "ACTIVATE" && expectedStatus === "DRAFT" && (!expectedConfirmationHash || standingPaperActivationConfirmationHash(current) !== expectedConfirmationHash)) throw new Error("PAPER_POLICY_STALE_CONFIRMATION");
       const next = transitionPaperPolicy(current, action);
       await tx`update public.standing_paper_policies set status = ${next.status}, policy_json = ${tx.json(json(next))}, updated_at = now() where policy_id = ${policyId}`;
       await tx`insert into public.standing_paper_policy_transitions (policy_id, financial_account_id, policy_version, action, from_status, to_status, input_hash) values (${policyId}, ${current.financialAccountId}, ${current.version}, ${action}, ${current.status}, ${next.status}, ${sha256({ current, action, next })})`;

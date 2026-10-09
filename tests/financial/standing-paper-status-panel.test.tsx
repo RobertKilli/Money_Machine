@@ -5,7 +5,8 @@ import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel } f
 import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { price } from "@/domain/financial/price";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION } from "@/domain/strategy/fixture-assets";
-import { loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
+import { isStandingPaperActivationConfirmed, loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
+import { StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
 
 const testPolicy: StandingPaperPolicy = {
   policyId: "paper-policy-test", identity: "synthetic-test-account", version: "standing-paper-policy/v1", mode: "PAPER_ONLY", status: "ACTIVE",
@@ -49,6 +50,26 @@ describe("standing paper status view", () => {
     expect(await loadStandingPaperStatus(fetcher)).toEqual({ kind: "DATA", model });
     expect(fetcher).toHaveBeenCalledWith("/api/dashboard/paper-status", { cache: "no-store", credentials: "same-origin" });
     expect(parseStandingPaperStatus({ ...model, workerStatus: "RUNNING" })).toBeNull();
+  });
+
+  it("shows setup and a separate reviewed activation path for DRAFT policies", () => {
+    const setupHtml = renderToStaticMarkup(<StandingPaperPolicySetupPanel onCreated={async () => undefined} />);
+    expect(setupHtml).toContain("Opprett policyutkast");
+    expect(setupHtml).toContain("syntetiske fixture-priser");
+    const draftCard = projectStandingPaperStatusCard({ policy: { ...testPolicy, status: "DRAFT" }, state: testResult.persistentState, run: null });
+    const draftModel = projectStandingPaperStatusReadModel([draftCard]);
+    const draftHtml = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: draftModel }} />);
+    expect(draftHtml).toContain("Gjennomgå og aktiver");
+    expect(draftHtml).toContain("Policy: Draft");
+    expect(draftHtml).toContain("Syntetiske priser");
+  });
+
+  it("drops the interactive activation confirmation when the reviewed policy hash changes", () => {
+    const first = "a".repeat(64);
+    const changed = "b".repeat(64);
+    expect(isStandingPaperActivationConfirmed(first, first)).toBe(true);
+    expect(isStandingPaperActivationConfirmed(first, changed)).toBe(false);
+    expect(isStandingPaperActivationConfirmed(first, null)).toBe(false);
   });
 
   it("loads and renders backend-projected incomplete valuations alone and alongside available policies", async () => {

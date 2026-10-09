@@ -3,9 +3,14 @@
 import { useEffect, useState } from "react";
 import { formatMoney, money } from "@/domain/financial/money";
 import type { StandingPaperStatus, StandingPaperStatusReadModel, StandingPaperPolicyStatusCard } from "@/application/paper-trading/standing-paper-status";
+import { StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
 
 export type PaperStatusPanelState = { readonly kind: "LOADING" } | { readonly kind: "FORBIDDEN" } | { readonly kind: "READ_ERROR" } | { readonly kind: "DATA"; readonly model: StandingPaperStatusReadModel };
 type Fetcher = (input: string, init: RequestInit) => Promise<Response>;
+
+export function isStandingPaperActivationConfirmed(confirmedHash: string | null, currentHash: string | null): boolean {
+  return currentHash !== null && confirmedHash === currentHash;
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const isText = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
@@ -45,6 +50,7 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
   const limits = value.riskLimits;
   const monetaryLimits = [limits.capitalBudgetMinor, limits.maxOrderMinor, limits.maxPositionMinor, limits.maxGrossExposureMinor, limits.maxLossMinor];
   if (value.status === "INVALID") return value.identity === null && value.version === null && value.policyStatus === "UNKNOWN" && value.mode === "UNKNOWN" &&
+    value.activationConfirmationHash === null &&
     monetaryLimits.every(item => item === null) && limits.maxPriceAgeMs === null && value.allowedInstrumentIds.length === 0 && value.lastRound === null &&
     value.workerInstances.length === 0 && value.workerInstanceCount === 0 && !value.workerInstancesTruncated && value.netContributionsMinor === null && value.committedCapitalMinor === null && value.remainingCapitalBudgetMinor === null && value.portfolioValueMinor === null &&
     value.portfolioValueAsOf === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null && value.decisions.length === 0 && value.fills.length === 0 &&
@@ -53,6 +59,7 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
     value.allowedInstrumentIds.length === 0 || !monetaryLimits.slice(0, 4).every(isPositiveAmount) || !isNonnegativeAmount(limits.maxLossMinor) ||
     typeof limits.maxPriceAgeMs !== "number" || !Number.isSafeInteger(limits.maxPriceAgeMs) || limits.maxPriceAgeMs <= 0 ||
     ![value.netContributionsMinor, value.committedCapitalMinor, value.remainingCapitalBudgetMinor].every(isNonnegativeAmount)) return false;
+  if (value.policyStatus === "DRAFT" ? typeof value.activationConfirmationHash !== "string" || !/^[0-9a-f]{64}$/.test(value.activationConfirmationHash) : value.activationConfirmationHash !== null) return false;
   if (value.lastRound !== null && (!isRecord(value.lastRound) || !isText(value.lastRound.id) || !isDate(value.lastRound.completedAt) || !isDate(value.lastRound.asOf))) return false;
   const noValuationAmounts = value.portfolioValueMinor === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null;
   const noSavedValuation = noValuationAmounts && value.portfolioValueAsOf === null;
@@ -100,6 +107,58 @@ export async function loadStandingPaperStatus(fetcher: Fetcher = fetch): Promise
 const amount = (minor: string | null) => minor === null ? "Ikke tilgjengelig" : formatMoney(money("NOK", BigInt(minor)));
 const dateLabel = (value: string | null) => value ? new Date(value).toLocaleString("nb-NO", { timeZone: "UTC", year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : "Ikke tilgjengelig";
 const titleCase = (value: string) => value.replaceAll("_", " ").toLocaleLowerCase("nb-NO").replace(/^./, character => character.toLocaleUpperCase("nb-NO"));
+
+function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; onRefresh?: () => Promise<void> }) {
+  const [reviewing, setReviewing] = useState(false);
+  const [confirmedHash, setConfirmedHash] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  if (card.policyStatus !== "DRAFT" || !card.activationConfirmationHash) return null;
+  const confirmed = isStandingPaperActivationConfirmed(confirmedHash, card.activationConfirmationHash);
+  async function activate() {
+    if (!confirmed || pending) return;
+    setPending(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/dashboard/paper-policies/${encodeURIComponent(card.policyId)}/transition`, {
+        method: "POST", cache: "no-store", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
+        body: JSON.stringify({ action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true, activationConfirmationHash: card.activationConfirmationHash }),
+      });
+      const payload = await response.json().catch(() => ({})) as { policyId?: unknown; status?: unknown; error?: unknown };
+      if (!response.ok || payload.policyId !== card.policyId || payload.status !== "ACTIVE") {
+        setMessage(payload.error === "STALE_CONFIRMATION" || payload.error === "STALE_STATUS" ? "Grensene eller statusen er endret. Oppdater og kontroller på nytt." : "Aktivering kunne ikke bekreftes. Oppdater status.");
+        if (response.status === 409) await onRefresh?.();
+        return;
+      }
+      setReviewing(false);
+      setConfirmedHash(null);
+      await onRefresh?.();
+    } catch {
+      setMessage("Aktivering kunne ikke bekreftes. Oppdater status.");
+      await onRefresh?.();
+    } finally { setPending(false); }
+  }
+  return <div className="mt-4 rounded-xl border border-[var(--accent)]/40 p-4">
+    {!reviewing ? <button type="button" onClick={() => setReviewing(true)} className="rounded-lg border border-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent)]">Gjennomgå og aktiver</button> : <>
+      <h3 className="font-semibold">Bekreft PAPER_ONLY-grensene</h3>
+      <p className="mt-2 text-sm text-[var(--muted)]">Policy {card.identity ?? card.policyId}, versjon {card.version}. Aktivering gjør policyen tilgjengelig for worker-runder; den starter ingen worker.</p>
+      <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+        <Limit label="Kapitalbudsjett" value={amount(card.riskLimits.capitalBudgetMinor)} />
+        <Limit label="Maks ordre" value={amount(card.riskLimits.maxOrderMinor)} />
+        <Limit label="Maks posisjon" value={amount(card.riskLimits.maxPositionMinor)} />
+        <Limit label="Maks samlet eksponering" value={amount(card.riskLimits.maxGrossExposureMinor)} />
+        <Limit label="Maks tap" value={amount(card.riskLimits.maxLossMinor)} />
+        <Limit label="Maks prisalder" value={card.riskLimits.maxPriceAgeMs === null ? "Ikke tilgjengelig" : `${card.riskLimits.maxPriceAgeMs} ms`} />
+      </dl>
+      <p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p>
+      <p className="mt-3 rounded-lg bg-amber-400/5 p-3 text-sm">Kun PAPER_ONLY. Prisene er syntetiske, og fills simuleres. Dette er ikke børsutførelse.</p>
+      <label className="mt-4 flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmedHash(event.target.checked ? card.activationConfirmationHash : null)} className="mt-1" /><span>Jeg har gjennomgått og godkjenner grensene ovenfor.</span></label>
+      <div className="mt-4 flex flex-wrap gap-2"><button type="button" disabled={!confirmed || pending} onClick={() => void activate()} className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">{pending ? "Aktiverer …" : "Bekreft aktivering"}</button><button type="button" disabled={pending} onClick={() => { setReviewing(false); setConfirmedHash(null); }} className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm">Avbryt</button></div>
+    </>}
+    {message && <p role="status" className="mt-3 text-sm text-amber-100">{message}</p>}
+  </div>;
+}
 
 function PolicyControls({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; onRefresh?: () => Promise<void> }) {
   const [pending, setPending] = useState(false);
@@ -165,6 +224,7 @@ function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; 
       <Metric label="Inn­skuddsjustert tap" value={amount(card.currentLossMinor)} detail={`Gjenstående tapsmargin ${amount(card.remainingLossMarginMinor)}`} />
       <Metric label="Siste fullførte runde" value={card.lastRound ? dateLabel(card.lastRound.completedAt) : "Ingen"} detail={card.lastRound ? `Verdier gjelder ${dateLabel(card.lastRound.asOf)}` : "Ingen lagret fullføringstid"} />
     </div>
+    <PolicyActivationControl card={card} onRefresh={onRefresh} />
     <PolicyControls card={card} onRefresh={onRefresh} />
     <div className="grid gap-5 lg:grid-cols-2">
       <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Risikogrenser</h3><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2"><Limit label="Maks ordre" value={amount(risk.maxOrderMinor)} /><Limit label="Maks posisjon" value={amount(risk.maxPositionMinor)} /><Limit label="Maks samlet eksponering" value={amount(risk.maxGrossExposureMinor)} /><Limit label="Maks tapsgrense" value={amount(risk.maxLossMinor)} /><Limit label="Maks prisalder" value={risk.maxPriceAgeMs === null ? "Ikke tilgjengelig" : `${risk.maxPriceAgeMs} ms`} /></dl><p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p></section>
@@ -202,5 +262,5 @@ export function StandingPaperStatusPanel() {
   const [state, setState] = useState<PaperStatusPanelState>({ kind: "LOADING" });
   const refresh = async () => setState(await loadStandingPaperStatus());
   useEffect(() => { let mounted = true; void loadStandingPaperStatus().then(value => { if (mounted) setState(value); }); return () => { mounted = false; }; }, []);
-  return <StandingPaperStatusPanelView state={state} onRefresh={refresh} />;
+  return <div className="space-y-6"><StandingPaperPolicySetupPanel onCreated={refresh} /><StandingPaperStatusPanelView state={state} onRefresh={refresh} /></div>;
 }

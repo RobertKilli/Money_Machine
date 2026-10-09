@@ -1,5 +1,5 @@
 import type { BacktestResult, DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
-import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { standingPaperActivationConfirmationHash, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 
 const maxBigInt = (left: bigint, right: bigint) => left > right ? left : right;
 
@@ -41,6 +41,7 @@ export interface StandingPaperPolicyStatusCard {
   readonly identity: string | null;
   readonly version: string | null;
   readonly policyStatus: "DRAFT" | "ACTIVE" | "PAUSED" | "STOPPED" | "UNKNOWN";
+  readonly activationConfirmationHash: string | null;
   readonly mode: "PAPER_ONLY" | "UNKNOWN";
   readonly workerStatus: StandingPaperWorkerInstanceStatus | "UNKNOWN";
   readonly workerInstances: readonly StandingPaperWorkerInstanceStatusRecord[];
@@ -109,6 +110,7 @@ export function projectStandingPaperStatusCard(input: {
   return {
     status, policyId: policy.policyId, identity: policy.identity, version: policy.version,
     policyStatus: policy.status, mode: policy.mode, workerStatus, workerInstances: [...workers], workerInstanceCount, workerInstancesTruncated,
+    activationConfirmationHash: policy.status === "DRAFT" ? standingPaperActivationConfirmationHash(policy) : null,
     allowedInstrumentIds: [...policy.allowedInstrumentIds].sort(),
     riskLimits: {
       capitalBudgetMinor: policy.capitalBudgetMinor.toString(), maxOrderMinor: policy.maxOrderMinor.toString(),

@@ -5,7 +5,7 @@ import postgres, { type Sql, type TransactionSql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
 import { price } from "@/domain/financial/price";
-import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { standingPaperActivationConfirmationHash, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
 import { StandingPaperWorker } from "@/application/paper-trading/run-standing-paper-worker";
@@ -42,6 +42,15 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     await sql`insert into auth.users (id) values (${owner})`;
     await sql`insert into public.financial_accounts (id, owner_id, mode, status, base_currency_code) values (${financialAccountId}, ${owner}, 'PAPER', 'ACTIVE', 'NOK')`;
     return financialAccountId;
+  }
+  async function ownedAccount() {
+    const ownerId = randomUUID(); const financialAccountId = randomUUID();
+    await sql`insert into auth.users (id) values (${ownerId})`;
+    await sql`insert into public.financial_accounts (id, owner_id, mode, status, base_currency_code) values (${financialAccountId}, ${ownerId}, 'PAPER', 'ACTIVE', 'NOK')`;
+    return { ownerId, financialAccountId };
+  }
+  function ownedDraft(financialAccountId: string, label = "owner-created"): StandingPaperPolicy {
+    return { policyId: `paper-${label}-${randomUUID()}`, version: "standing-paper-policy/v1", identity: `synthetic-${label}`, mode: "PAPER_ONLY", status: "DRAFT", financialAccountId, allowedInstrumentIds: FIXTURE_ASSETS.map(asset => asset.assetId), capitalBudgetMinor: 500_000n, maxOrderMinor: 50_000n, maxPositionMinor: 100_000n, maxGrossExposureMinor: 200_000n, maxLossMinor: 25_000n, maxPriceAgeMs: 3_600_000 };
   }
   async function setup(label: string, capitalBudgetMinor = 1_000_000n, maxLossMinor = 1_000_000n) {
     const financialAccountId = await account();
@@ -107,6 +116,50 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(Number(evidence.journals)).toBe(Number(evidence.audits));
     const duplicates = await sql`select count(*)::text n from public.standing_paper_decisions where financial_account_id=${f.policy.financialAccountId} group by order_id having count(*) > 1`;
     expect(duplicates).toHaveLength(0);
+  });
+
+  it("creates only one DRAFT under concurrent owner requests and requires fresh confirmation to activate", async () => {
+    const { ownerId, financialAccountId } = await ownedAccount();
+    const firstRepo = new StandingPaperPolicyRepository(testUrl!); repositories.push(firstRepo);
+    const secondRepo = new StandingPaperPolicyRepository(testUrl!); repositories.push(secondRepo);
+    const firstPolicy = ownedDraft(financialAccountId, "concurrent-create");
+    const secondPolicy = ownedDraft(financialAccountId, "concurrent-create");
+    const outcomes = await Promise.allSettled([firstRepo.createOwnedDraft(ownerId, firstPolicy), secondRepo.createOwnedDraft(ownerId, secondPolicy)]);
+    expect(outcomes.filter(item => item.status === "fulfilled")).toHaveLength(1);
+    const rejected = outcomes.find(item => item.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toHaveProperty("message", "PAPER_ACCOUNT_ALREADY_HAS_POLICY");
+    const persisted = await sql<{ status: string; n: string }[]>`select status, (select count(*)::text from public.standing_paper_policy_transitions t where t.policy_id=p.policy_id) n from public.standing_paper_policies p where financial_account_id=${financialAccountId}`;
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({ status: "DRAFT", n: "1" });
+
+    const actualPolicy = (await firstRepo.getPolicy(firstPolicy.policyId) ?? await firstRepo.getPolicy(secondPolicy.policyId));
+    if (!actualPolicy) throw new Error("PAPER_TEST_CREATED_POLICY_NOT_FOUND");
+    const hash = standingPaperActivationConfirmationHash(actualPolicy);
+    await expect(secondRepo.activateOwnedDraft(randomUUID(), actualPolicy.policyId, hash)).rejects.toThrow("PAPER_POLICY_NOT_FOUND");
+    await expect(firstRepo.activateOwnedDraft(ownerId, actualPolicy.policyId, "0".repeat(64))).rejects.toThrow("PAPER_POLICY_STALE_CONFIRMATION");
+    const beforeTransitions = await sql<{ n: string }[]>`select count(*)::text n from public.standing_paper_policy_transitions where policy_id=${actualPolicy.policyId}`;
+    const activationAttempts = await Promise.allSettled([
+      firstRepo.activateOwnedDraft(ownerId, actualPolicy.policyId, hash),
+      secondRepo.activateOwnedDraft(ownerId, actualPolicy.policyId, hash),
+    ]);
+    expect(activationAttempts.filter(item => item.status === "fulfilled")).toHaveLength(1);
+    const activationRejected = activationAttempts.find(item => item.status === "rejected") as PromiseRejectedResult;
+    expect(activationRejected.reason).toHaveProperty("message", "PAPER_POLICY_STALE_STATUS");
+    expect((await firstRepo.getPolicy(actualPolicy.policyId))?.status).toBe("ACTIVE");
+    await expect(firstRepo.activateOwnedDraft(ownerId, actualPolicy.policyId, hash)).rejects.toThrow("PAPER_POLICY_STALE_STATUS");
+    const afterTransitions = await sql<{ n: string }[]>`select count(*)::text n from public.standing_paper_policy_transitions where policy_id=${actualPolicy.policyId}`;
+    expect(Number(afterTransitions[0]!.n)).toBe(Number(beforeTransitions[0]!.n) + 1);
+  });
+
+  it("rejects existing ledger activity and foreign ownership without inserting policy history", async () => {
+    const { ownerId, financialAccountId } = await ownedAccount();
+    await addExternalPosting(financialAccountId);
+    const repository = new StandingPaperPolicyRepository(testUrl!); repositories.push(repository);
+    const policy = ownedDraft(financialAccountId, "not-empty");
+    await expect(repository.createOwnedDraft(ownerId, policy)).rejects.toThrow("PAPER_ACCOUNT_NOT_EMPTY_AT_POLICY_CREATION");
+    await expect(repository.createOwnedDraft(randomUUID(), ownedDraft(financialAccountId, "wrong-owner"))).rejects.toThrow("PAPER_ACCOUNT_NOT_FOUND");
+    const rows = await sql<{ policies: string; transitions: string }[]>`select (select count(*)::text from public.standing_paper_policies where financial_account_id=${financialAccountId}) policies, (select count(*)::text from public.standing_paper_policy_transitions where financial_account_id=${financialAccountId}) transitions`;
+    expect(rows[0]).toEqual({ policies: "0", transitions: "0" });
   });
 
   it("rejects a pre-existing account ledger and an external ledger change between rounds", async () => {
