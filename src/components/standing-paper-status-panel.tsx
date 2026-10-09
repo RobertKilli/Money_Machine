@@ -16,17 +16,33 @@ const isDate = (value: unknown): value is string => typeof value === "string" &&
 const policyStatuses = ["DRAFT", "ACTIVE", "PAUSED", "STOPPED", "UNKNOWN"];
 const cardStatuses = ["NO_ROUNDS", "AVAILABLE", "INCOMPLETE", "INVALID"];
 const topStatuses: StandingPaperStatus[] = ["NO_POLICY", "NO_ROUNDS", "AVAILABLE", "INCOMPLETE", "INVALID"];
+const workerInstanceStatuses = ["RUNNING", "WAITING_PAUSED", "WAITING_INTERVAL", "ENDED", "STALE"];
+function summaryWorkerStatus(workers: readonly Record<string, unknown>[]) {
+  return workers.length === 0 ? "UNKNOWN"
+    : workers.some(worker => worker.status === "RUNNING") ? "RUNNING"
+      : workers.some(worker => worker.status === "WAITING_PAUSED") ? "WAITING_PAUSED"
+        : workers.some(worker => worker.status === "WAITING_INTERVAL") ? "WAITING_INTERVAL"
+          : workers.some(worker => worker.status === "STALE") ? "STALE" : "ENDED";
+}
 
 function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
   if (!isRecord(value) || !cardStatuses.includes(String(value.status)) || !isText(value.policyId) || !policyStatuses.includes(String(value.policyStatus)) ||
-    value.workerStatus !== "UNKNOWN" || !Array.isArray(value.allowedInstrumentIds) || value.allowedInstrumentIds.some(item => !isText(item)) ||
+    !Array.isArray(value.workerInstances) || value.workerInstances.length > 20 || !Array.isArray(value.allowedInstrumentIds) || value.allowedInstrumentIds.some(item => !isText(item)) ||
     new Set(value.allowedInstrumentIds).size !== value.allowedInstrumentIds.length || !isRecord(value.riskLimits) ||
     !Array.isArray(value.decisions) || value.decisions.length > 20 || !Array.isArray(value.fills) || value.fills.length > 20) return false;
+  const processIds = new Set<string>();
+  const workersValid = value.workerInstances.every(item => {
+    if (!isRecord(item) || !isText(item.workerId) || !/^[A-Za-z0-9_-]{1,64}$/.test(item.workerId) || !isText(item.processInstanceId) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.processInstanceId) || !workerInstanceStatuses.includes(String(item.status)) || !isDate(item.lastHeartbeatAt) || processIds.has(item.processInstanceId)) return false;
+    processIds.add(item.processInstanceId);
+    return true;
+  });
+  if (!workersValid || value.workerStatus !== summaryWorkerStatus(value.workerInstances as Record<string, unknown>[])) return false;
   const limits = value.riskLimits;
   const monetaryLimits = [limits.capitalBudgetMinor, limits.maxOrderMinor, limits.maxPositionMinor, limits.maxGrossExposureMinor, limits.maxLossMinor];
   if (value.status === "INVALID") return value.identity === null && value.version === null && value.policyStatus === "UNKNOWN" && value.mode === "UNKNOWN" &&
     monetaryLimits.every(item => item === null) && limits.maxPriceAgeMs === null && value.allowedInstrumentIds.length === 0 && value.lastRound === null &&
-    value.netContributionsMinor === null && value.committedCapitalMinor === null && value.remainingCapitalBudgetMinor === null && value.portfolioValueMinor === null &&
+    value.workerInstances.length === 0 && value.netContributionsMinor === null && value.committedCapitalMinor === null && value.remainingCapitalBudgetMinor === null && value.portfolioValueMinor === null &&
     value.portfolioValueAsOf === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null && value.decisions.length === 0 && value.fills.length === 0 &&
     value.issueCode === "PAPER_MATERIAL_INVALID";
   if (!isText(value.identity) || value.version !== "standing-paper-policy/v1" || value.mode !== "PAPER_ONLY" || value.policyStatus === "UNKNOWN" ||
@@ -133,7 +149,7 @@ function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; 
   return <section className="min-w-0 space-y-5 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 sm:p-7" aria-label={`Paper-policy ${card.identity ?? card.policyId}`}>
     <header className="grid min-w-0 grid-cols-1 items-start gap-4 border-b border-[var(--border)] pb-5 sm:grid-cols-[minmax(0,1fr)_auto]">
       <div className="min-w-0"><p className="text-xs uppercase tracking-[0.18em] text-[var(--accent)]">{card.mode}</p><h2 className="mt-2 break-words text-xl font-semibold sm:text-2xl">{card.identity ?? card.policyId}</h2><p className="mt-2 break-all font-mono text-xs text-[var(--muted)]">{card.policyId} · {card.version}</p></div>
-      <div className="flex max-w-full flex-wrap gap-2 text-xs sm:grid sm:justify-items-end"><span className="rounded-full border border-[var(--border)] px-3 py-1">Policy: {titleCase(card.policyStatus)}</span><span className="rounded-full border border-amber-400/40 px-3 py-1 text-amber-100">Worker: ukjent</span></div>
+      <div className="flex max-w-full flex-wrap gap-2 text-xs sm:grid sm:justify-items-end"><span className="rounded-full border border-[var(--border)] px-3 py-1">Policy: {titleCase(card.policyStatus)}</span><span className="rounded-full border border-amber-400/40 px-3 py-1 text-amber-100">Worker: {workerLabel(card.workerStatus)}</span></div>
     </header>
     <p className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-50">Syntetiske priser · simulerte fills · Ingen børsutførelse. Lagrede runder bekrefter ikke at en worker kjører nå.</p>
     {card.status === "NO_ROUNDS" ? <div role="status" className="rounded-xl border border-[var(--border)] p-5"><h3 className="font-semibold">Ingen fullførte runder</h3><p className="mt-2 text-sm text-[var(--muted)]">Kapital og portefølje har ingen lagret paper-runde ennå.</p></div> : card.status === "INCOMPLETE" ? <div role="status" className="rounded-xl border border-amber-400/40 bg-amber-400/5 p-4"><h3 className="font-semibold">Ufullstendig verdsettelse</h3><p className="mt-1 text-sm text-[var(--muted)]">Noen lagrede beregninger mangler. Porteføljeverdi og tapsmargin vises ikke som ferske eller komplette data.</p></div> : null}
@@ -148,16 +164,20 @@ function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; 
     <PolicyControls card={card} onRefresh={onRefresh} />
     <div className="grid gap-5 lg:grid-cols-2">
       <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Risikogrenser</h3><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2"><Limit label="Maks ordre" value={amount(risk.maxOrderMinor)} /><Limit label="Maks posisjon" value={amount(risk.maxPositionMinor)} /><Limit label="Maks samlet eksponering" value={amount(risk.maxGrossExposureMinor)} /><Limit label="Maks tapsgrense" value={amount(risk.maxLossMinor)} /><Limit label="Maks prisalder" value={risk.maxPriceAgeMs === null ? "Ikke tilgjengelig" : `${risk.maxPriceAgeMs} ms`} /></dl><p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p></section>
-      <section className="rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Policy og worker</h3><dl className="mt-3 grid gap-3 text-sm"><Limit label="Policy-status" value={titleCase(card.policyStatus)} /><Limit label="Worker-status" value="Ukjent (heartbeat ikke lagret)" /><Limit label="Modus" value="PAPER_ONLY" /><Limit label="Versjon" value={card.version ?? "Ukjent"} /></dl></section>
+      <section className="rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Policy og worker</h3><dl className="mt-3 grid gap-3 text-sm"><Limit label="Policy-status" value={titleCase(card.policyStatus)} /><Limit label="Worker-status" value={workerLabel(card.workerStatus)} /><Limit label="Modus" value="PAPER_ONLY" /><Limit label="Versjon" value={card.version ?? "Ukjent"} /></dl>{card.workerInstances.length > 0 && <ul className="mt-3 space-y-2 border-t border-[var(--border)] pt-3 text-xs">{card.workerInstances.map(worker => <li key={worker.processInstanceId} className="flex flex-wrap justify-between gap-2"><span>{worker.workerId} · {workerLabel(worker.status)}</span><span className="text-[var(--muted)]">Heartbeat {dateLabel(worker.lastHeartbeatAt)}</span></li>)}</ul>}</section>
     </div>
     <HistoryList card={card} />
   </section>;
 }
 
+function workerLabel(status: string): string {
+  return ({ UNKNOWN: "Ukjent (ingen heartbeat-evidens)", RUNNING: "Kjører", WAITING_PAUSED: "Venter på pauset policy", WAITING_INTERVAL: "Venter på neste runde", ENDED: "Avsluttet", STALE: "Foreldet heartbeat" } as Record<string, string>)[status] ?? "Ukjent";
+}
+
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
   return <article className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="text-xs text-[var(--muted)]">{label}</h3><p className="mt-2 break-words text-lg font-semibold tabular-nums sm:text-xl">{value}</p><p className="mt-2 break-words text-xs text-[var(--muted)]">{detail}</p></article>;
 }
-function Limit({ label, value }: { label: string; value: string }) { return <div className="flex min-w-0 justify-between gap-3"><dt className="min-w-0 break-words text-[var(--muted)]">{label}</dt><dd className="min-w-0 max-w-[55%] break-all text-right font-medium">{value}</dd></div>; }
+function Limit({ label, value }: { label: string; value: string }) { return <div className="flex min-w-0 justify-between gap-3"><dt className="min-w-0 break-words text-[var(--muted)]">{label}</dt><dd className="min-w-0 max-w-[55%] break-words text-right font-medium">{value}</dd></div>; }
 function HistoryList({ card }: { card: StandingPaperPolicyStatusCard }) {
   return <div className="grid gap-5 lg:grid-cols-2">
     <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Siste beslutninger</h3>{card.decisions.length ? <ol className="mt-3 space-y-3">{card.decisions.map(item => <li key={item.orderId} className="rounded-lg border border-[var(--border)] p-3 text-sm"><p className="break-all font-mono text-xs">{item.orderId}</p><p className="mt-2">{item.outcome === "SIMULATED_FILLED" ? "Simulert fill godkjent" : "Avvist"}</p><p className="mt-1 text-xs text-[var(--muted)]">Årsak: {item.reasonCode} · {dateLabel(item.recordedAt)}</p></li>)}</ol> : <p className="mt-3 text-sm text-[var(--muted)]">Ingen lagrede beslutninger.</p>}</section>

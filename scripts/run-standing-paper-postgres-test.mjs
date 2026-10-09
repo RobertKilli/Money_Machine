@@ -137,6 +137,7 @@ try {
     "converges two workers starting the same round to one durable settlement",
     "waits without writes while paused and resumes after deterministic policy transition",
     "observes STOPPED as a worker exit state without writing a round",
+    "persists per-instance heartbeat, paused wait, normal exit, stale liveness and owner scope",
     "stops with a checkpoint failure code and leaves the transaction untouched",
     "stops on ledger divergence without committing a worker round",
     "finishes an in-flight transaction after stop signal and enters no next round",

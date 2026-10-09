@@ -97,7 +97,23 @@ converge on a round through the repository's policy lock, transaction, and
 persisted idempotency hash. Each process executes one round at a time.
 
 Worker lifecycle output (`RUNNING`, `WAITING_PAUSED`, `WAITING_INTERVAL`,
-`COMPLETED`, `STOPPED`, `FAILED`) is separate from policy status. A paused policy is polled without
+`COMPLETED`, `STOPPED`, `FAILED`) is separate from policy status. Each process
+gets a random process-instance UUID and writes a separate row keyed by policy,
+worker ID, and process instance. Heartbeats use the database server clock and
+are committed outside settlement transactions; they do not change ledger,
+risk checkpoints, or round idempotency. The worker refreshes liveness every 30
+seconds. An active heartbeat older than 90 seconds is shown as `STALE`, which
+is the documented bracketing window for abrupt process death. Normal exit is
+stored as `ENDED`. Multiple instances remain visible independently, even when
+they share a worker ID. A policy with no heartbeat rows remains `UNKNOWN`; old
+rounds are not treated as liveness evidence. Heartbeat reads use the same
+owner-scoped repeatable-read snapshot and RLS as the paper status view. The
+additive `20261009090000_standing_paper_worker_heartbeats.sql` migration creates
+the heartbeat table, per-instance key, owner-read policy, and authenticated
+`SELECT` grant. It does not grant browser writes or alter the existing policy
+or ledger tables.
+
+A paused policy is polled without
 writing until it becomes active or stopped. A stopped policy exits. Invalid
 input, an invalid checkpoint, ledger divergence, or another persistence
 failure emits a stable error code and ends the process without retry. Ctrl+C,
@@ -189,8 +205,8 @@ ledger transactions, ledger entries, and audit evidence are append-only.
 
 The authenticated dashboard at `/dashboard/paper` reads the caller's own PAPER accounts and policies through a read-only, repeatable-read PostgreSQL snapshot. The API checks the authenticated user before querying account data, returns private `no-store` responses, and limits history to the latest 20 decisions and fills per policy. Stored policies, checkpoints, run results, decisions, fills, and acquisition evidence are validated before projection; corrupt or incomplete material is shown as such rather than silently repaired.
 
-Displayed balances and portfolio values are the latest saved simulation snapshot, with its effective timestamp. They are not fresh market prices. The view labels the mode `PAPER_ONLY`, prices as synthetic, and fills as simulated. Worker status remains `UNKNOWN`: a stored completed round does not prove a worker is currently running, and this version has no heartbeat evidence.
+Displayed balances and portfolio values are the latest saved simulation snapshot, with its effective timestamp. They are not fresh market prices. The view labels the mode `PAPER_ONLY`, prices as synthetic, and fills as simulated. Worker status comes only from stored per-process heartbeat evidence. Missing evidence is `UNKNOWN`; active heartbeats distinguish `RUNNING`, `WAITING_PAUSED`, and `WAITING_INTERVAL`; old active heartbeats become `STALE` after 90 seconds; orderly exits remain `ENDED`. Completed rounds alone do not prove a worker is running.
 
-The dashboard can pause an `ACTIVE` policy, resume a `PAUSED` policy, or stop a `DRAFT`, `ACTIVE`, or `PAUSED` policy. It does not create policies or offer first-time activation. Stop requires explicit confirmation and follows the domain's terminal `STOPPED` rule. Each command includes the exact policy ID and expected status. The server authenticates first, rejects cross-origin requests, and checks account ownership, policy state, account eligibility, and expected status in one transaction. It locks the policy row before the account row, matching paper-round and ledger-writer lock order. A second click or stale tab is rejected without another transition-history row. A round already holding those locks commits before pause or stop; later rounds observe the updated policy status. The private status read is refreshed after a confirmed transition. Transition history remains append-only and `workerStatus` remains `UNKNOWN` because there is no heartbeat evidence.
+The dashboard can pause an `ACTIVE` policy, resume a `PAUSED` policy, or stop a `DRAFT`, `ACTIVE`, or `PAUSED` policy. It does not create policies or offer first-time activation. Stop requires explicit confirmation and follows the domain's terminal `STOPPED` rule. Each command includes the exact policy ID and expected status. The server authenticates first, rejects cross-origin requests, and checks account ownership, policy state, account eligibility, and expected status in one transaction. It locks the policy row before the account row, matching paper-round and ledger-writer lock order. A second click or stale tab is rejected without another transition-history row. A round already holding those locks commits before pause or stop; later rounds observe the updated policy status. The private status read is refreshed after a confirmed transition. Transition history remains append-only.
 
 The history query selects the latest 20 decisions and fills independently for each policy using row-number ranking in SQL. The additive status-read grants are defined in `20261008130000_standing_paper_status_read_grants.sql`; they provide `SELECT` only and leave the existing owner-scoped RLS policies in place. Snapshot `asOf` is validated against the saved final portfolio snapshot (or `config.endAt` when the run has no snapshots). The run creation timestamp, configured end time, and snapshot timestamp have distinct meanings and are not required to be equal.
