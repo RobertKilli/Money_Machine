@@ -124,6 +124,7 @@ try {
   const assertions = output.testResults?.flatMap(file => file.assertionResults ?? []) ?? [];
   console.log(assertions.map(item => `${item.status}: ${item.title}${item.failureMessages?.length ? `\n${item.failureMessages.join("\n")}` : ""}`).join("\n"));
   const cases = [
+    "creates one owned empty PAPER/NOK account under concurrent requests without deposits or policy writes",
     "continues one account across runner instances; replay and concurrent budget use stay idempotent",
     "creates only one DRAFT under concurrent owner requests and requires fresh confirmation to activate",
     "rejects existing ledger activity and foreign ownership without inserting policy history",
