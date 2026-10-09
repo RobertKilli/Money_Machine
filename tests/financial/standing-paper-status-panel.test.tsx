@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runDeterministicBacktest } from "@/application/backtest/run-deterministic-backtest";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel } from "@/application/paper-trading/standing-paper-status";
 import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { PAPER_CYCLE_CONTRACT_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
 import { price } from "@/domain/financial/price";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION } from "@/domain/strategy/fixture-assets";
 import { isStandingPaperActivationConfirmed, loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
@@ -41,10 +42,36 @@ const secondPolicyCard = projectStandingPaperStatusCard({
   run: { id: "available-run", createdAt: "2026-10-08T10:00:03.000Z", result: testResult, valuation: { navMinor: testResult.endingState.nav, asOf: testResult.endingState.asOf, complete: true } },
   decisions: [], fills: [],
 });
+const cyclePolicy: StandingPaperPolicy = { ...testPolicy, policyId: "paper-cycle-ui-v2", identity: "synthetic-cycle-ui", capitalBudgetMinor: 20_000n, maxOrderMinor: 20_000n, maxPositionMinor: 20_000n, maxGrossExposureMinor: 20_000n };
+const cycleAt = "2026-10-08T11:00:00.000Z";
+const cycleResult = runDeterministicBacktest({
+  startAt: testAt, endAt: cycleAt, baseCurrency: "NOK", financialAccountId: cyclePolicy.financialAccountId,
+  contributionEvents: [{ eventId: "cycle-ui-one-deposit", availableAt: testAt, amountMinor: "20000", currency: "NOK" }],
+  strategyEvaluationTimestamps: [cycleAt], valuationTimestamps: [testAt, cycleAt], strategyVersion: "contribution-rebalancing/v1", riskPolicyVersion: "m1-risk-policy/v1",
+  executionPolicyVersion: "m1-market-execution/v1", portfolioValuationVersion: "portfolio-valuation/v1", fifoCostBasisVersion: "fifo-cost-basis/v2",
+  paperCycleContractVersion: PAPER_CYCLE_CONTRACT_VERSION, standingPaperExitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1_000 },
+  assetRegistryVersion: "fixture-asset-registry/v1", marketDatasetVersion: FIXTURE_DATASET_VERSION, standingPaperPolicy: cyclePolicy,
+}, FIXTURE_ASSETS.flatMap((asset, index) => [
+  { recordId: `cycle-ui-before-${index}`, assetId: asset.assetId, price: price("NOK", BigInt((index + 1) * 1_000_000), 4), observedAt: new Date(testAt), availableAt: new Date(testAt), ingestedAt: new Date(testAt), datasetVersion: FIXTURE_DATASET_VERSION },
+  { recordId: `cycle-ui-rise-${index}`, assetId: asset.assetId, price: price("NOK", BigInt((index + 1) * 2_000_000), 4), observedAt: new Date(cycleAt), availableAt: new Date(cycleAt), ingestedAt: new Date(cycleAt), datasetVersion: FIXTURE_DATASET_VERSION },
+]));
+const cycleCard = projectStandingPaperStatusCard({
+  policy: cyclePolicy, state: cycleResult.persistentState,
+  run: { id: "cycle-ui-run", createdAt: cycleAt, result: cycleResult, valuation: { navMinor: cycleResult.endingState.nav, asOf: cycleResult.endingState.asOf, complete: cycleResult.endingState.valuationStatus === "COMPLETE" } },
+});
+const cycleModel = projectStandingPaperStatusReadModel([cycleCard]);
 const incompleteModel = projectStandingPaperStatusReadModel([incompleteCard]);
 const response = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("standing paper status view", () => {
+  it("validates and renders backend-projected v2 BUY, SELL, turnover, and realized result", () => {
+    expect(parseStandingPaperStatus(cycleModel)).toEqual(cycleModel);
+    const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: cycleModel }} />);
+    expect(html).toContain("SELL");
+    expect(html).toContain("Kumulativ handelsomsetning");
+    expect(html).toContain("realisert resultat");
+  });
+
   it("requests the private endpoint with no-store and validates the returned model", async () => {
     const fetcher = vi.fn(async () => response(200, model));
     expect(await loadStandingPaperStatus(fetcher)).toEqual({ kind: "DATA", model });
