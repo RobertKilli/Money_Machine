@@ -604,10 +604,24 @@ export class StandingPaperPolicyRepository {
       if (policy.financialAccountId !== rows[0].financial_account_id || policy.status !== rows[0].status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
       if (baseSnapshot.config.financialAccountId && baseSnapshot.config.financialAccountId !== policy.financialAccountId) throw new Error("PAPER_ACCOUNT_MISMATCH");
       if (seed && seed.amountMinor && BigInt(seed.amountMinor) > policy.capitalBudgetMinor) throw new Error("PAPER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
+      let seedAlreadyPosted = false;
+      if (seed) {
+        // The policy row lock serializes this binding check with seed creation
+        // and all rounds for the policy, including replay of a later round.
+        const seedRows = await tx<{ input_hash: string }[]>`
+          select input_hash from public.standing_paper_contributions
+          where financial_account_id = ${policy.financialAccountId} and policy_id = ${policyId} and event_id = ${seed.eventId}
+        `;
+        if (seedRows[0]) {
+          if (seedRows[0].input_hash !== sha256(seed)) throw new Error("PAPER_INITIAL_CAPITAL_CONFLICT");
+          seedAlreadyPosted = true;
+        }
+      }
       const existing = await tx<{ input_hash: string; result_json: unknown }[]>`select input_hash, result_json from public.standing_paper_runs where financial_account_id = ${policy.financialAccountId} and policy_id = ${policyId} and idempotency_key = ${idempotencyKey}`;
       if (existing[0]) {
         const saved = decode(typeof existing[0].result_json === "string" ? JSON.parse(existing[0].result_json) : existing[0].result_json) as BacktestResult;
         const savedSeedApplied = Boolean(seed && saved.config.contributionEvents.some(event => event.eventId === seed.eventId));
+        if (seed && !seedAlreadyPosted) throw new Error("PAPER_INITIAL_CAPITAL_BINDING_MISSING");
         const replaySnapshot = savedSeedApplied && seed
           ? { ...baseSnapshot, config: { ...baseSnapshot.config, contributionEvents: [...baseSnapshot.config.contributionEvents, seed] } }
           : baseSnapshot;
@@ -629,16 +643,8 @@ export class StandingPaperPolicyRepository {
       const stateRows = await tx<{ state_json: unknown; last_run_id: string | null }[]>`select state_json, last_run_id from public.standing_paper_policies where policy_id = ${policyId}`;
       const initial = parseState(stateRows[0]!.state_json, policy.financialAccountId);
       await this.assertLedgerCheckpointMatches(tx, policy.financialAccountId, initial, stateRows[0]!.last_run_id);
-      let seedAlreadyPosted = false;
       if (seed) {
-        const seedRows = await tx<{ input_hash: string }[]>`
-          select input_hash from public.standing_paper_contributions
-          where financial_account_id = ${policy.financialAccountId} and policy_id = ${policyId} and event_id = ${seed.eventId}
-        `;
-        if (seedRows[0]) {
-          if (seedRows[0].input_hash !== sha256(seed)) throw new Error("PAPER_INITIAL_CAPITAL_CONFLICT");
-          seedAlreadyPosted = true;
-        } else if (stateRows[0]!.last_run_id !== null || initial.lastProcessedAt !== null || initial.ledger.length !== 0 || initial.acquisitions.length !== 0 || initial.netContributionsMinor !== 0n || initial.committedCapitalMinor !== 0n) {
+        if (!seedAlreadyPosted && (stateRows[0]!.last_run_id !== null || initial.lastProcessedAt !== null || initial.ledger.length !== 0 || initial.acquisitions.length !== 0 || initial.netContributionsMinor !== 0n || initial.committedCapitalMinor !== 0n)) {
           throw new Error("PAPER_INITIAL_CAPITAL_REQUIRES_EMPTY_CHECKPOINT");
         }
       }
