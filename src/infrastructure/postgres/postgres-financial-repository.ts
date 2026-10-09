@@ -235,7 +235,8 @@ export class PostgresFinancialRepository implements FinancialRepository {
   private readonly client: Sql;
   private readonly connectionString: string;
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, connectionOptions: { readonly ssl?: "require" | false } = {}) {
+    if (connectionOptions.ssl === false && process.env.NODE_ENV !== "test") throw new Error("POSTGRES_SSL_REQUIRED");
     this.connectionString = connectionString;
     // Supabase's shared Session Pooler is IPv4-backed. In this environment,
     // postgres.js hostname sockets can stall during family selection even
@@ -245,7 +246,7 @@ export class PostgresFinancialRepository implements FinancialRepository {
     const options = {
       max: 5,
       prepare: true,
-      ssl: "require" as const,
+      ssl: connectionOptions.ssl ?? "require",
       socket: ({ host, port }: { host: string[]; port: number[] }) => {
         const hostname = host[0];
         const portNumber = port[0];
@@ -303,6 +304,43 @@ export class PostgresFinancialRepository implements FinancialRepository {
       `;
       if (!existing[0]) throw new Error("Default simulation FinancialAccount could not be provisioned");
       return mapFinancialAccount(existing[0]);
+    });
+  }
+
+  /**
+   * Creates (or returns) the owner's currently unused dedicated PAPER/NOK
+   * account. A transaction advisory lock makes repeated/concurrent requests
+   * converge on one empty account without requiring a schema change. The
+   * database trigger creates only the account's empty ledger taxonomy; this
+   * command never records a ledger transaction or contribution.
+   */
+  async createOwnedPaperAccount(ownerId: string): Promise<FinancialAccount> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(ownerId)) {
+      throw new Error("FINANCIAL_ACCOUNT_OWNER_INVALID");
+    }
+    return this.client.begin(async sql => {
+      await sql`set transaction isolation level read committed`;
+      await sql`select pg_advisory_xact_lock(hashtextextended(${'standing-paper-account:' + ownerId}, 0))`;
+      await sql`insert into public.profiles (id) values (${ownerId}) on conflict (id) do nothing`;
+
+      const existing = await sql<DatabaseFinancialAccount[]>`
+        select a.id, a.owner_id, a.base_currency_code, a.mode, a.status
+        from public.financial_accounts a
+        where a.owner_id = ${ownerId} and a.mode = 'PAPER' and a.status = 'ACTIVE' and a.base_currency_code = 'NOK'
+          and not exists (select 1 from public.ledger_transactions lt where lt.financial_account_id = a.id)
+          and not exists (select 1 from public.standing_paper_policies p where p.financial_account_id = a.id)
+        order by a.id
+        limit 1
+      `;
+      if (existing[0]) return mapFinancialAccount(existing[0]);
+
+      const created = await sql<DatabaseFinancialAccount[]>`
+        insert into public.financial_accounts (owner_id, base_currency_code, mode, status)
+        values (${ownerId}, 'NOK', 'PAPER', 'ACTIVE')
+        returning id, owner_id, base_currency_code, mode, status
+      `;
+      if (!created[0]) throw new Error("FINANCIAL_ACCOUNT_CREATE_FAILED");
+      return mapFinancialAccount(created[0]);
     });
   }
 

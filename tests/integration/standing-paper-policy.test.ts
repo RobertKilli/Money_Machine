@@ -8,6 +8,7 @@ import { price } from "@/domain/financial/price";
 import { standingPaperActivationConfirmationHash, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
+import { PostgresFinancialRepository } from "@/infrastructure/postgres/postgres-financial-repository";
 import { StandingPaperWorker } from "@/application/paper-trading/run-standing-paper-worker";
 
 const enabled = process.env.MONEY_MACHINE_INTEGRATION_TEST === "1";
@@ -32,11 +33,12 @@ const config = (eventId: string, availableAt: string, amountMinor = "100000"): O
 describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", () => {
   let sql: Sql;
   const repositories: StandingPaperPolicyRepository[] = [];
+  const accountRepositories: PostgresFinancialRepository[] = [];
   beforeAll(async () => {
     assertTaskOwnedLocalDatabase(testUrl);
     sql = postgres(testUrl, { max: 8, prepare: true });
   });
-  afterAll(async () => { await Promise.all(repositories.map(repository => repository.close())); await sql?.end({ timeout: 5 }); });
+  afterAll(async () => { await Promise.all([...repositories, ...accountRepositories].map(repository => repository.close())); await sql?.end({ timeout: 5 }); });
   async function account() {
     const owner = randomUUID(); const financialAccountId = randomUUID();
     await sql`insert into auth.users (id) values (${owner})`;
@@ -84,6 +86,27 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
       (select count(*)::text from public.audit_events where financial_account_id=${accountId}) audits`;
     return rows[0]!;
   }
+
+  it("creates one owned empty PAPER/NOK account under concurrent requests without deposits or policy writes", async () => {
+    const ownerId = randomUUID();
+    await sql`insert into auth.users (id) values (${ownerId})`;
+    const first = new PostgresFinancialRepository(testUrl!, { ssl: false }); accountRepositories.push(first);
+    const second = new PostgresFinancialRepository(testUrl!, { ssl: false }); accountRepositories.push(second);
+    const [left, right] = await Promise.all([first.createOwnedPaperAccount(ownerId), second.createOwnedPaperAccount(ownerId)]);
+    expect(left).toEqual(right);
+    expect(left).toMatchObject({ ownerId, mode: "PAPER", baseCurrencyCode: "NOK", status: "ACTIVE" });
+    const persisted = await sql<{ owner_id: string; mode: string; base_currency_code: string; status: string; ledger_accounts: string; ledger_transactions: string; policies: string }[]>`
+      select a.owner_id, a.mode, a.base_currency_code, a.status,
+        (select count(*)::text from public.ledger_accounts la where la.financial_account_id=a.id) ledger_accounts,
+        (select count(*)::text from public.ledger_transactions lt where lt.financial_account_id=a.id) ledger_transactions,
+        (select count(*)::text from public.standing_paper_policies p where p.financial_account_id=a.id) policies
+      from public.financial_accounts a where a.id=${left.id}
+    `;
+    expect(persisted).toEqual([{ owner_id: ownerId, mode: "PAPER", base_currency_code: "NOK", status: "ACTIVE", ledger_accounts: "2", ledger_transactions: "0", policies: "0" }]);
+    await expect(first.createOwnedPaperAccount("123e4567-e89b-42d3-a456-426614174099")).rejects.toThrow();
+    const accountCount = await sql<{ count: string }[]>`select count(*)::text as count from public.financial_accounts where owner_id=${ownerId} and mode='PAPER'`;
+    expect(accountCount[0]!.count).toBe("1");
+  });
 
   it("continues one account across runner instances; replay and concurrent budget use stay idempotent", async () => {
     const f = await setup("continue", 110_000n);

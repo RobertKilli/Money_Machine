@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FIXTURE_ASSETS } from "@/domain/strategy/fixture-assets";
+import { requestPaperAccount } from "@/components/paper-account-creation";
 
 type EmptyPaperAccount = { financialAccountId: string };
 type AccountState = { kind: "LOADING" } | { kind: "READY"; accounts: readonly EmptyPaperAccount[] } | { kind: "ERROR" };
@@ -40,12 +41,14 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
   const [maxLossNok, setMaxLossNok] = useState("250");
   const [maxPriceAgeMinutes, setMaxPriceAgeMinutes] = useState(60);
   const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const refreshAccounts = async () => {
+  const refreshAccounts = async (): Promise<AccountState> => {
     const next = await readAccounts();
     setAccountState(next);
     if (next.kind === "READY" && !next.accounts.some(account => account.financialAccountId === accountId)) setAccountId(next.accounts[0]?.financialAccountId ?? "");
+    return next;
   };
   useEffect(() => {
     let mounted = true;
@@ -57,9 +60,34 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
     return () => { mounted = false; };
   }, []);
 
+  async function createAccount() {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    setMessage(null);
+    try {
+      const createdId = await requestPaperAccount();
+      const refreshed = await refreshAccounts();
+      if (refreshed.kind !== "READY" || !refreshed.accounts.some(account => account.financialAccountId === createdId)) {
+        setMessage("PAPER-kontoen ble opprettet, men kontolisten kunne ikke bekreftes. Last inn siden på nytt.");
+        return;
+      }
+      setAccountId(createdId);
+      setMessage("Tom PAPER/NOK-konto opprettet. Ingen innskudd eller ledgerposteringer er lagt til. Velg grensene og opprett et DRAFT-utkast.");
+    } catch (error) {
+      setMessage(error instanceof Error && error.message === "CSRF_REJECTED"
+        ? "Forespørselen ble avvist. Oppdater siden og prøv igjen."
+        : "PAPER-kontoen kunne ikke opprettes. Ingen innskudd ble lagt til.");
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }
+
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending) return;
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setPending(true);
     setMessage(null);
     try {
@@ -78,7 +106,7 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
       await refreshAccounts();
       await onCreated();
     } catch { setMessage("Policyutkastet kunne ikke bekreftes. Oppdater status før du prøver igjen."); }
-    finally { setPending(false); }
+    finally { pendingRef.current = false; setPending(false); }
   }
 
   const accounts = accountState.kind === "READY" ? accountState.accounts : [];
@@ -91,7 +119,7 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
     </header>
     {accountState.kind === "LOADING" ? <p role="status" className="text-sm text-[var(--muted)]">Henter ledige, eieravgrensede PAPER-kontoer …</p>
       : accountState.kind === "ERROR" ? <p role="status" className="text-sm text-rose-200">Kontolisten kunne ikke leses. Ingen konto er endret.</p>
-        : accounts.length === 0 ? <p role="status" className="rounded-xl border border-[var(--border)] p-4 text-sm text-[var(--muted)]">Ingen tom, ledig PAPER-konto i NOK er tilgjengelig. Denne siden oppretter ikke kontoer.</p>
+        : accounts.length === 0 ? <PaperAccountEmptyState pending={pending} message={message} onCreate={() => void createAccount()} />
           : <form onSubmit={event => void submit(event)} className="grid gap-5">
             <label className="grid gap-2 text-sm font-medium">Dedikert PAPER-konto
               <select required value={accountId} onChange={event => setAccountId(event.target.value)} className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[var(--foreground)]">
@@ -130,6 +158,14 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
             </div>
           </form>}
   </section>;
+}
+
+export function PaperAccountEmptyState({ pending, message, onCreate }: { pending: boolean; message: string | null; onCreate: () => void }) {
+  return <div className="grid justify-items-start gap-3 rounded-xl border border-[var(--border)] p-4">
+    <p role="status" className="text-sm text-[var(--muted)]">Ingen tom, ledig PAPER-konto i NOK er tilgjengelig. Opprett en dedikert PAPER-konto for å fortsette.</p>
+    <button type="button" onClick={onCreate} disabled={pending} className="min-h-11 rounded-lg border border-[var(--accent)] px-5 py-2 text-sm font-semibold text-[var(--accent)] disabled:cursor-wait disabled:opacity-60">{pending ? "Oppretter konto …" : "Opprett PAPER-konto"}</button>
+    {message && <p role="status" className="max-w-2xl text-sm text-[var(--muted)]">{message}</p>}
+  </div>;
 }
 
 function AmountField({ label, value, setValue }: { label: string; value: string; setValue: (value: string) => void }) {

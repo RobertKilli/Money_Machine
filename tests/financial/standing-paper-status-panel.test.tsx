@@ -6,7 +6,7 @@ import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { price } from "@/domain/financial/price";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION } from "@/domain/strategy/fixture-assets";
 import { isStandingPaperActivationConfirmed, loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
-import { StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
+import { PaperAccountEmptyState, StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
 
 const testPolicy: StandingPaperPolicy = {
   policyId: "paper-policy-test", identity: "synthetic-test-account", version: "standing-paper-policy/v1", mode: "PAPER_ONLY", status: "ACTIVE",
@@ -62,6 +62,17 @@ describe("standing paper status view", () => {
     expect(draftHtml).toContain("Gjennomgå og aktiver");
     expect(draftHtml).toContain("Policy: Draft");
     expect(draftHtml).toContain("Syntetiske priser");
+  });
+
+  it("renders a keyboard-operable PAPER account creation action for the empty state", () => {
+    const html = renderToStaticMarkup(<PaperAccountEmptyState pending={false} message={null} onCreate={() => undefined} />);
+    expect(html).toContain("Ingen tom, ledig PAPER-konto i NOK");
+    expect(html).toContain('type="button"');
+    expect(html).toContain("Opprett PAPER-konto");
+    expect(html).not.toContain("LIVE");
+    const pendingHtml = renderToStaticMarkup(<PaperAccountEmptyState pending message="Oppretter" onCreate={() => undefined} />);
+    expect(pendingHtml).toContain("disabled");
+    expect(pendingHtml).toContain("Oppretter konto");
   });
 
   it("drops the interactive activation confirmation when the reviewed policy hash changes", () => {

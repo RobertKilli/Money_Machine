@@ -1,6 +1,8 @@
 # Dashboard setup for a standing PAPER_ONLY policy
 
-The dashboard can create a versioned `standing-paper-policy/v1` policy for an existing, owner-authorized, active PAPER account denominated in NOK. The account must have no ledger postings and no other standing paper policy. The dashboard never creates an account.
+The dashboard can create a dedicated PAPER/NOK account from its empty state, then create a versioned `standing-paper-policy/v1` policy for that account. Account creation derives the owner from the authenticated server session; the request body accepts no owner, mode, currency, deposit, or ledger fields. A transaction-scoped advisory lock keyed by owner serializes duplicate requests across processes. A repeat finds and returns the same eligible empty PAPER/NOK account. The database creates its two empty ledger-account taxonomy rows through the existing account trigger, but account creation writes no ledger transaction, ledger entry, deposit, policy, or worker state. There is no schema change.
+
+The policy command checks ownership, active status, PAPER mode, NOK currency, ledger emptiness, and absence of another policy while holding the account row lock. Concurrent attempts for the same account cannot create duplicate policy drafts. No virtual contribution, order, or fill is created.
 
 Creation stores a `DRAFT` policy and one `INITIALIZE` transition in a transaction. The repository locks the account row, then checks ownership, status, mode, currency, ledger emptiness, and existing policy before inserting either row. Concurrent requests for the same account serialize on that account lock; only the first can create a draft. No virtual contribution, order, fill, or worker is started.
 
