@@ -61,6 +61,16 @@ describe("owner-bound standing paper transition route", () => {
     expect(mocks.transitionOwned).toHaveBeenCalledWith("owner-1", policyId, "STOP", "ACTIVE");
   });
 
+  it("rejects non-string and unknown actions before repository access", async () => {
+    for (const action of [["STOP"], {}, null, "ACTIVATE", "DELETE"]) {
+      const response = await POST(request({ action, expectedStatus: "ACTIVE" }), context);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "INVALID_REQUEST" });
+    }
+    expect(mocks.getRepository).not.toHaveBeenCalled();
+    expect(mocks.transitionOwned).not.toHaveBeenCalled();
+  });
+
   it("maps ownership and stale-status failures without exposing private data", async () => {
     mocks.transitionOwned.mockRejectedValueOnce(new Error("PAPER_POLICY_NOT_FOUND"));
     const hidden = await POST(request({ action: "PAUSE", expectedStatus: "ACTIVE" }), context);

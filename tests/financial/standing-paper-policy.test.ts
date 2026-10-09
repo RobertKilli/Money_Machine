@@ -70,6 +70,12 @@ describe("standing PAPER_ONLY risk policy", () => {
     expect(() => transitionPaperPolicy(transitionPaperPolicy(policy, "STOP"), "ACTIVATE")).toThrow("PAPER_POLICY_TRANSITION_INVALID");
   });
 
+  it("rejects unknown domain transition actions instead of mapping them to STOPPED", () => {
+    for (const action of [["STOP"], {}, null, "RESUME", "UNKNOWN"]) {
+      expect(() => transitionPaperPolicy(policy, action as never)).toThrow("PAPER_POLICY_ACTION_INVALID");
+    }
+  });
+
   it("binds open-order reservations against cash and total budget", () => {
     const reserved = assessStandingPaperPolicy({ ...policy, capitalBudgetMinor: 5_000n }, order, context({ openOrderReservationsMinor: [4_500n], prospectiveOrderDebitMinor: 1_000n }));
     expect(reserved.reservedOpenOrdersMinor).toBe("4500");

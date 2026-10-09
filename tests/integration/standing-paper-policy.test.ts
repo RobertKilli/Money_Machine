@@ -234,6 +234,15 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
 
   it("enforces policy ownership, expected status, and one transition under double-click concurrency", async () => {
     const f = await setup("dashboard-transition-idempotency");
+    const transitionCount = async () => (await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_policy_transitions where policy_id=${f.policy.policyId}`)[0]!.count;
+    const beforeInvalidActions = await transitionCount();
+    for (const action of [["STOP"], {}, null, "UNKNOWN"]) {
+      await expect(f.repository.transitionOwned(f.ownerId, f.policy.policyId, action as never, "ACTIVE")).rejects.toThrow("PAPER_POLICY_ACTION_INVALID");
+      await expect(f.repository.transition(f.policy.policyId, action as never)).rejects.toThrow("PAPER_POLICY_ACTION_INVALID");
+    }
+    expect(await f.repository.getPolicy(f.policy.policyId)).toMatchObject({ status: "ACTIVE" });
+    expect(await transitionCount()).toBe(beforeInvalidActions);
+
     await expect(f.repository.transitionOwned(randomUUID(), f.policy.policyId, "PAUSE", "ACTIVE")).rejects.toThrow("PAPER_POLICY_NOT_FOUND");
     await expect(f.repository.transitionOwned(f.ownerId, f.policy.policyId, "RESUME", "ACTIVE")).rejects.toThrow("PAPER_POLICY_TRANSITION_INVALID");
     const attempts = await Promise.allSettled([

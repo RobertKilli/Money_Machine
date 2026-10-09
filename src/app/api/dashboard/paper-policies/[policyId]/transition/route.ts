@@ -4,6 +4,12 @@ import { getStandingPaperStatusRepository } from "@/infrastructure/postgres/stan
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "private, no-store, max-age=0", Pragma: "no-cache", Vary: "Cookie" };
 const statuses = ["DRAFT", "ACTIVE", "PAUSED", "STOPPED"] as const;
+const actions = ["PAUSE", "RESUME", "STOP"] as const;
+type DashboardTransitionAction = typeof actions[number];
+
+function isDashboardTransitionAction(value: unknown): value is DashboardTransitionAction {
+  return typeof value === "string" && (actions as readonly string[]).includes(value);
+}
 
 function sameOriginRequest(request: Request): boolean {
   const origin = request.headers.get("origin");
@@ -31,20 +37,21 @@ export async function POST(request: Request, context: { params: Promise<{ policy
   } catch { return Response.json({ error: "INVALID_REQUEST" }, { status: 400, headers }); }
 
   const { policyId } = await context.params;
+  const action = body.action;
   if (!policyId.trim() || policyId.length > 160 || Object.keys(body).some(key => !["action", "expectedStatus", "confirmStop"].includes(key)) ||
-    !["PAUSE", "RESUME", "STOP"].includes(String(body.action)) || !statuses.includes(body.expectedStatus as typeof statuses[number]) ||
-    (body.action === "STOP" ? body.confirmStop !== true : body.confirmStop !== undefined && body.confirmStop !== false)) {
+    !isDashboardTransitionAction(action) || !statuses.includes(body.expectedStatus as typeof statuses[number]) ||
+    (action === "STOP" ? body.confirmStop !== true : body.confirmStop !== undefined && body.confirmStop !== false)) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400, headers });
   }
-  if (body.action === "PAUSE" && body.expectedStatus !== "ACTIVE" || body.action === "RESUME" && body.expectedStatus !== "PAUSED" ||
-    body.action === "STOP" && !["DRAFT", "ACTIVE", "PAUSED"].includes(String(body.expectedStatus))) {
+  if (action === "PAUSE" && body.expectedStatus !== "ACTIVE" || action === "RESUME" && body.expectedStatus !== "PAUSED" ||
+    action === "STOP" && !["DRAFT", "ACTIVE", "PAUSED"].includes(String(body.expectedStatus))) {
     return Response.json({ error: "INVALID_TRANSITION" }, { status: 409, headers });
   }
 
   const repository = getStandingPaperStatusRepository();
   if (!repository) return Response.json({ error: "PAPER_STATUS_UNAVAILABLE" }, { status: 503, headers });
   try {
-    const policy = await repository.transitionOwned(user.id, policyId, body.action as "PAUSE" | "RESUME" | "STOP", body.expectedStatus as typeof statuses[number]);
+    const policy = await repository.transitionOwned(user.id, policyId, action, body.expectedStatus as typeof statuses[number]);
     return Response.json({ policyId: policy.policyId, status: policy.status }, { headers });
   } catch (error) {
     const code = error instanceof Error ? error.message : "";

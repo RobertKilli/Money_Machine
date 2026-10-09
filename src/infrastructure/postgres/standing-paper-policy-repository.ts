@@ -3,7 +3,7 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
-import { assertValidPaperPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import type { FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill } from "@/application/paper-trading/standing-paper-status";
 
@@ -318,6 +318,7 @@ export class StandingPaperPolicyRepository {
   }
 
   async transition(policyId: string, action: "ACTIVATE" | "PAUSE" | "STOP"): Promise<StandingPaperPolicy> {
+    assertStandingPaperPolicyTransitionAction(action);
     return this.transitionTransaction(null, policyId, action);
   }
 
@@ -330,6 +331,7 @@ export class StandingPaperPolicyRepository {
     action: "PAUSE" | "RESUME" | "STOP",
     expectedStatus: StandingPaperPolicy["status"],
   ): Promise<StandingPaperPolicy> {
+    if (action !== "PAUSE" && action !== "RESUME" && action !== "STOP") throw new Error("PAPER_POLICY_ACTION_INVALID");
     if (!actorId.trim() || !policyId.trim()) throw new Error("PAPER_POLICY_NOT_FOUND");
     if (action === "PAUSE" && expectedStatus !== "ACTIVE" || action === "RESUME" && expectedStatus !== "PAUSED" ||
       action === "STOP" && !["DRAFT", "ACTIVE", "PAUSED"].includes(expectedStatus)) throw new Error("PAPER_POLICY_TRANSITION_INVALID");
