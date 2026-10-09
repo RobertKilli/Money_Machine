@@ -8,6 +8,10 @@ import { StandingPaperPolicySetupPanel } from "@/components/standing-paper-polic
 export type PaperStatusPanelState = { readonly kind: "LOADING" } | { readonly kind: "FORBIDDEN" } | { readonly kind: "READ_ERROR" } | { readonly kind: "DATA"; readonly model: StandingPaperStatusReadModel };
 type Fetcher = (input: string, init: RequestInit) => Promise<Response>;
 
+export function isStandingPaperActivationConfirmed(confirmedHash: string | null, currentHash: string | null): boolean {
+  return currentHash !== null && confirmedHash === currentHash;
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const isText = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 const isAmount = (value: unknown): value is string => typeof value === "string" && /^-?\d+$/.test(value);
@@ -106,10 +110,11 @@ const titleCase = (value: string) => value.replaceAll("_", " ").toLocaleLowerCas
 
 function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; onRefresh?: () => Promise<void> }) {
   const [reviewing, setReviewing] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmedHash, setConfirmedHash] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   if (card.policyStatus !== "DRAFT" || !card.activationConfirmationHash) return null;
+  const confirmed = isStandingPaperActivationConfirmed(confirmedHash, card.activationConfirmationHash);
   async function activate() {
     if (!confirmed || pending) return;
     setPending(true);
@@ -127,7 +132,7 @@ function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolic
         return;
       }
       setReviewing(false);
-      setConfirmed(false);
+      setConfirmedHash(null);
       await onRefresh?.();
     } catch {
       setMessage("Aktivering kunne ikke bekreftes. Oppdater status.");
@@ -148,8 +153,8 @@ function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolic
       </dl>
       <p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p>
       <p className="mt-3 rounded-lg bg-amber-400/5 p-3 text-sm">Kun PAPER_ONLY. Prisene er syntetiske, og fills simuleres. Dette er ikke børsutførelse.</p>
-      <label className="mt-4 flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} className="mt-1" /><span>Jeg har gjennomgått og godkjenner grensene ovenfor.</span></label>
-      <div className="mt-4 flex flex-wrap gap-2"><button type="button" disabled={!confirmed || pending} onClick={() => void activate()} className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">{pending ? "Aktiverer …" : "Bekreft aktivering"}</button><button type="button" disabled={pending} onClick={() => { setReviewing(false); setConfirmed(false); }} className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm">Avbryt</button></div>
+      <label className="mt-4 flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmedHash(event.target.checked ? card.activationConfirmationHash : null)} className="mt-1" /><span>Jeg har gjennomgått og godkjenner grensene ovenfor.</span></label>
+      <div className="mt-4 flex flex-wrap gap-2"><button type="button" disabled={!confirmed || pending} onClick={() => void activate()} className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">{pending ? "Aktiverer …" : "Bekreft aktivering"}</button><button type="button" disabled={pending} onClick={() => { setReviewing(false); setConfirmedHash(null); }} className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm">Avbryt</button></div>
     </>}
     {message && <p role="status" className="mt-3 text-sm text-amber-100">{message}</p>}
   </div>;

@@ -5,7 +5,7 @@ import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel } f
 import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { price } from "@/domain/financial/price";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION } from "@/domain/strategy/fixture-assets";
-import { loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
+import { isStandingPaperActivationConfirmed, loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
 import { StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
 
 const testPolicy: StandingPaperPolicy = {
@@ -62,6 +62,14 @@ describe("standing paper status view", () => {
     expect(draftHtml).toContain("Gjennomgå og aktiver");
     expect(draftHtml).toContain("Policy: Draft");
     expect(draftHtml).toContain("Syntetiske priser");
+  });
+
+  it("drops the interactive activation confirmation when the reviewed policy hash changes", () => {
+    const first = "a".repeat(64);
+    const changed = "b".repeat(64);
+    expect(isStandingPaperActivationConfirmed(first, first)).toBe(true);
+    expect(isStandingPaperActivationConfirmed(first, changed)).toBe(false);
+    expect(isStandingPaperActivationConfirmed(first, null)).toBe(false);
   });
 
   it("loads and renders backend-projected incomplete valuations alone and alongside available policies", async () => {

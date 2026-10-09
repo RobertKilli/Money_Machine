@@ -122,6 +122,7 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
                 </select>
               </label>
             </div>
+            <p className="text-xs text-[var(--muted)]">NOK med opptil to desimaler. Kapitalbudsjettet må være 100–1 000 000 NOK. Maks ordre ≤ maks posisjon ≤ samlet eksponering ≤ kapitalbudsjett; tapsgrensen kan ikke overstige budsjettet.</p>
             <p className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-50">Alle priser er syntetiske fixture-data. Eventuelle fills blir simulerte, fullførte antakelser og er ikke børsutførelser.</p>
             <div className="flex flex-wrap items-center gap-3">
               <button type="submit" disabled={pending || !accountId || instruments.length === 0} className="min-h-11 rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-black disabled:cursor-wait disabled:opacity-60">{pending ? "Oppretter …" : "Opprett DRAFT-utkast"}</button>
@@ -134,6 +135,6 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
 function AmountField({ label, value, setValue }: { label: string; value: string; setValue: (value: string) => void }) {
   return <label className="grid gap-2 text-sm font-medium">{label}
     <input required type="text" inputMode="decimal" value={value} onChange={event => setValue(event.target.value)} pattern="(?:0|[1-9][0-9]{0,6})(?:\.[0-9]{1,2})?" className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[var(--foreground)]" />
-    <span className="text-xs font-normal text-[var(--muted)]">NOK med opptil to desimaler. Kapitalbudsjett: 100–1 000 000 NOK. Maks ordre ≤ posisjon ≤ samlet eksponering ≤ budsjett; tapsgrense kan ikke overstige budsjettet.</span>
+    <span className="text-xs font-normal text-[var(--muted)]">NOK med opptil to desimaler, maks 1 000 000 NOK.</span>
   </label>;
 }
