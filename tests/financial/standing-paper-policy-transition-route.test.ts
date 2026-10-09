@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ getCurrentUser: vi.fn(), getRepository: vi.fn(), transitionOwned: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getCurrentUser: vi.fn(), getRepository: vi.fn(), transitionOwned: vi.fn(), activateOwnedDraft: vi.fn() }));
 vi.mock("@/lib/auth/current-user", () => ({ getCurrentUser: mocks.getCurrentUser }));
 vi.mock("@/infrastructure/postgres/standing-paper-policy-repository", () => ({ getStandingPaperStatusRepository: mocks.getRepository }));
 import { POST } from "@/app/api/dashboard/paper-policies/[policyId]/transition/route";
@@ -23,7 +23,8 @@ describe("owner-bound standing paper transition route", () => {
   beforeEach(() => {
     mocks.getCurrentUser.mockReset().mockResolvedValue({ id: "owner-1" });
     mocks.transitionOwned.mockReset().mockImplementation(async (_owner: string, id: string, action: string) => ({ policyId: id, status: action === "PAUSE" ? "PAUSED" : action === "RESUME" ? "ACTIVE" : "STOPPED" }));
-    mocks.getRepository.mockReset().mockReturnValue({ transitionOwned: mocks.transitionOwned });
+    mocks.activateOwnedDraft.mockReset().mockImplementation(async (_owner: string, id: string) => ({ policyId: id, status: "ACTIVE" }));
+    mocks.getRepository.mockReset().mockReturnValue({ transitionOwned: mocks.transitionOwned, activateOwnedDraft: mocks.activateOwnedDraft });
   });
 
   it("rejects unauthenticated requests before acquiring the repository", async () => {
@@ -69,6 +70,17 @@ describe("owner-bound standing paper transition route", () => {
     }
     expect(mocks.getRepository).not.toHaveBeenCalled();
     expect(mocks.transitionOwned).not.toHaveBeenCalled();
+  });
+
+  it("requires a reviewed DRAFT hash for explicit first activation", async () => {
+    const hash = "a".repeat(64);
+    expect((await POST(request({ action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true }), context)).status).toBe(400);
+    expect((await POST(request({ action: "ACTIVATE", expectedStatus: "ACTIVE", confirmActivation: true, activationConfirmationHash: hash }), context)).status).toBe(409);
+    expect(mocks.getRepository).not.toHaveBeenCalled();
+    const response = await POST(request({ action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true, activationConfirmationHash: hash }), context);
+    expect(response.status).toBe(200);
+    expect(mocks.activateOwnedDraft).toHaveBeenCalledWith("owner-1", policyId, hash);
+    expect(await response.json()).toEqual({ policyId, status: "ACTIVE" });
   });
 
   it("maps ownership and stale-status failures without exposing private data", async () => {

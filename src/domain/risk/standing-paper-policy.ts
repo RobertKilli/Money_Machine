@@ -91,6 +91,26 @@ export function assertValidPaperPolicy(policy: StandingPaperPolicy): void {
     !Number.isSafeInteger(policy.maxPriceAgeMs) || policy.maxPriceAgeMs <= 0) throw new Error("PAPER_POLICY_INVALID");
 }
 
+/** Hashes the exact DRAFT terms the owner sees before first activation. */
+export function standingPaperActivationConfirmationHash(policy: StandingPaperPolicy): string {
+  assertValidPaperPolicy(policy);
+  return createHash("sha256").update(JSON.stringify({
+    policyId: policy.policyId,
+    version: policy.version,
+    identity: policy.identity,
+    mode: policy.mode,
+    status: policy.status,
+    financialAccountId: policy.financialAccountId,
+    allowedInstrumentIds: [...policy.allowedInstrumentIds].sort(),
+    capitalBudgetMinor: policy.capitalBudgetMinor.toString(),
+    maxOrderMinor: policy.maxOrderMinor.toString(),
+    maxPositionMinor: policy.maxPositionMinor.toString(),
+    maxGrossExposureMinor: policy.maxGrossExposureMinor.toString(),
+    maxLossMinor: policy.maxLossMinor.toString(),
+    maxPriceAgeMs: policy.maxPriceAgeMs,
+  })).digest("hex");
+}
+
 export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: ProposedOrder, context: PaperPolicyContext): PaperPolicyEvidence {
   assertValidPaperPolicy(policy);
   if (!Number.isFinite(context.now.getTime()) || context.openOrderReservationsMinor.some((value) => value < 0n) || context.committedCapitalMinor < 0n || context.currentCashMinor < 0n || context.currentPositionMinor < 0n || context.currentGrossExposureMinor < 0n || context.currentLossMinor < 0n || context.prospectiveOrderDebitMinor <= 0n) throw new Error("PAPER_POLICY_CONTEXT_INVALID");

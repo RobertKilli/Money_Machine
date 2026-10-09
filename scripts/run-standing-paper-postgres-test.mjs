@@ -125,6 +125,8 @@ try {
   console.log(assertions.map(item => `${item.status}: ${item.title}${item.failureMessages?.length ? `\n${item.failureMessages.join("\n")}` : ""}`).join("\n"));
   const cases = [
     "continues one account across runner instances; replay and concurrent budget use stay idempotent",
+    "creates only one DRAFT under concurrent owner requests and requires fresh confirmation to activate",
+    "rejects existing ledger activity and foreign ownership without inserting policy history",
     "rejects a pre-existing account ledger and an external ledger change between rounds",
     "rechecks account eligibility after waiting for the locked account row",
     "rejects malformed checkpoints without writing or resetting loss margin",
