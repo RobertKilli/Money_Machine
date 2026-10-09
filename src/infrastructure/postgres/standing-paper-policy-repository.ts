@@ -46,7 +46,7 @@ const record = (value: unknown): Record<string, unknown> => {
 const signedInteger = (value: unknown): value is string => typeof value === "string" && /^-?\d+$/.test(value);
 const isProcessInstanceUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const invalidCard = (policyId: string): StandingPaperPolicyStatusCard => ({
-  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [],
+  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [], workerInstanceCount: 0, workerInstancesTruncated: false,
   allowedInstrumentIds: [], riskLimits: { capitalBudgetMinor: null, maxOrderMinor: null, maxPositionMinor: null, maxGrossExposureMinor: null, maxLossMinor: null, maxPriceAgeMs: null },
   lastRound: null, netContributionsMinor: null, committedCapitalMinor: null, remainingCapitalBudgetMinor: null,
   portfolioValueMinor: null, portfolioValueAsOf: null, currentLossMinor: null, remainingLossMarginMinor: null,
@@ -239,6 +239,23 @@ export class StandingPaperPolicyRepository {
         id: string; policy_id: string; financial_account_id: string; result_json: unknown; created_at: Date;
       }[]>`select id, policy_id, financial_account_id, result_json, created_at from public.standing_paper_runs where id in ${tx(runIds)}` : [];
       const policyIds = rows.map(row => row.policy_id);
+      // Aggregate every owned policy heartbeat in this repeatable-read snapshot;
+      // the separate ranked query below is intentionally only a detail page.
+      const heartbeatSummaries = await tx<{
+        policy_id: string; instance_count: number; has_running: boolean; has_waiting_paused: boolean;
+        has_waiting_interval: boolean; has_stale: boolean; has_account_mismatch: boolean;
+      }[]>`
+        select h.policy_id, count(*)::int as instance_count,
+          coalesce(bool_or(h.status = 'RUNNING' and h.heartbeat_at >= transaction_timestamp() - interval '90 seconds'), false) as has_running,
+          coalesce(bool_or(h.status = 'WAITING_PAUSED' and h.heartbeat_at >= transaction_timestamp() - interval '90 seconds'), false) as has_waiting_paused,
+          coalesce(bool_or(h.status = 'WAITING_INTERVAL' and h.heartbeat_at >= transaction_timestamp() - interval '90 seconds'), false) as has_waiting_interval,
+          coalesce(bool_or(h.status <> 'ENDED' and h.heartbeat_at < transaction_timestamp() - interval '90 seconds'), false) as has_stale,
+          coalesce(bool_or(h.financial_account_id <> p.financial_account_id), false) as has_account_mismatch
+        from public.standing_paper_worker_heartbeats h
+        join public.standing_paper_policies p on p.policy_id = h.policy_id
+        where h.policy_id in ${tx(policyIds)}
+        group by h.policy_id
+      `;
       const heartbeatRows = await tx<{
         policy_id: string; financial_account_id: string; worker_id: string; process_instance_id: string; status: string; heartbeat_at: Date;
         is_stale: boolean;
@@ -305,9 +322,17 @@ export class StandingPaperPolicyRepository {
             const status: StandingPaperWorkerInstanceStatus = item.is_stale ? "STALE" : item.status as StandingPaperWorkerInstanceStatus;
             return { workerId: item.worker_id, processInstanceId: item.process_instance_id, status, lastHeartbeatAt: validDate(item.heartbeat_at).toISOString() };
           });
+          const summary = heartbeatSummaries.find(item => item.policy_id === row.policy_id);
+          if (summary?.has_account_mismatch) throw new Error("PAPER_WORKER_HEARTBEAT_INVALID");
+          const workerSummary = !summary ? { status: "UNKNOWN" as const, count: 0, truncated: false }
+            : { status: summary.has_running ? "RUNNING" as const
+              : summary.has_waiting_paused ? "WAITING_PAUSED" as const
+                : summary.has_waiting_interval ? "WAITING_INTERVAL" as const
+                  : summary.has_stale ? "STALE" as const : "ENDED" as const,
+              count: summary.instance_count, truncated: summary.instance_count > 20 };
           cards.push(projectStandingPaperStatusCard({
             policy, state, run: run && valuation ? { id: run.id, createdAt: validDate(run.created_at).toISOString(), result: result as BacktestResult, valuation } : null,
-            decisions, fills, workers,
+            decisions, fills, workers, workerSummary,
           }));
         } catch {
           cards.push(invalidCard(row.policy_id));

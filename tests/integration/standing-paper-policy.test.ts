@@ -419,6 +419,34 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(otherStatus).toMatchObject({ status: "NO_ROUNDS", policies: [{ policyId: other.policy.policyId, workerInstances: [] }] });
   });
 
+  it("summarizes all owned heartbeat instances while returning a capped detail list", async () => {
+    const f = await setup("heartbeat-summary-unbounded");
+    for (let i = 0; i < 20; i += 1) {
+      const instanceId = randomUUID();
+      const workerId = `ended-${String(i).padStart(2, "0")}`;
+      await f.repository.startWorkerHeartbeat(f.policy.policyId, workerId, instanceId);
+      await f.repository.endWorkerHeartbeat(f.policy.policyId, workerId, instanceId, "COMPLETED");
+    }
+    const liveInstance = randomUUID();
+    await f.repository.startWorkerHeartbeat(f.policy.policyId, "still-live", liveInstance);
+    // Make every completed instance newer than the active instance. The latest
+    // 20 detail rows therefore omit the RUNNING row, while the aggregate must not.
+    await sql`update public.standing_paper_worker_heartbeats
+      set heartbeat_at=clock_timestamp() + interval '1 minute', ended_at=clock_timestamp() + interval '1 minute'
+      where policy_id=${f.policy.policyId} and status='ENDED'`;
+
+    const owned = await f.repository.loadOwnedStatus(f.ownerId);
+    const card = owned.policies[0];
+    expect(card).toMatchObject({ workerStatus: "RUNNING", workerInstanceCount: 21, workerInstancesTruncated: true });
+    expect(card?.workerInstances).toHaveLength(20);
+    expect(card?.workerInstances.every(worker => worker.status === "ENDED")).toBe(true);
+    expect(card?.workerInstances.some(worker => worker.processInstanceId === liveInstance)).toBe(false);
+
+    const other = await setup("heartbeat-summary-other-owner");
+    const otherOwnerView = await f.repository.loadOwnedStatus(other.ownerId);
+    expect(otherOwnerView).toMatchObject({ workerStatus: "UNKNOWN", policies: [{ workerStatus: "UNKNOWN", workerInstanceCount: 0, workerInstancesTruncated: false, workerInstances: [] }] });
+  });
+
   it("observes STOPPED as a worker exit state without writing a round", async () => {
     const f = await setup("worker-stop");
     await f.repository.transition(f.policy.policyId, "STOP");

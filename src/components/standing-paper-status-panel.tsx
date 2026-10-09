@@ -27,7 +27,10 @@ function summaryWorkerStatus(workers: readonly Record<string, unknown>[]) {
 
 function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
   if (!isRecord(value) || !cardStatuses.includes(String(value.status)) || !isText(value.policyId) || !policyStatuses.includes(String(value.policyStatus)) ||
-    !Array.isArray(value.workerInstances) || value.workerInstances.length > 20 || !Array.isArray(value.allowedInstrumentIds) || value.allowedInstrumentIds.some(item => !isText(item)) ||
+    !Array.isArray(value.workerInstances) || value.workerInstances.length > 20 || !Number.isSafeInteger(value.workerInstanceCount) || (value.workerInstanceCount as number) < value.workerInstances.length ||
+    typeof value.workerInstancesTruncated !== "boolean" || value.workerInstancesTruncated !== ((value.workerInstanceCount as number) > value.workerInstances.length) ||
+    (value.workerInstancesTruncated && (value.workerInstances.length !== 20 || (value.workerInstanceCount as number) <= 20)) ||
+    !workerInstanceStatuses.concat("UNKNOWN").includes(String(value.workerStatus)) || !Array.isArray(value.allowedInstrumentIds) || value.allowedInstrumentIds.some(item => !isText(item)) ||
     new Set(value.allowedInstrumentIds).size !== value.allowedInstrumentIds.length || !isRecord(value.riskLimits) ||
     !Array.isArray(value.decisions) || value.decisions.length > 20 || !Array.isArray(value.fills) || value.fills.length > 20) return false;
   const processIds = new Set<string>();
@@ -37,12 +40,13 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
     processIds.add(item.processInstanceId);
     return true;
   });
-  if (!workersValid || value.workerStatus !== summaryWorkerStatus(value.workerInstances as Record<string, unknown>[])) return false;
+  if (!workersValid || (!value.workerInstancesTruncated && value.workerStatus !== summaryWorkerStatus(value.workerInstances as Record<string, unknown>[]))) return false;
+  if ((value.workerInstanceCount === 0) !== (value.workerStatus === "UNKNOWN")) return false;
   const limits = value.riskLimits;
   const monetaryLimits = [limits.capitalBudgetMinor, limits.maxOrderMinor, limits.maxPositionMinor, limits.maxGrossExposureMinor, limits.maxLossMinor];
   if (value.status === "INVALID") return value.identity === null && value.version === null && value.policyStatus === "UNKNOWN" && value.mode === "UNKNOWN" &&
     monetaryLimits.every(item => item === null) && limits.maxPriceAgeMs === null && value.allowedInstrumentIds.length === 0 && value.lastRound === null &&
-    value.workerInstances.length === 0 && value.netContributionsMinor === null && value.committedCapitalMinor === null && value.remainingCapitalBudgetMinor === null && value.portfolioValueMinor === null &&
+    value.workerInstances.length === 0 && value.workerInstanceCount === 0 && !value.workerInstancesTruncated && value.netContributionsMinor === null && value.committedCapitalMinor === null && value.remainingCapitalBudgetMinor === null && value.portfolioValueMinor === null &&
     value.portfolioValueAsOf === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null && value.decisions.length === 0 && value.fills.length === 0 &&
     value.issueCode === "PAPER_MATERIAL_INVALID";
   if (!isText(value.identity) || value.version !== "standing-paper-policy/v1" || value.mode !== "PAPER_ONLY" || value.policyStatus === "UNKNOWN" ||
@@ -164,7 +168,7 @@ function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; 
     <PolicyControls card={card} onRefresh={onRefresh} />
     <div className="grid gap-5 lg:grid-cols-2">
       <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Risikogrenser</h3><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2"><Limit label="Maks ordre" value={amount(risk.maxOrderMinor)} /><Limit label="Maks posisjon" value={amount(risk.maxPositionMinor)} /><Limit label="Maks samlet eksponering" value={amount(risk.maxGrossExposureMinor)} /><Limit label="Maks tapsgrense" value={amount(risk.maxLossMinor)} /><Limit label="Maks prisalder" value={risk.maxPriceAgeMs === null ? "Ikke tilgjengelig" : `${risk.maxPriceAgeMs} ms`} /></dl><p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p></section>
-      <section className="rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Policy og worker</h3><dl className="mt-3 grid gap-3 text-sm"><Limit label="Policy-status" value={titleCase(card.policyStatus)} /><Limit label="Worker-status" value={workerLabel(card.workerStatus)} /><Limit label="Modus" value="PAPER_ONLY" /><Limit label="Versjon" value={card.version ?? "Ukjent"} /></dl>{card.workerInstances.length > 0 && <ul className="mt-3 space-y-2 border-t border-[var(--border)] pt-3 text-xs">{card.workerInstances.map(worker => <li key={worker.processInstanceId} className="flex flex-wrap justify-between gap-2"><span>{worker.workerId} · {workerLabel(worker.status)}</span><span className="text-[var(--muted)]">Heartbeat {dateLabel(worker.lastHeartbeatAt)}</span></li>)}</ul>}</section>
+      <section className="rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Policy og worker</h3><dl className="mt-3 grid gap-3 text-sm"><Limit label="Policy-status" value={titleCase(card.policyStatus)} /><Limit label="Worker-status" value={workerLabel(card.workerStatus)} /><Limit label="Modus" value="PAPER_ONLY" /><Limit label="Versjon" value={card.version ?? "Ukjent"} /></dl>{card.workerInstancesTruncated && <p className="mt-3 text-xs text-[var(--muted)]">Viser de 20 siste av {card.workerInstanceCount} worker-instanser.</p>}{card.workerInstances.length > 0 && <ul className="mt-3 space-y-2 border-t border-[var(--border)] pt-3 text-xs">{card.workerInstances.map(worker => <li key={worker.processInstanceId} className="flex flex-wrap justify-between gap-2"><span>{worker.workerId} · {workerLabel(worker.status)}</span><span className="text-[var(--muted)]">Heartbeat {dateLabel(worker.lastHeartbeatAt)}</span></li>)}</ul>}</section>
     </div>
     <HistoryList card={card} />
   </section>;

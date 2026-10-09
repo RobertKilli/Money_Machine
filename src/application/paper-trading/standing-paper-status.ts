@@ -44,6 +44,8 @@ export interface StandingPaperPolicyStatusCard {
   readonly mode: "PAPER_ONLY" | "UNKNOWN";
   readonly workerStatus: StandingPaperWorkerInstanceStatus | "UNKNOWN";
   readonly workerInstances: readonly StandingPaperWorkerInstanceStatusRecord[];
+  readonly workerInstanceCount: number;
+  readonly workerInstancesTruncated: boolean;
   readonly allowedInstrumentIds: readonly string[];
   readonly riskLimits: {
     readonly capitalBudgetMinor: string | null;
@@ -80,6 +82,7 @@ export function projectStandingPaperStatusCard(input: {
   readonly decisions?: readonly StandingPaperStatusDecision[];
   readonly fills?: readonly StandingPaperStatusFill[];
   readonly workers?: readonly StandingPaperWorkerInstanceStatusRecord[];
+  readonly workerSummary?: { readonly status: StandingPaperWorkerInstanceStatus | "UNKNOWN"; readonly count: number; readonly truncated: boolean };
 }): StandingPaperPolicyStatusCard {
   const { policy, state, run } = input;
   const decisions = input.decisions ?? (run?.result.paperPolicyDecisions.map(item => {
@@ -92,18 +95,20 @@ export function projectStandingPaperStatusCard(input: {
     return [{ fillId: fill.fillId, orderId: fill.proposalId, instrumentId: acquisition.assetId, quantityAtoms: fill.quantity.atomicUnits.toString(), quantityScale: fill.quantity.quantityScale, grossMinor: fill.grossNotional.minorUnits.toString(), feeMinor: fill.fee.minorUnits.toString(), currency: "NOK" as const, simulatedAt: fill.executionTimestamp.toISOString(), executionPolicyVersion: fill.executionPolicyVersion }];
   }) ?? []);
   const workers = input.workers ?? [];
-  const workerStatus = workers.length === 0 ? "UNKNOWN"
+  const workerStatus = input.workerSummary?.status ?? (workers.length === 0 ? "UNKNOWN"
     : workers.some(worker => worker.status === "RUNNING") ? "RUNNING"
       : workers.some(worker => worker.status === "WAITING_PAUSED") ? "WAITING_PAUSED"
         : workers.some(worker => worker.status === "WAITING_INTERVAL") ? "WAITING_INTERVAL"
-          : workers.some(worker => worker.status === "STALE") ? "STALE" : "ENDED";
+          : workers.some(worker => worker.status === "STALE") ? "STALE" : "ENDED");
+  const workerInstanceCount = input.workerSummary?.count ?? workers.length;
+  const workerInstancesTruncated = input.workerSummary?.truncated ?? false;
   const loss = run?.valuation.navMinor === null || !run ? null : maxBigInt(0n, state.adjustedEquityHighWaterMinor - (BigInt(run.valuation.navMinor) - state.netContributionsMinor));
   const remainingBudget = maxBigInt(0n, policy.capitalBudgetMinor - state.committedCapitalMinor);
   const remainingLoss = loss === null ? null : maxBigInt(0n, policy.maxLossMinor - loss);
   const status = !run ? "NO_ROUNDS" : run.valuation.complete ? "AVAILABLE" : "INCOMPLETE";
   return {
     status, policyId: policy.policyId, identity: policy.identity, version: policy.version,
-    policyStatus: policy.status, mode: policy.mode, workerStatus, workerInstances: [...workers],
+    policyStatus: policy.status, mode: policy.mode, workerStatus, workerInstances: [...workers], workerInstanceCount, workerInstancesTruncated,
     allowedInstrumentIds: [...policy.allowedInstrumentIds].sort(),
     riskLimits: {
       capitalBudgetMinor: policy.capitalBudgetMinor.toString(), maxOrderMinor: policy.maxOrderMinor.toString(),
