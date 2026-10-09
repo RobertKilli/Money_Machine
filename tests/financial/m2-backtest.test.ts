@@ -27,5 +27,16 @@ describe("M2 deterministic historical replay", () => {
       const signed = entries.reduce((n, e) => n + (e.direction === "DEBIT" ? e.amountAtoms : -e.amountAtoms), 0n); expect(signed).toBe(0n);
     }
   });
+  it("evaluates a later strategy round from existing cash and holdings without another contribution", () => {
+    const first = runDeterministicBacktest(config({ financialAccountId: "m2-continuation-account", valuationTimestamps: [] }), prices);
+    const nextAt = "2026-01-02T00:00:00.000Z";
+    const second = runDeterministicBacktest(config({
+      startAt: nextAt, endAt: nextAt, financialAccountId: "m2-continuation-account", contributionEvents: [], valuationTimestamps: [], strategyEvaluationTimestamps: [nextAt],
+    }), prices, first.persistentState);
+    expect(second.decisions).toHaveLength(1);
+    expect(second.journals.some(journal => journal.type === "VIRTUAL_DEPOSIT")).toBe(false);
+    expect(second.persistentState.netContributionsMinor).toBe(first.persistentState.netContributionsMinor);
+    expect(second.persistentState.ledger.length).toBeGreaterThanOrEqual(first.persistentState.ledger.length);
+  });
   it("exports the frozen replay protocol version", () => expect(BACKTEST_REPLAY_VERSION).toBe("backtest-replay/v1"));
 });

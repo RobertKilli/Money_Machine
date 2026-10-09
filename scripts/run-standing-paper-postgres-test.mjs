@@ -125,6 +125,10 @@ try {
   console.log(assertions.map(item => `${item.status}: ${item.title}${item.failureMessages?.length ? `\n${item.failureMessages.join("\n")}` : ""}`).join("\n"));
   const cases = [
     "creates one owned empty PAPER/NOK account under concurrent requests without deposits or policy writes",
+    "preflights the exact hosted target and rejects wrong account, policy, status, or capital without writes",
+    "posts one policy-scoped 200 NOK initial contribution across hosted worker rounds and restart",
+    "serializes concurrent hosted processes to one policy-scoped initial contribution",
+    "rolls back hosted initial capital and all settlement writes after a forced transaction failure",
     "continues one account across runner instances; replay and concurrent budget use stay idempotent",
     "creates only one DRAFT under concurrent owner requests and requires fresh confirmation to activate",
     "rejects existing ledger activity and foreign ownership without inserting policy history",

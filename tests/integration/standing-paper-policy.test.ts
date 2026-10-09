@@ -29,6 +29,12 @@ const config = (eventId: string, availableAt: string, amountMinor = "100000"): O
   strategyVersion: "contribution-rebalancing/v1", riskPolicyVersion: "m1-risk-policy/v1", executionPolicyVersion: "m1-market-execution/v1",
   portfolioValuationVersion: "portfolio-valuation/v1", fifoCostBasisVersion: "fifo-cost-basis/v1", assetRegistryVersion: "fixture-asset-registry/v1", marketDatasetVersion: FIXTURE_DATASET_VERSION,
 });
+const hostedEvaluationConfig = (financialAccountId: string, at: string): Omit<BacktestRunConfig, "standingPaperPolicy"> => ({
+  ...config("unused-hosted-seed", at), financialAccountId, contributionEvents: [], strategyEvaluationTimestamps: [at],
+});
+const hostedCapital = (policyId: string, amountMinor: string): { eventId: string; availableAt: string; amountMinor: string; currency: "NOK" } => ({
+  eventId: `standing-paper-hosted-capital/v1/${policyId}`, availableAt: stamp(10), amountMinor, currency: "NOK",
+});
 
 describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", () => {
   let sql: Sql;
@@ -407,6 +413,144 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(resumed).toMatchObject({ status: "COMPLETED", roundsCompleted: 1 });
     expect(resumed.lastRoundIdentity).toBe("standing-paper-worker/v1/restart-sequence/round/000000000002");
     expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "3", contributions: "3" });
+  });
+
+  it("preflights the exact hosted target and rejects wrong account, policy, status, or capital without writes", async () => {
+    const f = await setup("hosted-target-preflight", 20_000n);
+    const before = await counts(f.policy.financialAccountId);
+    await expect(f.repository.validateWorkerTarget("missing-hosted-policy", f.policy.financialAccountId, 20_000n)).rejects.toThrow("PAPER_WORKER_TARGET_NOT_FOUND");
+    await expect(f.repository.validateWorkerTarget(f.policy.policyId, randomUUID(), 20_000n)).rejects.toThrow("PAPER_WORKER_ACCOUNT_MISMATCH");
+    await expect(f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 20_001n)).rejects.toThrow("PAPER_WORKER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
+    const approvedTarget = await f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 20_000n);
+    expect(approvedTarget).toMatchObject({ policy: { policyId: f.policy.policyId, status: "ACTIVE", mode: "PAPER_ONLY", capitalBudgetMinor: 20_000n }, ownerId: f.ownerId });
+    await sql`update public.financial_accounts set mode='SIMULATION' where id=${f.policy.financialAccountId}`;
+    await expect(f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 20_000n)).rejects.toThrow("PAPER_WORKER_ACCOUNT_NOT_RUNNABLE");
+    await sql`update public.financial_accounts set mode='PAPER' where id=${f.policy.financialAccountId}`;
+    await f.repository.transition(f.policy.policyId, "PAUSE");
+    await expect(f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 20_000n)).rejects.toThrow("PAPER_WORKER_POLICY_NOT_ACTIVE");
+    await expect(f.repository.startWorkerHeartbeat(f.policy.policyId, "stale-preflight", randomUUID(), approvedTarget.ownerId, { accountId: f.policy.financialAccountId, initialCapitalMinor: 20_000n })).rejects.toThrow("PAPER_WORKER_POLICY_NOT_ACTIVE");
+    const heartbeatCount = await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    expect(heartbeatCount[0]!.count).toBe("0");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+  });
+
+  it("posts one policy-scoped 200 NOK initial contribution across hosted worker rounds and restart", async () => {
+    const f = await setup("hosted-one-time-capital", 20_000n);
+    const target = await f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 20_000n);
+    const first = await new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, expectedAccountId: f.policy.financialAccountId, expectedOwnerId: target.ownerId, workerId: "hosted-bounded", policyScopedRoundOrdinal: true, maxRounds: 1, initialCapitalMinor: 20_000n,
+    }).run();
+    expect(first.roundsCompleted).toBe(1);
+    await expect(new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, expectedAccountId: f.policy.financialAccountId, expectedOwnerId: target.ownerId, workerId: "hosted-bounded", policyScopedRoundOrdinal: true, maxRounds: 1, initialCapitalMinor: 19_000n,
+    }).run()).rejects.toThrow("PAPER_WORKER_FAILED:PAPER_INITIAL_CAPITAL_CONFLICT");
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+    const resumedRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(resumedRepository);
+    const resumed = await new StandingPaperWorker(resumedRepository, {
+      policyId: f.policy.policyId, expectedAccountId: f.policy.financialAccountId, expectedOwnerId: target.ownerId, workerId: "hosted-restarted", policyScopedRoundOrdinal: true, maxRounds: 2, roundIntervalMs: 1_000, initialCapitalMinor: 20_000n,
+      waitForRoundInterval: async () => undefined,
+    }).run();
+    expect(resumed.roundsCompleted).toBe(2);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "3", contributions: "1" });
+    const persisted = await sql<{ capital_minor: string; evaluation_rounds: string; seeded_runs: string; filled_rounds: string }[]>`
+      select
+        (select coalesce(sum(case when le.direction='CREDIT' then le.amount_atoms else -le.amount_atoms end),0)::text
+          from public.ledger_entries le join public.ledger_accounts la on la.id=le.ledger_account_id
+          where la.financial_account_id=${f.policy.financialAccountId} and la.code='VIRTUAL_CONTRIBUTED_CAPITAL') as capital_minor,
+        (select count(*)::text from public.standing_paper_runs r cross join lateral jsonb_array_elements_text(r.result_json->'config'->'strategyEvaluationTimestamps') t
+          where r.policy_id=${f.policy.policyId}) as evaluation_rounds,
+        (select count(*)::text from public.standing_paper_runs r cross join lateral jsonb_array_elements(r.result_json->'config'->'contributionEvents') e
+          where r.policy_id=${f.policy.policyId} and e->>'eventId' like 'standing-paper-hosted-capital/v1/%') as seeded_runs,
+        (select count(distinct f.run_id)::text from public.standing_paper_fills f where f.policy_id=${f.policy.policyId}) as filled_rounds
+    `;
+    expect(persisted[0]).toMatchObject({ capital_minor: "20000", seeded_runs: "1", evaluation_rounds: "3" });
+    expect(Number(persisted[0]!.filled_rounds)).toBeLessThanOrEqual(3);
+  });
+
+  it("validates the durable initial-capital binding before replaying a later round", async () => {
+    const f = await setup("hosted-capital-later-replay", 20_000n);
+    const seed = hostedCapital(f.policy.policyId, "20000");
+    const roundZeroAt = stamp(10);
+    const roundOneAt = stamp(11);
+    const prices = pricesAt(stamp(9));
+    await f.repository.run(f.policy.policyId, hostedEvaluationConfig(f.policy.financialAccountId, roundZeroAt), prices, "standing-paper-worker/v1/hosted-policy/round/000000000000", { initialContribution: seed, expectedOwnerId: f.ownerId });
+    const roundOneConfig = hostedEvaluationConfig(f.policy.financialAccountId, roundOneAt);
+    const roundOneKey = "standing-paper-worker/v1/hosted-policy/round/000000000001";
+    const completed = await f.repository.run(f.policy.policyId, roundOneConfig, prices, roundOneKey, { initialContribution: seed, expectedOwnerId: f.ownerId });
+    expect(completed.config.contributionEvents).toHaveLength(0);
+    const beforeReplay = await counts(f.policy.financialAccountId);
+
+    await expect(f.repository.run(f.policy.policyId, roundOneConfig, prices, roundOneKey, {
+      initialContribution: hostedCapital(f.policy.policyId, "19000"), expectedOwnerId: f.ownerId,
+    })).rejects.toThrow("PAPER_INITIAL_CAPITAL_CONFLICT");
+    await expect(f.repository.run(f.policy.policyId, roundOneConfig, prices, roundOneKey, { initialContribution: seed, expectedOwnerId: f.ownerId })).resolves.toEqual(completed);
+    expect(await counts(f.policy.financialAccountId)).toEqual(beforeReplay);
+  });
+
+  it("serializes concurrent later-round replays with conflicting initial capital", async () => {
+    const f = await setup("hosted-capital-conflicting-replay", 20_000n);
+    const seed = hostedCapital(f.policy.policyId, "20000");
+    const prices = pricesAt(stamp(9));
+    await f.repository.run(f.policy.policyId, hostedEvaluationConfig(f.policy.financialAccountId, stamp(10)), prices, "standing-paper-worker/v1/hosted-policy/round/000000000000", { initialContribution: seed, expectedOwnerId: f.ownerId });
+    const laterConfig = hostedEvaluationConfig(f.policy.financialAccountId, stamp(11));
+    const laterKey = "standing-paper-worker/v1/hosted-policy/round/000000000001";
+    const secondRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(secondRepository);
+    const outcomes = await Promise.allSettled([
+      f.repository.run(f.policy.policyId, laterConfig, prices, laterKey, { initialContribution: hostedCapital(f.policy.policyId, "19000"), expectedOwnerId: f.ownerId }),
+      secondRepository.run(f.policy.policyId, laterConfig, prices, laterKey, { initialContribution: seed, expectedOwnerId: f.ownerId }),
+    ]);
+    expect(outcomes.filter(item => item.status === "fulfilled")).toHaveLength(1);
+    const rejected = outcomes.find(item => item.status === "rejected");
+    expect(rejected?.status).toBe("rejected");
+    if (rejected?.status === "rejected") expect((rejected.reason as Error).message).toBe("PAPER_INITIAL_CAPITAL_CONFLICT");
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "2", contributions: "1" });
+  });
+
+  it("serializes concurrent hosted processes to one policy-scoped initial contribution", async () => {
+    const f = await setup("hosted-concurrent-capital", 20_000n);
+    const secondRepository = new StandingPaperPolicyRepository(testUrl!); repositories.push(secondRepository);
+    let arrivals = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const beforeRound = async () => { arrivals += 1; if (arrivals === 2) release(); await barrier; };
+    const target = await f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 20_000n);
+    const common = { policyId: f.policy.policyId, expectedAccountId: f.policy.financialAccountId, expectedOwnerId: target.ownerId, maxRounds: 1, initialCapitalMinor: 20_000n, policyScopedRoundOrdinal: true, beforeRound };
+    await Promise.all([
+      new StandingPaperWorker(f.repository, { ...common, workerId: "hosted-shared-a" }).run(),
+      new StandingPaperWorker(secondRepository, { ...common, workerId: "hosted-shared-b" }).run(),
+    ]);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+    const capital = await sql<{ amount: string }[]>`select coalesce(sum(amount_atoms),0)::text as amount from public.ledger_entries le join public.ledger_accounts la on la.id=le.ledger_account_id where la.financial_account_id=${f.policy.financialAccountId} and la.code='VIRTUAL_CONTRIBUTED_CAPITAL' and le.direction='CREDIT'`;
+    expect(capital[0]!.amount).toBe("20000");
+    const state = await sql<{ committed: string }[]>`select state_json->'committedCapitalMinor'->>'value' as committed from public.standing_paper_policies where policy_id=${f.policy.policyId}`;
+    expect(BigInt(state[0]!.committed)).toBeLessThanOrEqual(20_000n);
+  });
+
+  it("rolls back hosted initial capital and all settlement writes after a forced transaction failure", async () => {
+    const f = await setup("hosted-capital-rollback", 20_000n);
+    const target = await f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 20_000n);
+    const control = f.repository as unknown as { client: Sql };
+    const original = control.client;
+    let transactionNumber = 0;
+    control.client = new Proxy(original, { get(target, property, receiver) {
+      if (property !== "begin") return Reflect.get(target, property, receiver);
+      return (work: (tx: TransactionSql) => Promise<unknown>) => {
+        transactionNumber += 1;
+        return original.begin(async tx => {
+          await work(tx);
+          if (transactionNumber === 2) throw new Error("CONTROLLED_HOSTED_PAPER_ROLLBACK");
+        });
+      };
+    } });
+    try {
+      await expect(new StandingPaperWorker(f.repository, {
+        policyId: f.policy.policyId, expectedAccountId: f.policy.financialAccountId, expectedOwnerId: target.ownerId, workerId: "hosted-rollback", maxRounds: 1, initialCapitalMinor: 20_000n,
+      }).run()).rejects.toThrow("PAPER_WORKER_FAILED:CONTROLLED_HOSTED_PAPER_ROLLBACK");
+    } finally { control.client = original; }
+    expect(await counts(f.policy.financialAccountId)).toEqual({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
+    const heartbeat = await sql<{ status: string; exit_reason: string }[]>`select status, exit_reason from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId} and worker_id='hosted-rollback'`;
+    expect(heartbeat).toHaveLength(1);
+    expect(heartbeat[0]).toEqual({ status: "ENDED", exit_reason: "FAILED" });
   });
 
   it("converges two workers starting the same round to one durable settlement", async () => {
