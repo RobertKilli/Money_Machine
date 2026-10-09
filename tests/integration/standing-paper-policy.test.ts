@@ -54,7 +54,8 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     const repository = new StandingPaperPolicyRepository(testUrl!); repositories.push(repository);
     await repository.create(policy);
     await repository.transition(policy.policyId, "ACTIVATE");
-    return { repository, policy };
+    const owners = await sql<{ owner_id: string }[]>`select owner_id from public.financial_accounts where id=${financialAccountId}`;
+    return { repository, policy, ownerId: owners[0]!.owner_id };
   }
   async function addExternalPosting(accountId: string) {
     // Simulate an out-of-band writer that bypasses the shared ledger triggers;
@@ -228,6 +229,93 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
       expect(await counts(f.policy.financialAccountId)).toEqual({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
       const transitions = await sql<{ action: string; to_status: string }[]>`select action, to_status from public.standing_paper_policy_transitions where policy_id=${f.policy.policyId} order by occurred_at, id`;
       expect(transitions.map(row => [row.action, row.to_status])).toEqual([["INITIALIZE", "DRAFT"], ["ACTIVATE", "ACTIVE"], [status === "PAUSED" ? "PAUSE" : "STOP", status]]);
+    }
+  });
+
+  it("enforces policy ownership, expected status, and one transition under double-click concurrency", async () => {
+    const f = await setup("dashboard-transition-idempotency");
+    const transitionCount = async () => (await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_policy_transitions where policy_id=${f.policy.policyId}`)[0]!.count;
+    const beforeInvalidActions = await transitionCount();
+    for (const action of [["STOP"], {}, null, "UNKNOWN"]) {
+      await expect(f.repository.transitionOwned(f.ownerId, f.policy.policyId, action as never, "ACTIVE")).rejects.toThrow("PAPER_POLICY_ACTION_INVALID");
+      await expect(f.repository.transition(f.policy.policyId, action as never)).rejects.toThrow("PAPER_POLICY_ACTION_INVALID");
+    }
+    expect(await f.repository.getPolicy(f.policy.policyId)).toMatchObject({ status: "ACTIVE" });
+    expect(await transitionCount()).toBe(beforeInvalidActions);
+
+    await expect(f.repository.transitionOwned(randomUUID(), f.policy.policyId, "PAUSE", "ACTIVE")).rejects.toThrow("PAPER_POLICY_NOT_FOUND");
+    await expect(f.repository.transitionOwned(f.ownerId, f.policy.policyId, "RESUME", "ACTIVE")).rejects.toThrow("PAPER_POLICY_TRANSITION_INVALID");
+    const attempts = await Promise.allSettled([
+      f.repository.transitionOwned(f.ownerId, f.policy.policyId, "PAUSE", "ACTIVE"),
+      f.repository.transitionOwned(f.ownerId, f.policy.policyId, "PAUSE", "ACTIVE"),
+    ]);
+    expect(attempts.filter(item => item.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter(item => item.status === "rejected")).toHaveLength(1);
+    const rejected = attempts.find(item => item.status === "rejected");
+    expect(rejected?.status === "rejected" && rejected.reason).toMatchObject({ message: "PAPER_POLICY_STALE_STATUS" });
+    expect((await f.repository.getPolicy(f.policy.policyId))?.status).toBe("PAUSED");
+
+    await expect(f.repository.transitionOwned(f.ownerId, f.policy.policyId, "PAUSE", "ACTIVE")).rejects.toThrow("PAPER_POLICY_STALE_STATUS");
+    await f.repository.transitionOwned(f.ownerId, f.policy.policyId, "RESUME", "PAUSED");
+    await f.repository.transitionOwned(f.ownerId, f.policy.policyId, "STOP", "ACTIVE");
+    await expect(f.repository.transitionOwned(f.ownerId, f.policy.policyId, "RESUME", "PAUSED")).rejects.toThrow("PAPER_POLICY_STALE_STATUS");
+    const transitions = await sql<{ action: string; from_status: string | null; to_status: string }[]>`
+      select action, from_status, to_status from public.standing_paper_policy_transitions where policy_id=${f.policy.policyId} order by occurred_at, id`;
+    expect(transitions.map(row => [row.action, row.from_status, row.to_status])).toEqual([
+      ["INITIALIZE", null, "DRAFT"], ["ACTIVATE", "DRAFT", "ACTIVE"], ["PAUSE", "ACTIVE", "PAUSED"],
+      ["ACTIVATE", "PAUSED", "ACTIVE"], ["STOP", "ACTIVE", "STOPPED"],
+    ]);
+  });
+
+  it("lets an in-flight worker round finish before pause or stop, then blocks the next round", async () => {
+    for (const action of ["PAUSE", "STOP"] as const) {
+      const f = await setup(`dashboard-transition-${action.toLowerCase()}`);
+      const control = f.repository as unknown as { client: Sql };
+      const original = control.client;
+      let releaseRound!: () => void;
+      let signalRoundReady!: () => void;
+      const release = new Promise<void>(resolve => { releaseRound = resolve; });
+      const roundReady = new Promise<void>(resolve => { signalRoundReady = resolve; });
+      let held = false;
+      control.client = new Proxy(original, { get(target, property, receiver) {
+        if (property !== "begin") return Reflect.get(target, property, receiver);
+        return (work: (tx: TransactionSql) => Promise<unknown>) => original.begin(async tx => {
+          const result = await work(tx);
+          if (!held) { held = true; signalRoundReady(); await release; }
+          return result;
+        });
+      } });
+
+      const worker = new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: `transition-${action.toLowerCase()}`, maxRounds: 1 });
+      const workerRun = worker.run();
+      const applicationName = `paper-transition-${randomUUID().replaceAll("-", "").slice(0, 20)}`;
+      const transitionUrl = new URL(testUrl!);
+      transitionUrl.searchParams.set("application_name", applicationName);
+      const transitionRepository = new StandingPaperPolicyRepository(transitionUrl.toString()); repositories.push(transitionRepository);
+      let transitionSettled = false;
+      try {
+        await roundReady;
+        expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "0", contributions: "0", decisions: "0", fills: "0", journals: "0", audits: "0" });
+        const transition = transitionRepository.transitionOwned(f.ownerId, f.policy.policyId, action, "ACTIVE").finally(() => { transitionSettled = true; });
+        let waitingOnLock = false;
+        for (let attempt = 0; attempt < 200 && !waitingOnLock; attempt++) {
+          const waiters = await sql<{ pid: number }[]>`select pid from pg_stat_activity where application_name=${applicationName} and wait_event_type='Lock' and state='active'`;
+          waitingOnLock = waiters.length > 0;
+          if (!waitingOnLock) await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        expect(waitingOnLock).toBe(true);
+        expect(transitionSettled).toBe(false);
+        releaseRound();
+        await expect(workerRun).resolves.toMatchObject({ status: "COMPLETED", roundsCompleted: 1 });
+        await expect(transition).resolves.toMatchObject({ status: action === "PAUSE" ? "PAUSED" : "STOPPED" });
+      } finally {
+        releaseRound();
+        control.client = original;
+      }
+      const before = await counts(f.policy.financialAccountId);
+      await expect(f.repository.run(f.policy.policyId, config(`dashboard-next-${action}`, stamp(12)), pricesAt(stamp(11)), `${action}-next`)).rejects.toThrow("POLICY_NOT_ACTIVE");
+      expect(await counts(f.policy.financialAccountId)).toEqual(before);
+      expect(before.runs).toBe("1");
     }
   });
 

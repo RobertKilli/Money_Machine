@@ -131,6 +131,8 @@ try {
     "rollback after persistence writes leaves no partial settlement",
     "deposit and process restart preserve contribution-adjusted loss margin",
     "pause and stop block new rounds before orders are written",
+    "enforces policy ownership, expected status, and one transition under double-click concurrency",
+    "lets an in-flight worker round finish before pause or stop, then blocks the next round",
     "resumes at the next durable round after process restart without replaying settlements",
     "converges two workers starting the same round to one durable settlement",
     "waits without writes while paused and resumes after deterministic policy transition",

@@ -81,7 +81,53 @@ const amount = (minor: string | null) => minor === null ? "Ikke tilgjengelig" : 
 const dateLabel = (value: string | null) => value ? new Date(value).toLocaleString("nb-NO", { timeZone: "UTC", year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : "Ikke tilgjengelig";
 const titleCase = (value: string) => value.replaceAll("_", " ").toLocaleLowerCase("nb-NO").replace(/^./, character => character.toLocaleUpperCase("nb-NO"));
 
-function StatusCard({ card }: { card: StandingPaperPolicyStatusCard }) {
+function PolicyControls({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; onRefresh?: () => Promise<void> }) {
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const actions: Array<{ action: "PAUSE" | "RESUME" | "STOP"; label: string }> = card.policyStatus === "ACTIVE"
+    ? [{ action: "PAUSE", label: "Pause" }, { action: "STOP", label: "Stopp" }]
+    : card.policyStatus === "PAUSED" ? [{ action: "RESUME", label: "Gjenoppta" }, { action: "STOP", label: "Stopp" }]
+      : card.policyStatus === "DRAFT" ? [{ action: "STOP", label: "Stopp" }] : [];
+  if (!actions.length) return null;
+
+  async function submit(action: "PAUSE" | "RESUME" | "STOP") {
+    if (action === "STOP" && !window.confirm(`Stopp policy ${card.identity ?? card.policyId}? Stoppet status er terminal og kan ikke angres.`)) return;
+    setPending(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/dashboard/paper-policies/${encodeURIComponent(card.policyId)}/transition`, {
+        method: "POST", cache: "no-store", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
+        body: JSON.stringify({ action, expectedStatus: card.policyStatus, ...(action === "STOP" ? { confirmStop: true } : {}) }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: unknown };
+        setMessage(payload.error === "STALE_STATUS" ? "Policyen ble endret et annet sted. Status er hentet på nytt." : "Statusendringen ble avvist. Oppdater status før du prøver igjen.");
+        if (response.status === 409) await onRefresh?.();
+        return;
+      }
+      const payload = await response.json() as { policyId?: unknown; status?: unknown };
+      const expected = action === "PAUSE" ? "PAUSED" : action === "RESUME" ? "ACTIVE" : "STOPPED";
+      if (payload.policyId !== card.policyId || payload.status !== expected) {
+        setMessage("Statusendringen kunne ikke bekreftes. Hentet status på nytt.");
+        await onRefresh?.();
+        return;
+      }
+      await onRefresh?.();
+    } catch {
+      setMessage("Statusendringen kunne ikke bekreftes. Hentet status på nytt.");
+      await onRefresh?.();
+    } finally { setPending(false); }
+  }
+
+  return <div className="mt-4 flex flex-wrap items-center gap-2" aria-busy={pending}>
+    <p className="w-full text-xs text-[var(--muted)]">Pause og stopp hindrer nye runder; en pågående runde får fullføre.</p>
+    {actions.map(({ action, label }) => <button key={action} type="button" disabled={pending} onClick={() => void submit(action)} className={`rounded-lg border px-4 py-2 text-sm font-medium disabled:cursor-wait disabled:opacity-60 ${action === "STOP" ? "border-rose-400/50 text-rose-100" : "border-[var(--accent)] text-[var(--accent)]"}`}>{pending ? "Lagrer …" : label}</button>)}
+    {message && <p role="status" className="w-full text-sm text-amber-100">{message}</p>}
+  </div>;
+}
+
+function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; onRefresh?: () => Promise<void> }) {
   if (card.status === "INVALID") return <section className="rounded-2xl border border-rose-400/40 bg-[var(--panel)] p-5" aria-label={`Policy ${card.policyId}`}><h2 className="text-xl font-semibold">Ugyldig lagret materiale</h2><p className="mt-2 text-sm text-[var(--muted)]">Policy-ID: <span className="font-mono">{card.policyId}</span></p><p className="mt-2 text-sm text-rose-200">Kontrollkode: PAPER_MATERIAL_INVALID. Verdier holdes tilbake.</p></section>;
   const risk = card.riskLimits;
   return <section className="min-w-0 space-y-5 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 sm:p-7" aria-label={`Paper-policy ${card.identity ?? card.policyId}`}>
@@ -99,6 +145,7 @@ function StatusCard({ card }: { card: StandingPaperPolicyStatusCard }) {
       <Metric label="Inn­skuddsjustert tap" value={amount(card.currentLossMinor)} detail={`Gjenstående tapsmargin ${amount(card.remainingLossMarginMinor)}`} />
       <Metric label="Siste fullførte runde" value={card.lastRound ? dateLabel(card.lastRound.completedAt) : "Ingen"} detail={card.lastRound ? `Verdier gjelder ${dateLabel(card.lastRound.asOf)}` : "Ingen lagret fullføringstid"} />
     </div>
+    <PolicyControls card={card} onRefresh={onRefresh} />
     <div className="grid gap-5 lg:grid-cols-2">
       <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Risikogrenser</h3><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2"><Limit label="Maks ordre" value={amount(risk.maxOrderMinor)} /><Limit label="Maks posisjon" value={amount(risk.maxPositionMinor)} /><Limit label="Maks samlet eksponering" value={amount(risk.maxGrossExposureMinor)} /><Limit label="Maks tapsgrense" value={amount(risk.maxLossMinor)} /><Limit label="Maks prisalder" value={risk.maxPriceAgeMs === null ? "Ikke tilgjengelig" : `${risk.maxPriceAgeMs} ms`} /></dl><p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p></section>
       <section className="rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Policy og worker</h3><dl className="mt-3 grid gap-3 text-sm"><Limit label="Policy-status" value={titleCase(card.policyStatus)} /><Limit label="Worker-status" value="Ukjent (heartbeat ikke lagret)" /><Limit label="Modus" value="PAPER_ONLY" /><Limit label="Versjon" value={card.version ?? "Ukjent"} /></dl></section>
@@ -118,17 +165,18 @@ function HistoryList({ card }: { card: StandingPaperPolicyStatusCard }) {
   </div>;
 }
 
-export function StandingPaperStatusPanelView({ state }: { state: PaperStatusPanelState }) {
+export function StandingPaperStatusPanelView({ state, onRefresh }: { state: PaperStatusPanelState; onRefresh?: () => Promise<void> }) {
   if (state.kind === "LOADING") return <section role="status" className="rounded-2xl border border-[var(--border)] p-8"><h2 className="text-xl font-semibold">Laster paper-status …</h2><p className="mt-2 text-sm text-[var(--muted)]">Henter lagrede, eieravgrensede paper-data.</p></section>;
   if (state.kind === "FORBIDDEN") return <section role="status" className="rounded-2xl border border-amber-400/40 p-8"><h2 className="text-xl font-semibold">Tilgang avvist</h2><p className="mt-2 text-sm text-[var(--muted)]">Logg inn for å se dine paper-data.</p></section>;
   if (state.kind === "READ_ERROR") return <section role="status" className="rounded-2xl border border-rose-400/40 p-8"><h2 className="text-xl font-semibold">Paper-status utilgjengelig</h2><p className="mt-2 text-sm text-[var(--muted)]">Lagrede data kunne ikke leses eller valideres.</p></section>;
   const model = state.model;
   if (model.status === "NO_POLICY") return <section role="status" className="rounded-2xl border border-[var(--border)] p-8"><h2 className="text-xl font-semibold">Ingen paper-policy</h2><p className="mt-2 text-sm text-[var(--muted)]">Ingen PAPER_ONLY-policy er tilgjengelig for kontoene dine.</p></section>;
-  return <div className="space-y-6"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-semibold">Standing paper-kontoer</h2><span className="rounded-full border border-[var(--accent)] px-3 py-1 text-xs font-semibold text-[var(--accent)]">PAPER_ONLY</span></div>{model.status === "INVALID" && <p role="status" className="rounded-xl border border-rose-400/40 p-4 text-sm">Ugyldig eller ufullstendig lagret materiale er oppdaget. Berørte verdier holdes tilbake.</p>}{model.policies.map(card => <StatusCard key={card.policyId} card={card} />)}</div>;
+  return <div className="space-y-6"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-semibold">Standing paper-kontoer</h2><span className="rounded-full border border-[var(--accent)] px-3 py-1 text-xs font-semibold text-[var(--accent)]">PAPER_ONLY</span></div>{model.status === "INVALID" && <p role="status" className="rounded-xl border border-rose-400/40 p-4 text-sm">Ugyldig eller ufullstendig lagret materiale er oppdaget. Berørte verdier holdes tilbake.</p>}{model.policies.map(card => <StatusCard key={card.policyId} card={card} onRefresh={onRefresh} />)}</div>;
 }
 
 export function StandingPaperStatusPanel() {
   const [state, setState] = useState<PaperStatusPanelState>({ kind: "LOADING" });
+  const refresh = async () => setState(await loadStandingPaperStatus());
   useEffect(() => { let mounted = true; void loadStandingPaperStatus().then(value => { if (mounted) setState(value); }); return () => { mounted = false; }; }, []);
-  return <StandingPaperStatusPanelView state={state} />;
+  return <StandingPaperStatusPanelView state={state} onRefresh={refresh} />;
 }

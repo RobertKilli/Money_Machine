@@ -106,7 +106,7 @@ describe("standing paper status view", () => {
     expect(await loadStandingPaperStatus(async () => { throw new Error("offline"); })).toEqual({ kind: "READ_ERROR" });
   });
 
-  it("renders saved metrics, explicit simulation labels, worker uncertainty and reason codes without controls", () => {
+  it("renders saved metrics and simulation labels without activation or trading controls", () => {
     const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model }} />);
     expect(html).toContain("PAPER_ONLY");
     expect(html).toContain("Syntetiske priser");
@@ -116,9 +116,30 @@ describe("standing paper status view", () => {
     expect(html).toContain("2000.00 NOK");
     expect(html).toContain("PRICE_STALE");
     expect(html).toContain("Simulert");
+    expect(html).toContain(">Pause</button>");
+    expect(html).toContain(">Stopp</button>");
     expect(html).not.toContain("Aktiver");
     expect(html).not.toContain("Pause policy");
     expect(html).not.toContain("Kjøp");
+  });
+
+  it("shows only the policy transitions allowed by the current status", () => {
+    const render = (policyStatus: "ACTIVE" | "PAUSED" | "STOPPED" | "DRAFT") => renderToStaticMarkup(
+      <StandingPaperStatusPanelView state={{ kind: "DATA", model: { ...model, policies: [{ ...model.policies[0]!, policyStatus }] } }} />,
+    );
+    const active = render("ACTIVE");
+    expect(active).toContain(">Pause</button>");
+    expect(active).toContain(">Stopp</button>");
+    expect(active).not.toContain("Gjenoppta");
+    const paused = render("PAUSED");
+    expect(paused).toContain("Gjenoppta");
+    expect(paused).toContain(">Stopp</button>");
+    expect(paused).not.toContain(">Pause</button>");
+    const stopped = render("STOPPED");
+    expect(stopped).not.toContain(">Pause</button>");
+    expect(stopped).not.toContain("Gjenoppta");
+    expect(stopped).not.toContain(">Stopp</button>");
+    expect(render("DRAFT")).not.toContain("Aktiver");
   });
 
   it("renders loading, no-rounds, incomplete, invalid and read-error states distinctly", () => {

@@ -3,7 +3,7 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
-import { assertValidPaperPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import type { FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill } from "@/application/paper-trading/standing-paper-status";
 
@@ -318,14 +318,42 @@ export class StandingPaperPolicyRepository {
   }
 
   async transition(policyId: string, action: "ACTIVATE" | "PAUSE" | "STOP"): Promise<StandingPaperPolicy> {
+    assertStandingPaperPolicyTransitionAction(action);
+    return this.transitionTransaction(null, policyId, action);
+  }
+
+  /** Owner-bound dashboard transition. Policy and account are locked in the
+   * same order as run(), and ownership plus expected status are checked before
+   * either policy state or transition history is written. */
+  async transitionOwned(
+    actorId: string,
+    policyId: string,
+    action: "PAUSE" | "RESUME" | "STOP",
+    expectedStatus: StandingPaperPolicy["status"],
+  ): Promise<StandingPaperPolicy> {
+    if (action !== "PAUSE" && action !== "RESUME" && action !== "STOP") throw new Error("PAPER_POLICY_ACTION_INVALID");
+    if (!actorId.trim() || !policyId.trim()) throw new Error("PAPER_POLICY_NOT_FOUND");
+    if (action === "PAUSE" && expectedStatus !== "ACTIVE" || action === "RESUME" && expectedStatus !== "PAUSED" ||
+      action === "STOP" && !["DRAFT", "ACTIVE", "PAUSED"].includes(expectedStatus)) throw new Error("PAPER_POLICY_TRANSITION_INVALID");
+    return this.transitionTransaction(actorId, policyId, action === "RESUME" ? "ACTIVATE" : action, expectedStatus);
+  }
+
+  private async transitionTransaction(
+    actorId: string | null,
+    policyId: string,
+    action: "ACTIVATE" | "PAUSE" | "STOP",
+    expectedStatus?: StandingPaperPolicy["status"],
+  ): Promise<StandingPaperPolicy> {
     return this.client.begin(async tx => {
       const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
       if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
       const current = parsePolicy(rows[0].policy_json);
       if (current.financialAccountId !== rows[0].financial_account_id || current.status !== rows[0].status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
-      const accounts = await tx<{ status: string; mode: string; base_currency_code: string }[]>`select status, mode, base_currency_code from public.financial_accounts where id = ${current.financialAccountId} for update`;
+      const accounts = await tx<{ owner_id: string; status: string; mode: string; base_currency_code: string }[]>`select owner_id, status, mode, base_currency_code from public.financial_accounts where id = ${current.financialAccountId} for update`;
       const account = accounts[0];
+      if (actorId !== null && (!account || account.owner_id !== actorId)) throw new Error("PAPER_POLICY_NOT_FOUND");
       if (!account || account.status !== "ACTIVE" || account.mode !== "PAPER" || account.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
+      if (expectedStatus !== undefined && current.status !== expectedStatus) throw new Error("PAPER_POLICY_STALE_STATUS");
       const next = transitionPaperPolicy(current, action);
       await tx`update public.standing_paper_policies set status = ${next.status}, policy_json = ${tx.json(json(next))}, updated_at = now() where policy_id = ${policyId}`;
       await tx`insert into public.standing_paper_policy_transitions (policy_id, financial_account_id, policy_version, action, from_status, to_status, input_hash) values (${policyId}, ${current.financialAccountId}, ${current.version}, ${action}, ${current.status}, ${next.status}, ${sha256({ current, action, next })})`;

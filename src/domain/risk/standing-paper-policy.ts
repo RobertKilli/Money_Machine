@@ -62,12 +62,26 @@ export interface PaperPolicyContext {
   readonly prospectiveOrderDebitMinor: bigint;
 }
 
-export function transitionPaperPolicy(policy: StandingPaperPolicy, action: "ACTIVATE" | "PAUSE" | "STOP"): StandingPaperPolicy {
+export type StandingPaperPolicyTransitionAction = "ACTIVATE" | "PAUSE" | "STOP";
+
+export function assertStandingPaperPolicyTransitionAction(value: unknown): asserts value is StandingPaperPolicyTransitionAction {
+  if (value !== "ACTIVATE" && value !== "PAUSE" && value !== "STOP") throw new Error("PAPER_POLICY_ACTION_INVALID");
+}
+
+export function transitionPaperPolicy(policy: StandingPaperPolicy, action: StandingPaperPolicyTransitionAction): StandingPaperPolicy {
+  assertStandingPaperPolicyTransitionAction(action);
   assertValidPaperPolicy(policy);
   if (action === "ACTIVATE" && (policy.status === "STOPPED" || policy.status === "ACTIVE")) throw new Error("PAPER_POLICY_TRANSITION_INVALID");
   if (action === "PAUSE" && policy.status !== "ACTIVE") throw new Error("PAPER_POLICY_TRANSITION_INVALID");
   if (action === "STOP" && policy.status === "STOPPED") throw new Error("PAPER_POLICY_TRANSITION_INVALID");
-  return Object.freeze({ ...policy, status: action === "ACTIVATE" ? "ACTIVE" : action === "PAUSE" ? "PAUSED" : "STOPPED" });
+  let status: StandingPaperPolicy["status"];
+  switch (action) {
+    case "ACTIVATE": status = "ACTIVE"; break;
+    case "PAUSE": status = "PAUSED"; break;
+    case "STOP": status = "STOPPED"; break;
+    default: throw new Error("PAPER_POLICY_ACTION_INVALID");
+  }
+  return Object.freeze({ ...policy, status });
 }
 
 export function assertValidPaperPolicy(policy: StandingPaperPolicy): void {
