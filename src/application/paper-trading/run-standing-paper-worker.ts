@@ -13,6 +13,12 @@ export type StandingPaperWorkerOptions = {
   readonly signal?: AbortSignal;
   readonly pollIntervalMs?: number;
   readonly roundIntervalMs?: number;
+  readonly expectedAccountId?: string;
+  readonly expectedOwnerId?: string;
+  readonly policyScopedRoundOrdinal?: boolean;
+  /** Hosted-only mode: make one policy-scoped contribution once, then evaluate
+   * later rounds against existing cash and holdings without further deposits. */
+  readonly initialCapitalMinor?: bigint;
   readonly onStatus?: (status: StandingPaperWorkerStatus, code?: string) => void;
   readonly onRound?: (identity: string, result: BacktestResult) => void;
   /** Deterministic orchestration seams used by PostgreSQL integration tests. */
@@ -36,14 +42,15 @@ const pricesForRound = (round: number): FixturePriceObservation[] => {
     datasetVersion: FIXTURE_DATASET_VERSION,
   }));
 };
-const configForRound = (policy: StandingPaperPolicy, workerId: string, round: number): Omit<BacktestRunConfig, "standingPaperPolicy"> => {
+const configForRound = (policy: StandingPaperPolicy, workerId: string, round: number, hostedSeeded: boolean): Omit<BacktestRunConfig, "standingPaperPolicy"> => {
   const at = roundAt(round).toISOString();
   return {
     startAt: at,
     endAt: at,
     baseCurrency: "NOK",
     financialAccountId: policy.financialAccountId,
-    contributionEvents: [{ eventId: `standing-paper-worker-${workerId}-contribution-${String(round).padStart(12, "0")}`, availableAt: at, amountMinor: "100000", currency: "NOK" }],
+    contributionEvents: hostedSeeded ? [] : [{ eventId: `standing-paper-worker-${workerId}-contribution-${String(round).padStart(12, "0")}`, availableAt: at, amountMinor: "100000", currency: "NOK" }],
+    ...(hostedSeeded ? { strategyEvaluationTimestamps: [at] } : {}),
     valuationTimestamps: [],
     strategyVersion: "contribution-rebalancing/v1",
     riskPolicyVersion: "m1-risk-policy/v1",
@@ -75,7 +82,10 @@ export class StandingPaperWorker {
   constructor(private readonly repository: StandingPaperPolicyRepository, private readonly options: StandingPaperWorkerOptions) {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(options.workerId)) throw new Error("PAPER_WORKER_ID_INVALID");
     if (!options.policyId.trim()) throw new Error("PAPER_WORKER_POLICY_ID_REQUIRED");
+    if (options.expectedAccountId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(options.expectedAccountId)) throw new Error("PAPER_WORKER_ACCOUNT_ID_INVALID");
+    if (options.expectedOwnerId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(options.expectedOwnerId)) throw new Error("PAPER_WORKER_OWNER_ID_INVALID");
     if (options.maxRounds !== undefined && (!Number.isSafeInteger(options.maxRounds) || options.maxRounds < 1)) throw new Error("PAPER_WORKER_MAX_ROUNDS_INVALID");
+    if (options.initialCapitalMinor !== undefined && options.initialCapitalMinor <= 0n) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_INVALID");
     if (options.pollIntervalMs !== undefined && (!Number.isSafeInteger(options.pollIntervalMs) || options.pollIntervalMs < 10)) throw new Error("PAPER_WORKER_POLL_INTERVAL_INVALID");
     if (options.maxRounds === undefined && options.roundIntervalMs === undefined) throw new Error("PAPER_WORKER_ROUND_INTERVAL_REQUIRED");
     if (options.roundIntervalMs !== undefined && (!Number.isSafeInteger(options.roundIntervalMs) || options.roundIntervalMs < 1_000 || options.roundIntervalMs > 86_400_000)) throw new Error("PAPER_WORKER_ROUND_INTERVAL_INVALID");
@@ -96,7 +106,15 @@ export class StandingPaperWorker {
     let heartbeatStarted = false;
     let exitReason: "COMPLETED" | "STOPPED" | "FAILED" = "FAILED";
     try {
-      await this.repository.startWorkerHeartbeat(this.options.policyId, this.options.workerId, this.processInstanceId);
+      await this.repository.startWorkerHeartbeat(
+        this.options.policyId,
+        this.options.workerId,
+        this.processInstanceId,
+        this.options.expectedOwnerId,
+        this.options.initialCapitalMinor !== undefined && this.options.expectedAccountId
+          ? { accountId: this.options.expectedAccountId, initialCapitalMinor: this.options.initialCapitalMinor }
+          : undefined,
+      );
       heartbeatStarted = true;
       this.heartbeatTask = this.renewHeartbeat();
       const result = await this.runLoop();
@@ -144,16 +162,31 @@ export class StandingPaperWorker {
         if (state.policyStatus !== "ACTIVE") throw new Error("PAPER_WORKER_POLICY_NOT_ACTIVE");
         if (state.accountStatus !== "ACTIVE" || state.accountMode !== "PAPER" || state.accountCurrency !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
 
-        const round = await this.repository.getNextWorkerRound(this.options.policyId, this.options.workerId);
-        const identity = roundKey(this.options.workerId, round);
+        const round = this.options.policyScopedRoundOrdinal
+          ? await this.repository.getNextPolicyWorkerRound(this.options.policyId)
+          : await this.repository.getNextWorkerRound(this.options.policyId, this.options.workerId);
+        // Hosted workers must converge on one idempotency key for a shared
+        // policy ordinal. The heartbeat still carries the actual worker ID.
+        const identity = roundKey(this.options.policyScopedRoundOrdinal ? "hosted-policy" : this.options.workerId, round);
         await this.options.beforeRound?.(round, identity);
         if (this.options.signal?.aborted) throw abortError();
         const policy = await this.repository.getPolicy(this.options.policyId);
         if (!policy) throw new Error("PAPER_POLICY_NOT_FOUND");
-        const config = configForRound(policy, this.options.workerId, round);
+        if (this.options.expectedAccountId && policy.financialAccountId !== this.options.expectedAccountId) throw new Error("PAPER_WORKER_ACCOUNT_MISMATCH");
+        const hostedSeeded = this.options.initialCapitalMinor !== undefined;
+        const config = configForRound(policy, this.options.workerId, round, hostedSeeded);
+        const initialContribution = hostedSeeded ? {
+          eventId: `standing-paper-hosted-capital/v1/${policy.policyId}`,
+          availableAt: roundAt(0).toISOString(),
+          amountMinor: this.options.initialCapitalMinor!.toString(),
+          currency: "NOK" as const,
+        } : undefined;
         try {
           if (this.options.signal?.aborted) throw abortError();
-          const result = await this.repository.run(this.options.policyId, config, pricesForRound(round), identity);
+          const result = await this.repository.run(this.options.policyId, config, pricesForRound(round), identity, {
+            ...(initialContribution ? { initialContribution } : {}),
+            ...(this.options.expectedOwnerId ? { expectedOwnerId: this.options.expectedOwnerId } : {}),
+          });
           this.options.onRound?.(identity, result);
         } catch (error) {
           if (error instanceof Error && error.message === "POLICY_NOT_ACTIVE") {

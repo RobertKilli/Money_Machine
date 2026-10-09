@@ -1,5 +1,6 @@
 import { StandingPaperWorker, type StandingPaperWorkerStatus } from "../src/application/paper-trading/run-standing-paper-worker";
 import { StandingPaperPolicyRepository } from "../src/infrastructure/postgres/standing-paper-policy-repository";
+import { assertLoopbackWorkerDatabase } from "../src/application/paper-trading/hosted-worker-target";
 import { createConnection } from "node:net";
 
 function argument(name: string, required = true): string | undefined {
@@ -19,6 +20,7 @@ const workerId = argument("--worker-id")!;
 const maxRoundsText = argument("--max-rounds", false);
 const pollText = argument("--poll-ms", false);
 const roundIntervalText = argument("--round-interval-ms", false);
+assertLoopbackWorkerDatabase(connectionString);
 let databaseUrl: URL;
 try { databaseUrl = new URL(connectionString); }
 catch { throw new Error("PAPER_WORKER_DATABASE_URL_INVALID"); }

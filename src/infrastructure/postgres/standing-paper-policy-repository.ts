@@ -4,7 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
 import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, standingPaperActivationConfirmationHash, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
-import type { FixturePriceObservation } from "@/domain/strategy/fixture-assets";
+import { FIXTURE_ASSETS, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
+import type { ContributionEvent } from "@/application/backtest/run-deterministic-backtest";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill, type StandingPaperWorkerInstanceStatus, type StandingPaperWorkerInstanceStatusRecord } from "@/application/paper-trading/standing-paper-status";
 
 type StoredPolicy = { policy_json: unknown; status: StandingPaperPolicy["status"]; financial_account_id: string };
@@ -62,9 +63,10 @@ function validateSavedResult(raw: unknown, state: DeterministicBacktestState, ac
   const endAt = validDate(config.endAt);
   const contributionEvents = config.contributionEvents;
   const valuationTimestamps = config.valuationTimestamps;
+  const strategyEvaluationTimestamps = config.strategyEvaluationTimestamps ?? [];
   const snapshots = result.portfolioSnapshots;
   if (result.integrityStatus !== "CONSISTENT" || config.financialAccountId !== accountId || config.baseCurrency !== "NOK" ||
-    startAt.getTime() > endAt.getTime() || !Array.isArray(contributionEvents) || !Array.isArray(valuationTimestamps) || !Array.isArray(snapshots) ||
+    startAt.getTime() > endAt.getTime() || !Array.isArray(contributionEvents) || !Array.isArray(valuationTimestamps) || !Array.isArray(strategyEvaluationTimestamps) || !Array.isArray(snapshots) ||
     sha256(savedState) !== sha256(state) || !["COMPLETE", "INCOMPLETE"].includes(String(ending.valuationStatus)) || ending.integrityStatus !== (ending.valuationStatus === "COMPLETE" ? "CONSISTENT" : "INCOMPLETE") ||
     ending.baseCurrency !== "NOK" || typeof ending.asOf !== "string" || !signedInteger(ending.cash) ||
     !(ending.nav === null || signedInteger(ending.nav)) || !(ending.investedMarketValue === null || signedInteger(ending.investedMarketValue)) ||
@@ -80,9 +82,13 @@ function validateSavedResult(raw: unknown, state: DeterministicBacktestState, ac
   const eventTimes = [
     ...contributionEvents.map(event => validDate(record(event).availableAt).getTime()),
     ...valuationTimestamps.map(timestamp => validDate(timestamp).getTime()),
+    ...strategyEvaluationTimestamps.map(timestamp => validDate(timestamp).getTime()),
   ];
   if (contributionEvents.some(event => {
     const time = validDate(record(event).availableAt).getTime();
+    return time < startAt.getTime() || time > endAt.getTime();
+  }) || strategyEvaluationTimestamps.some(timestamp => {
+    const time = validDate(timestamp).getTime();
     return time < startAt.getTime() || time > endAt.getTime();
   })) throw new Error("PAPER_MATERIAL_INVALID");
   const lastEventTime = eventTimes.reduce((latest, time) => Math.max(latest, time), Number.NEGATIVE_INFINITY);
@@ -153,8 +159,48 @@ const json = (value: unknown): JsonValue => encode(value) as JsonValue;
 /** PostgreSQL UoW for an existing PAPER FinancialAccount. Every round locks its policy row. */
 export class StandingPaperPolicyRepository {
   private readonly client: Sql;
-  constructor(connectionString: string) {
-    this.client = postgres(connectionString, { max: 5, prepare: true });
+  constructor(connectionString: string, connectionOptions: { readonly ssl?: "require" | false } = {}) {
+    if (connectionOptions.ssl === false && process.env.NODE_ENV !== "test") throw new Error("PAPER_DATABASE_SSL_REQUIRED");
+    this.client = postgres(connectionString, { max: 5, prepare: true, ...(connectionOptions.ssl ? { ssl: connectionOptions.ssl } : {}) });
+  }
+
+  /** Read-only, fail-closed gate for the separate hosted entrypoint. It binds
+   * the explicit account to an existing owned PAPER/NOK account and validates
+   * the complete persisted policy before heartbeat or settlement writes. */
+  async validateWorkerTarget(policyId: string, expectedAccountId: string, requestedCapitalMinor: bigint): Promise<{ readonly policy: StandingPaperPolicy; readonly ownerId: string }> {
+    if (!policyId.trim() || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(expectedAccountId) || requestedCapitalMinor <= 0n) {
+      throw new Error("PAPER_WORKER_TARGET_INVALID");
+    }
+    return this.client.begin(async tx => {
+      await tx`set transaction isolation level repeatable read, read only`;
+      const rows = await tx<{
+        policy_json: unknown; policy_status: string; policy_version: string; policy_account_id: string;
+        state_json: unknown; last_run_id: string | null;
+        account_id: string; owner_id: string; account_status: string; account_mode: string; currency_code: string;
+        owner_exists: boolean;
+      }[]>`
+        select p.policy_json, p.status as policy_status, p.policy_version, p.financial_account_id as policy_account_id,
+          p.state_json, p.last_run_id, a.id as account_id, a.owner_id, a.status as account_status, a.mode as account_mode, a.base_currency_code as currency_code,
+          exists (select 1 from auth.users owner_user where owner_user.id = a.owner_id) as owner_exists
+        from public.standing_paper_policies p
+        join public.financial_accounts a on a.id = p.financial_account_id
+        where p.policy_id = ${policyId}
+      `;
+      const row = rows[0];
+      if (!row) throw new Error("PAPER_WORKER_TARGET_NOT_FOUND");
+      const policy = parsePolicy(row.policy_json);
+      if (row.policy_account_id !== expectedAccountId || row.account_id !== expectedAccountId || policy.financialAccountId !== expectedAccountId) throw new Error("PAPER_WORKER_ACCOUNT_MISMATCH");
+      if (!row.owner_exists || !row.owner_id) throw new Error("PAPER_WORKER_ACCOUNT_OWNER_MISSING");
+      if (row.policy_version !== "standing-paper-policy/v1" || policy.version !== row.policy_version || policy.policyId !== policyId || policy.status !== row.policy_status || policy.mode !== "PAPER_ONLY") throw new Error("PAPER_WORKER_POLICY_INVALID");
+      if (row.policy_status !== "ACTIVE") throw new Error("PAPER_WORKER_POLICY_NOT_ACTIVE");
+      if (row.account_status !== "ACTIVE" || row.account_mode !== "PAPER" || row.currency_code !== "NOK") throw new Error("PAPER_WORKER_ACCOUNT_NOT_RUNNABLE");
+      const fixtureIds = new Set(FIXTURE_ASSETS.map(asset => asset.assetId));
+      if (!policy.allowedInstrumentIds.length || policy.allowedInstrumentIds.some(id => !fixtureIds.has(id))) throw new Error("PAPER_WORKER_INSTRUMENT_SCOPE_INVALID");
+      if (requestedCapitalMinor > policy.capitalBudgetMinor) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
+      const state = parseState(row.state_json, expectedAccountId);
+      await this.assertLedgerCheckpointMatches(tx, expectedAccountId, state, row.last_run_id);
+      return { policy: structuredClone(policy), ownerId: row.owner_id };
+    });
   }
 
   /** Read the policy/account gate before each worker round. `run` repeats these
@@ -172,8 +218,41 @@ export class StandingPaperPolicyRepository {
 
   /** Heartbeat rows have their own short transaction and process-instance key.
    * They never acquire the settlement checkpoint or append ledger material. */
-  async startWorkerHeartbeat(policyId: string, workerId: string, processInstanceId: string): Promise<void> {
+  async startWorkerHeartbeat(policyId: string, workerId: string, processInstanceId: string, expectedOwnerId?: string, expectedTarget?: { readonly accountId: string; readonly initialCapitalMinor: bigint }): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(workerId) || !isProcessInstanceUuid(processInstanceId)) throw new Error("PAPER_WORKER_HEARTBEAT_ID_INVALID");
+    if (expectedTarget) {
+      await this.client.begin(async tx => {
+        const policies = await tx<{ policy_json: unknown; status: string; policy_version: string; financial_account_id: string; state_json: unknown; last_run_id: string | null }[]>`
+          select policy_json, status, policy_version, financial_account_id, state_json, last_run_id
+          from public.standing_paper_policies where policy_id=${policyId} for update
+        `;
+        const stored = policies[0];
+        if (!stored) throw new Error("PAPER_WORKER_TARGET_NOT_FOUND");
+        const policy = parsePolicy(stored.policy_json);
+        if (policy.policyId !== policyId || policy.financialAccountId !== stored.financial_account_id || policy.status !== stored.status || policy.version !== stored.policy_version || policy.mode !== "PAPER_ONLY") throw new Error("PAPER_WORKER_POLICY_INVALID");
+        if (stored.status !== "ACTIVE") throw new Error("PAPER_WORKER_POLICY_NOT_ACTIVE");
+        if (stored.financial_account_id !== expectedTarget.accountId) throw new Error("PAPER_WORKER_ACCOUNT_MISMATCH");
+        const accounts = await tx<{ owner_id: string; status: string; mode: string; base_currency_code: string }[]>`
+          select owner_id, status, mode, base_currency_code from public.financial_accounts where id=${expectedTarget.accountId} for update
+        `;
+        const account = accounts[0];
+        if (!account || account.owner_id !== expectedOwnerId) throw new Error("PAPER_WORKER_ACCOUNT_OWNER_MISMATCH");
+        if (account.status !== "ACTIVE" || account.mode !== "PAPER" || account.base_currency_code !== "NOK") throw new Error("PAPER_WORKER_ACCOUNT_NOT_RUNNABLE");
+        if (!policy.allowedInstrumentIds.length || policy.allowedInstrumentIds.some(id => !FIXTURE_ASSETS.some(asset => asset.assetId === id))) throw new Error("PAPER_WORKER_INSTRUMENT_SCOPE_INVALID");
+        if (expectedTarget.initialCapitalMinor <= 0n) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_INVALID");
+        if (expectedTarget.initialCapitalMinor > policy.capitalBudgetMinor) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
+        const state = parseState(stored.state_json, expectedTarget.accountId);
+        await this.assertLedgerCheckpointMatches(tx, expectedTarget.accountId, state, stored.last_run_id);
+        const inserted = await tx<{ policy_id: string }[]>`
+          insert into public.standing_paper_worker_heartbeats
+          (policy_id, financial_account_id, worker_id, process_instance_id, status, started_at, heartbeat_at, ended_at, exit_reason)
+          values (${policyId}, ${expectedTarget.accountId}, ${workerId}, ${processInstanceId}, 'RUNNING', now(), now(), null, null)
+          returning policy_id
+        `;
+        if (!inserted[0]) throw new Error("PAPER_WORKER_HEARTBEAT_POLICY_NOT_RUNNABLE");
+      });
+      return;
+    }
     const rows = await this.client<{ policy_id: string }[]>`
       insert into public.standing_paper_worker_heartbeats
         (policy_id, financial_account_id, worker_id, process_instance_id, status)
@@ -183,6 +262,7 @@ export class StandingPaperPolicyRepository {
       join public.financial_accounts a on a.id = p.financial_account_id
       where p.policy_id = ${policyId} and p.status in ('ACTIVE', 'PAUSED', 'STOPPED')
         and a.status = 'ACTIVE' and a.mode = 'PAPER' and a.base_currency_code = 'NOK'
+        and (${expectedOwnerId ?? null}::uuid is null or a.owner_id = ${expectedOwnerId ?? null}::uuid)
       returning policy_id
     `;
     if (!rows[0]) throw new Error("PAPER_WORKER_HEARTBEAT_POLICY_NOT_RUNNABLE");
@@ -362,6 +442,26 @@ export class StandingPaperPolicyRepository {
     return next;
   }
 
+  /** Hosted process instances share one logical policy timeline even if an
+   * operator rotates worker IDs. The policy lock in run() serializes a shared
+   * ordinal and its timestamp, while each worker ID remains in the idempotency
+   * key and heartbeat identity. */
+  async getNextPolicyWorkerRound(policyId: string): Promise<number> {
+    const rows = await this.client<{ idempotency_key: string }[]>`
+      select idempotency_key from public.standing_paper_runs
+      where policy_id = ${policyId} and idempotency_key like 'standing-paper-worker/v1/%/round/%'
+    `;
+    let next = 0;
+    for (const row of rows) {
+      const match = /^standing-paper-worker\/v1\/[A-Za-z0-9_-]{1,64}\/round\/(\d{12})$/.exec(row.idempotency_key);
+      if (!match) throw new Error("PAPER_WORKER_ROUND_ID_INVALID");
+      const ordinal = Number(match[1]);
+      if (!Number.isSafeInteger(ordinal) || ordinal >= 100_000_000) throw new Error("PAPER_WORKER_ROUND_LIMIT_REACHED");
+      next = Math.max(next, ordinal + 1);
+    }
+    return next;
+  }
+
   private async assertLedgerCheckpointMatches(tx: TransactionSql, accountId: string, state: DeterministicBacktestState, lastRunId: string | null): Promise<void> {
     const entries = await tx<{ id: string; ledger_transaction_id: string; financial_account_id: string; code: string; commodity_kind: "MONEY" | "ASSET"; currency: string | null; asset_id: string | null; direction: "DEBIT" | "CREDIT"; amount_atoms: string; occurred_at: Date; recorded_at: Date }[]>`
       select le.id, lt.id as ledger_transaction_id, lt.financial_account_id, la.code, la.commodity_kind, la.commodity_currency_code as currency, la.commodity_asset_id as asset_id, le.direction, le.amount_atoms::text, lt.occurred_at, le.created_at as recorded_at
@@ -492,21 +592,28 @@ export class StandingPaperPolicyRepository {
     });
   }
 
-  async run(policyId: string, config: Omit<BacktestRunConfig, "standingPaperPolicy">, prices: readonly FixturePriceObservation[], idempotencyKey: string): Promise<BacktestResult> {
-    const snapshot = structuredClone({ config, prices });
+  async run(policyId: string, config: Omit<BacktestRunConfig, "standingPaperPolicy">, prices: readonly FixturePriceObservation[], idempotencyKey: string, options: { readonly initialContribution?: ContributionEvent; readonly expectedOwnerId?: string } = {}): Promise<BacktestResult> {
+    const baseSnapshot = structuredClone({ config, prices });
     if (!idempotencyKey.trim()) throw new Error("IDEMPOTENCY_KEY_REQUIRED");
+    const seed = options.initialContribution;
+    if (seed && (seed.currency !== "NOK" || !seed.eventId.trim() || !/^\d+$/.test(seed.amountMinor) || BigInt(seed.amountMinor) <= 0n)) throw new Error("PAPER_INITIAL_CAPITAL_INVALID");
     return this.client.begin(async tx => {
       const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
       if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
       const policy = parsePolicy(rows[0].policy_json);
       if (policy.financialAccountId !== rows[0].financial_account_id || policy.status !== rows[0].status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
-      if (snapshot.config.financialAccountId && snapshot.config.financialAccountId !== policy.financialAccountId) throw new Error("PAPER_ACCOUNT_MISMATCH");
-
-      const requestHash = sha256({ policy, ...snapshot });
+      if (baseSnapshot.config.financialAccountId && baseSnapshot.config.financialAccountId !== policy.financialAccountId) throw new Error("PAPER_ACCOUNT_MISMATCH");
+      if (seed && seed.amountMinor && BigInt(seed.amountMinor) > policy.capitalBudgetMinor) throw new Error("PAPER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
       const existing = await tx<{ input_hash: string; result_json: unknown }[]>`select input_hash, result_json from public.standing_paper_runs where financial_account_id = ${policy.financialAccountId} and policy_id = ${policyId} and idempotency_key = ${idempotencyKey}`;
       if (existing[0]) {
+        const saved = decode(typeof existing[0].result_json === "string" ? JSON.parse(existing[0].result_json) : existing[0].result_json) as BacktestResult;
+        const savedSeedApplied = Boolean(seed && saved.config.contributionEvents.some(event => event.eventId === seed.eventId));
+        const replaySnapshot = savedSeedApplied && seed
+          ? { ...baseSnapshot, config: { ...baseSnapshot.config, contributionEvents: [...baseSnapshot.config.contributionEvents, seed] } }
+          : baseSnapshot;
+        const requestHash = sha256({ policy, ...replaySnapshot });
         if (existing[0].input_hash !== requestHash) throw new Error("IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_INPUT");
-        return decode(typeof existing[0].result_json === "string" ? JSON.parse(existing[0].result_json) : existing[0].result_json) as BacktestResult;
+        return saved;
       }
       if (policy.status !== "ACTIVE") throw new Error("POLICY_NOT_ACTIVE");
 
@@ -516,18 +623,35 @@ export class StandingPaperPolicyRepository {
       // change cannot pass a stale join predicate and then receive writes.
       const lockedAccounts = await tx<{ owner_id: string; status: string; mode: string; base_currency_code: string }[]>`select owner_id, status, mode, base_currency_code from public.financial_accounts where id = ${policy.financialAccountId} for update`;
       const lockedAccount = lockedAccounts[0];
+      if (options.expectedOwnerId && lockedAccount?.owner_id !== options.expectedOwnerId) throw new Error("PAPER_WORKER_ACCOUNT_OWNER_MISMATCH");
       if (!lockedAccount || lockedAccount.status !== "ACTIVE" || lockedAccount.mode !== "PAPER" || lockedAccount.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
 
+      const stateRows = await tx<{ state_json: unknown; last_run_id: string | null }[]>`select state_json, last_run_id from public.standing_paper_policies where policy_id = ${policyId}`;
+      const initial = parseState(stateRows[0]!.state_json, policy.financialAccountId);
+      await this.assertLedgerCheckpointMatches(tx, policy.financialAccountId, initial, stateRows[0]!.last_run_id);
+      let seedAlreadyPosted = false;
+      if (seed) {
+        const seedRows = await tx<{ input_hash: string }[]>`
+          select input_hash from public.standing_paper_contributions
+          where financial_account_id = ${policy.financialAccountId} and policy_id = ${policyId} and event_id = ${seed.eventId}
+        `;
+        if (seedRows[0]) {
+          if (seedRows[0].input_hash !== sha256(seed)) throw new Error("PAPER_INITIAL_CAPITAL_CONFLICT");
+          seedAlreadyPosted = true;
+        } else if (stateRows[0]!.last_run_id !== null || initial.lastProcessedAt !== null || initial.ledger.length !== 0 || initial.acquisitions.length !== 0 || initial.netContributionsMinor !== 0n || initial.committedCapitalMinor !== 0n) {
+          throw new Error("PAPER_INITIAL_CAPITAL_REQUIRES_EMPTY_CHECKPOINT");
+        }
+      }
+      const snapshot = seed && !seedAlreadyPosted
+        ? { ...baseSnapshot, config: { ...baseSnapshot.config, contributionEvents: [...baseSnapshot.config.contributionEvents, seed] } }
+        : baseSnapshot;
+      const requestHash = sha256({ policy, ...snapshot });
       const contributionIds = snapshot.config.contributionEvents.map(event => event.eventId);
       if (new Set(contributionIds).size !== contributionIds.length) throw new Error("DUPLICATE_PAPER_CONTRIBUTION_EVENT");
       if (contributionIds.length) {
         const duplicate = await tx<{ event_id: string }[]>`select event_id from public.standing_paper_contributions where financial_account_id = ${policy.financialAccountId} and policy_id = ${policyId} and event_id in ${tx(contributionIds)}`;
         if (duplicate[0]) throw new Error("PAPER_CONTRIBUTION_ALREADY_PROCESSED");
       }
-
-      const stateRows = await tx<{ state_json: unknown; last_run_id: string | null }[]>`select state_json, last_run_id from public.standing_paper_policies where policy_id = ${policyId}`;
-      const initial = parseState(stateRows[0]!.state_json, policy.financialAccountId);
-      await this.assertLedgerCheckpointMatches(tx, policy.financialAccountId, initial, stateRows[0]!.last_run_id);
       const result = runDeterministicBacktest({ ...snapshot.config, financialAccountId: policy.financialAccountId, standingPaperPolicy: policy }, snapshot.prices, initial);
       const runId = randomUUID();
       await tx`insert into public.standing_paper_runs (id, policy_id, financial_account_id, idempotency_key, input_hash, result_json) values (${runId}, ${policyId}, ${policy.financialAccountId}, ${idempotencyKey}, ${requestHash}, ${tx.json(json(result))})`;
