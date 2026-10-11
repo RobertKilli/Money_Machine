@@ -109,7 +109,6 @@ export class StandingPaperWorker {
 
   async run(): Promise<StandingPaperWorkerResult> {
     if (this.active || this.started) throw new Error("PAPER_WORKER_ALREADY_RUNNING");
-    if (this.options.exitPolicy) await this.repository.assertCycleV2Schema();
     this.active = true;
     this.started = true;
     let heartbeatStarted = false;

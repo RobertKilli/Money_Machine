@@ -15,7 +15,6 @@ const volume = `mm-standing-paper-test-${token}`;
 const database = `mm_paper_${token}`;
 const probeMode = process.argv.find(value => value.startsWith("--probe="))?.slice("--probe=".length);
 const workerDemo = process.argv.includes("--worker-demo");
-const preCycleV1Compat = process.argv.includes("--pre-cycle-v1-compat");
 const password = "postgres";
 const temporary = await mkdtemp(join(tmpdir(), "mm-standing-paper-test-"));
 const report = join(temporary, "vitest-report.json");
@@ -103,7 +102,7 @@ try {
   ensureWorkNotInterrupted();
   const bootstrap = `create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls; create schema auth; create table auth.users (id uuid primary key); create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;`;
   await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input: bootstrap, capture: true });
-  const migrations = (await readdir(join(root, "supabase", "migrations"))).filter(name => name.endsWith(".sql") && (!preCycleV1Compat || name !== "20261009151100_standing_paper_cycle_execution.sql")).sort();
+  const migrations = (await readdir(join(root, "supabase", "migrations"))).filter(name => name.endsWith(".sql")).sort();
   for (const migration of migrations) {
     ensureWorkNotInterrupted();
     if (probeMode === "interrupt-migration") setTimeout(() => onSignal("SIGINT"), 250).unref();
@@ -113,21 +112,18 @@ try {
   }
   if (probeMode === "failure") await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input: "drop table public.standing_paper_policies cascade;", capture: true });
   console.log(`Applied ${migrations.length} migrations to the task-owned local PostgreSQL database.`);
-  const env = { ...process.env, MONEY_MACHINE_INTEGRATION_TEST: "1", MM_STANDING_PAPER_PRE_CYCLE_SCHEMA: preCycleV1Compat ? "1" : "0", MM_STANDING_PAPER_TEST_DATABASE_URL: `postgresql://postgres:${password}@127.0.0.1:${port}/${database}` };
+  const env = { ...process.env, MONEY_MACHINE_INTEGRATION_TEST: "1", MM_STANDING_PAPER_TEST_DATABASE_URL: `postgresql://postgres:${password}@127.0.0.1:${port}/${database}` };
   let suiteError;
   ensureWorkNotInterrupted();
   if (probeMode === "interrupt-tests") setTimeout(() => onSignal("SIGINT"), 250).unref();
-  const testArgs = [resolve(root, "node_modules", "vitest", "vitest.mjs"), "run", "--config", "vitest.integration.config.ts", "tests/integration/standing-paper-policy.test.ts"];
-  if (preCycleV1Compat) testArgs.push("-t", "keeps the v1 worker and status|fails v2 closed");
-  testArgs.push("--reporter=json", `--outputFile=${report}`);
-  try { await run(process.execPath, testArgs, { env }); }
+  try { await run(process.execPath, [resolve(root, "node_modules", "vitest", "vitest.mjs"), "run", "--config", "vitest.integration.config.ts", "tests/integration/standing-paper-policy.test.ts", "--reporter=json", `--outputFile=${report}`], { env }); }
   catch (error) { suiteError = error; }
   if (probeMode === "interrupt-tests") throw new Error(interrupted ? "STANDING_PAPER_TEST_INTERRUPTED_AS_EXPECTED" : "STANDING_PAPER_TEST_INTERRUPT_PROBE_FAILED");
   if (probeMode === "interrupt-migration") throw new Error(interrupted ? "STANDING_PAPER_TEST_INTERRUPTED_AS_EXPECTED" : "STANDING_PAPER_MIGRATION_INTERRUPT_PROBE_FAILED");
   const output = JSON.parse(await readFile(report, "utf8"));
   const assertions = output.testResults?.flatMap(file => file.assertionResults ?? []) ?? [];
   console.log(assertions.map(item => `${item.status}: ${item.title}${item.failureMessages?.length ? `\n${item.failureMessages.join("\n")}` : ""}`).join("\n"));
-  const allCases = [
+  const cases = [
     "creates one owned empty PAPER/NOK account under concurrent requests without deposits or policy writes",
     "preflights the exact hosted target and rejects wrong account, policy, status, or capital without writes",
     "posts one policy-scoped 200 NOK initial contribution across hosted worker rounds and restart",
@@ -161,10 +157,6 @@ try {
     "bounds history independently for each policy and accepts distinct runner timestamps",
     "grants authenticated status reads through migrations while preserving owner RLS",
   ];
-  const cases = preCycleV1Compat ? [
-    "keeps the v1 worker and status readable on the schema before cycle-v2",
-    "fails v2 closed with the schema requirement before any writes",
-  ] : allCases;
   if (probeMode === "failure") {
     if (!suiteError || !assertions.some(item => item.status === "failed")) throw new Error("STANDING_PAPER_FAILURE_PROBE_DID_NOT_FAIL");
     console.log("Confirmed deliberate PostgreSQL suite failure; later work stopped and cleanup completed.");

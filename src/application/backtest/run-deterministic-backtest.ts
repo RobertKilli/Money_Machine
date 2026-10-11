@@ -87,7 +87,7 @@ function validate(config: BacktestRunConfig): void {
 }
 function account(financialAccountId: string, code: string, commodity: LedgerAccount["commodity"], cls: LedgerAccount["accountClass"], normal: LedgerAccount["normalBalance"], run: string): LedgerAccount { return { id: id(run, `account:${code}`), financialAccountId, code, commodity, accountClass: cls, normalBalance: normal }; }
 
-export function quantityWithinSellOrderLimit(input: { assetId: string; availableAtoms: bigint; quantityScale: number; incrementAtoms: bigint; executionPrice: ReturnType<typeof sellExecutionPrice>; maxOrderMinor: bigint }): bigint {
+function quantityWithinSellOrderLimit(input: { assetId: string; availableAtoms: bigint; quantityScale: number; incrementAtoms: bigint; executionPrice: ReturnType<typeof sellExecutionPrice>; maxOrderMinor: bigint }): bigint {
   const maxUnits = input.availableAtoms / input.incrementAtoms;
   let low = 0n; let high = maxUnits;
   while (low < high) {
@@ -95,17 +95,10 @@ export function quantityWithinSellOrderLimit(input: { assetId: string; available
     const quantity = { assetId: input.assetId, atomicUnits: units * input.incrementAtoms, quantityScale: input.quantityScale };
     const gross = sellSettlementProceeds(quantity, input.executionPrice);
     const fee = feeCeiling(gross, basisPoints(10n), money("NOK", 100n));
-    // Gross notional plus fee is monotone in quantity. Net proceeds are not
-    // suitable for the binary-search predicate: small quantities can fail the
-    // minimum fee while a larger quantity is valid.
-    if (gross.minorUnits + fee.minorUnits <= input.maxOrderMinor) low = units;
+    if (gross.minorUnits > fee.minorUnits && gross.minorUnits + fee.minorUnits <= input.maxOrderMinor) low = units;
     else high = units - 1n;
   }
-  const quantityAtoms = low * input.incrementAtoms;
-  if (quantityAtoms === 0n) return 0n;
-  const gross = sellSettlementProceeds({ assetId: input.assetId, atomicUnits: quantityAtoms, quantityScale: input.quantityScale }, input.executionPrice);
-  const fee = feeCeiling(gross, basisPoints(10n), money("NOK", 100n));
-  return gross.minorUnits > fee.minorUnits ? quantityAtoms : 0n;
+  return low * input.incrementAtoms;
 }
 
 export function runDeterministicBacktest(config: BacktestRunConfig, prices: readonly FixturePriceObservation[], initialState?: DeterministicBacktestState): BacktestResult {
@@ -296,7 +289,7 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
         executions.push(fill); committedCapitalMinor += fill.totalCashDebit.minorUnits;
         if (cycleMode) cumulativeTurnoverMinor += fill.grossNotional.minorUnits;
         const holding = account(financialAccountId, `ASSET_HOLDING:${asset.assetId}`, { kind: "ASSET", assetId: asset.assetId }, "ASSET", "DEBIT", runId); const clearing = account(financialAccountId, `ASSET_CLEARING:${asset.assetId}`, { kind: "ASSET", assetId: asset.assetId }, "CLEARING", "CREDIT", runId); const cost = account(financialAccountId, `ASSET_COST_BASIS:${asset.assetId}`, { kind: "MONEY", currencyCode: "NOK" }, "ASSET", "DEBIT", runId);
-        const tx = createLedgerTransaction({ id: id(runId, `journal:${event.eventId}:${order.assetId}`), financialAccountId, type: "SIMULATED_BUY_SETTLEMENT", occurredAt: event.at, narrative: "Deterministic paper simulation BUY settlement", entries: [ledgerEntry(cost, "DEBIT", fill.grossNotional.minorUnits + (cycleMode ? fill.fee.minorUnits : 0n)), ledgerEntry(cash, "CREDIT", fill.grossNotional.minorUnits), ...(cycleMode ? [] : [ledgerEntry(fee, "DEBIT", fill.fee.minorUnits)]), ledgerEntry(cash, "CREDIT", fill.fee.minorUnits), ledgerEntry(holding, "DEBIT", fill.quantity.atomicUnits), ledgerEntry(clearing, "CREDIT", fill.quantity.atomicUnits)] }); journals.push(tx);
+        const tx = createLedgerTransaction({ id: id(runId, `journal:${event.eventId}:${order.assetId}`), financialAccountId, type: "SIMULATED_BUY_SETTLEMENT", occurredAt: event.at, narrative: "Deterministic paper simulation BUY settlement", entries: [ledgerEntry(cost, "DEBIT", fill.grossNotional.minorUnits), ledgerEntry(cash, "CREDIT", fill.grossNotional.minorUnits), ledgerEntry(fee, "DEBIT", fill.fee.minorUnits), ledgerEntry(cash, "CREDIT", fill.fee.minorUnits), ledgerEntry(holding, "DEBIT", fill.quantity.atomicUnits), ledgerEntry(clearing, "CREDIT", fill.quantity.atomicUnits)] }); journals.push(tx);
         tx.entries.forEach((entry,i) => ledger.push({ entryId:id(runId,`entry:${tx.id}:${i}`), transactionId:tx.id, financialAccountId, code:entry.ledgerAccount.code, commodityKind:entry.ledgerAccount.commodity.kind, currency:entry.ledgerAccount.commodity.kind === "MONEY" ? entry.ledgerAccount.commodity.currencyCode : null, assetId:entry.ledgerAccount.commodity.kind === "ASSET" ? entry.ledgerAccount.commodity.assetId : null, direction:entry.direction, amountAtoms:entry.amountAtoms, occurredAt:event.at, recordedAt:event.at }));
         acquisitions.push({ fillId: fill.fillId, executionId: id(runId, `execution:${event.eventId}:${order.assetId}`), ledgerTransactionId: tx.id, financialAccountId, assetId: order.assetId, quantityAtoms: fill.quantity.atomicUnits, quantityScale: fill.quantity.quantityScale, currency: "NOK", grossMinor: fill.grossNotional.minorUnits, feeMinor: fill.fee.minorUnits, executedAt: event.at, recordedAt: event.at, executionPolicyVersion: fill.executionPolicyVersion, executionMatchesFill: true });
         const afterFill = stateAt(event.at);

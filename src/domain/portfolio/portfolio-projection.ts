@@ -139,10 +139,9 @@ export function projectPortfolio(source: PortfolioEvidence, asOf: Date): Portfol
     for (const f of acquisitions) {
       const journal = ledger.filter(e => e.transactionId === f.ledgerTransactionId);
       const amount = (code: string) => sum(journal.filter(e => e.code === code).map(signed));
-      const cycleMode = source.disposals !== undefined;
       if (!f.executionMatchesFill || f.executionPolicyVersion !== SIMULATION_EXECUTION_POLICY_VERSION || f.quantityAtoms <= 0n || f.grossMinor < 0n || f.feeMinor < 0n || f.currency !== source.baseCurrency || f.quantityScale !== asset?.quantityScale ||
         amount(`ASSET_HOLDING:${assetId}`) !== f.quantityAtoms || amount(`ASSET_CLEARING:${assetId}`) !== -f.quantityAtoms ||
-        amount("CASH") !== -(f.grossMinor + f.feeMinor) || amount(`ASSET_COST_BASIS:${assetId}`) !== f.grossMinor + (cycleMode ? f.feeMinor : 0n) || amount("FEE_EXPENSE") !== (cycleMode ? 0n : f.feeMinor)) {
+        amount("CASH") !== -(f.grossMinor + f.feeMinor) || amount(`ASSET_COST_BASIS:${assetId}`) !== f.grossMinor || amount("FEE_EXPENSE") !== f.feeMinor) {
         violations.push("SETTLEMENT_EVIDENCE_MISMATCH");
       }
     }
