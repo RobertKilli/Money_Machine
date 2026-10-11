@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { runDeterministicBacktest, type BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
+import { quantityWithinSellOrderLimit, runDeterministicBacktest, type BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
 import { StandingPaperWorker } from "@/application/paper-trading/run-standing-paper-worker";
 import { executeSimulationSell } from "@/domain/execution/simulation-execution";
 import { price } from "@/domain/financial/price";
+import { basisPoints } from "@/domain/financial/basis-points";
+import { sellExecutionPrice } from "@/domain/financial/rounding";
 import { planFifoLotConsumption, type OpenCostBasisLot } from "@/domain/portfolio/portfolio-projection";
 import { evaluateStandingPaperExit, PAPER_CYCLE_CONTRACT_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
 import { transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
@@ -48,6 +50,17 @@ describe("standing paper cycle v2", () => {
     expect(result.endingState.integrityStatus).toBe("CONSISTENT");
     expect(result.endingState.holdings.every(item => BigInt(item.quantityAtoms) >= 0n)).toBe(true);
     expect(result.persistentState.netContributionsMinor).toBe(20_000n);
+    const purchase = result.executions.find(fill => !("side" in fill));
+    const acquisition = result.persistentState.acquisitions.find(item => item.fillId === purchase?.fillId)!;
+    const purchaseJournal = result.persistentState.ledger.filter(entry => entry.transactionId === acquisition.ledgerTransactionId);
+    const purchaseSigned = (code: string) => purchaseJournal.filter(entry => entry.code === code).reduce((sum, entry) => sum + (entry.direction === "DEBIT" ? entry.amountAtoms : -entry.amountAtoms), 0n);
+    expect(purchaseSigned(`ASSET_COST_BASIS:${acquisition.assetId}`)).toBe(acquisition.grossMinor + acquisition.feeMinor);
+    expect(purchaseSigned("CASH")).toBe(-(acquisition.grossMinor + acquisition.feeMinor));
+    expect(purchaseSigned("FEE_EXPENSE")).toBe(0n);
+    const sale = result.persistentState.disposals![0]!;
+    const saleJournal = result.persistentState.ledger.filter(entry => entry.transactionId === sale.ledgerTransactionId);
+    const saleBasis = sale.lotConsumptions.reduce((sum, item) => sum + item.costBasisMinor, 0n);
+    expect(saleJournal.filter(entry => entry.code === `ASSET_COST_BASIS:${sale.assetId}`).reduce((sum, entry) => sum + (entry.direction === "DEBIT" ? entry.amountAtoms : -entry.amountAtoms), 0n)).toBe(-saleBasis);
   });
 
   it.each([
@@ -70,6 +83,12 @@ describe("standing paper cycle v2", () => {
     expect(fill.fee.minorUnits).toBeGreaterThan(0n);
     expect(fill.executionPrice.priceAtoms).toBeLessThan(reference.price.priceAtoms);
     expect(() => executeSimulationSell({ financialAccountId: order.financialAccountId, accountActive: true, simulationMode: true, decisionApproved: true, riskApproved: true, order: { ...order, quantity: { ...order.quantity, atomicUnits: 1_000_001n } }, asset, referencePrice: reference, availableQuantity: order.quantity, executionTimestamp: t1, alreadySettled: false })).toThrow("INSUFFICIENT_POSITION");
+  });
+
+  it("uses a monotone sell-order search and separately rejects non-positive net proceeds", () => {
+    const executionPrice = sellExecutionPrice(price("NOK", 2n, 0), basisPoints(0n), basisPoints(0n));
+    expect(quantityWithinSellOrderLimit({ assetId: asset.assetId, availableAtoms: 100n, quantityScale: 0, incrementAtoms: 1n, executionPrice, maxOrderMinor: 260n })).toBe(80n);
+    expect(quantityWithinSellOrderLimit({ assetId: asset.assetId, availableAtoms: 100n, quantityScale: 0, incrementAtoms: 1n, executionPrice, maxOrderMinor: 200n })).toBe(0n);
   });
 
   it("fails closed on missing or stale cycle prices and requires a one-time seed for workers", () => {

@@ -129,6 +129,7 @@ export function projectPortfolio(source: PortfolioEvidence, asOf: Date): Portfol
     const atoms = sum(entries.map(signed));
     const acquisitions = fills.filter(f => f.assetId === assetId);
     const assetDisposals = disposals.filter(f => f.assetId === assetId);
+    const cycleV2 = source.disposals !== undefined;
     if (atoms === 0n && acquisitions.length === 0) continue;
     const asset = source.assets.find(a => a.assetId === assetId);
     const violations: PortfolioViolation[] = [];
@@ -141,7 +142,9 @@ export function projectPortfolio(source: PortfolioEvidence, asOf: Date): Portfol
       const amount = (code: string) => sum(journal.filter(e => e.code === code).map(signed));
       if (!f.executionMatchesFill || f.executionPolicyVersion !== SIMULATION_EXECUTION_POLICY_VERSION || f.quantityAtoms <= 0n || f.grossMinor < 0n || f.feeMinor < 0n || f.currency !== source.baseCurrency || f.quantityScale !== asset?.quantityScale ||
         amount(`ASSET_HOLDING:${assetId}`) !== f.quantityAtoms || amount(`ASSET_CLEARING:${assetId}`) !== -f.quantityAtoms ||
-        amount("CASH") !== -(f.grossMinor + f.feeMinor) || amount(`ASSET_COST_BASIS:${assetId}`) !== f.grossMinor || amount("FEE_EXPENSE") !== f.feeMinor) {
+        amount("CASH") !== -(f.grossMinor + f.feeMinor) ||
+        amount(`ASSET_COST_BASIS:${assetId}`) !== f.grossMinor + (cycleV2 ? f.feeMinor : 0n) ||
+        amount("FEE_EXPENSE") !== (cycleV2 ? 0n : f.feeMinor)) {
         violations.push("SETTLEMENT_EVIDENCE_MISMATCH");
       }
     }

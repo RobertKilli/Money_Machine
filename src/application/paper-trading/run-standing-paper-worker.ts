@@ -120,8 +120,9 @@ export class StandingPaperWorker {
         this.processInstanceId,
         this.options.expectedOwnerId,
         this.options.initialCapitalMinor !== undefined && this.options.expectedAccountId
-          ? { accountId: this.options.expectedAccountId, initialCapitalMinor: this.options.initialCapitalMinor }
+          ? { accountId: this.options.expectedAccountId, initialCapitalMinor: this.options.initialCapitalMinor, requiresCycleV2: this.options.exitPolicy !== undefined }
           : undefined,
+        this.options.exitPolicy !== undefined,
       );
       heartbeatStarted = true;
       this.heartbeatTask = this.renewHeartbeat();

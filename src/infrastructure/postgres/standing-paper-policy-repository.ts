@@ -222,6 +222,18 @@ export class StandingPaperPolicyRepository {
     this.client = postgres(connectionString, { max: 5, prepare: true, ...(connectionOptions.ssl ? { ssl: connectionOptions.ssl } : {}) });
   }
 
+  private async hasCycleV2Schema(tx: TransactionSql): Promise<boolean> {
+    const rows = await tx<{ decisions: boolean; audit: boolean; fillSide: boolean; fillDisposal: boolean; sellType: boolean }[]>`
+      select to_regclass('public.standing_paper_cycle_decisions') is not null as decisions,
+        to_regclass('public.standing_paper_cycle_decision_audit') is not null as audit,
+        exists (select 1 from information_schema.columns where table_schema='public' and table_name='standing_paper_fills' and column_name='side') as "fillSide",
+        exists (select 1 from information_schema.columns where table_schema='public' and table_name='standing_paper_fills' and column_name='disposal_json') as "fillDisposal",
+        exists (select 1 from pg_type t join pg_enum e on e.enumtypid=t.oid where t.typname='ledger_transaction_type' and e.enumlabel='SIMULATED_SELL_SETTLEMENT') as "sellType"
+    `;
+    const schema = rows[0];
+    return Boolean(schema?.decisions && schema.audit && schema.fillSide && schema.fillDisposal && schema.sellType);
+  }
+
   /** Read-only, fail-closed gate for the separate hosted entrypoint. It binds
    * the explicit account to an existing owned PAPER/NOK account and validates
    * the complete persisted policy before heartbeat or settlement writes. */
@@ -276,10 +288,11 @@ export class StandingPaperPolicyRepository {
 
   /** Heartbeat rows have their own short transaction and process-instance key.
    * They never acquire the settlement checkpoint or append ledger material. */
-  async startWorkerHeartbeat(policyId: string, workerId: string, processInstanceId: string, expectedOwnerId?: string, expectedTarget?: { readonly accountId: string; readonly initialCapitalMinor: bigint }): Promise<void> {
+  async startWorkerHeartbeat(policyId: string, workerId: string, processInstanceId: string, expectedOwnerId?: string, expectedTarget?: { readonly accountId: string; readonly initialCapitalMinor: bigint; readonly requiresCycleV2?: boolean }, requiresCycleV2 = false): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(workerId) || !isProcessInstanceUuid(processInstanceId)) throw new Error("PAPER_WORKER_HEARTBEAT_ID_INVALID");
     if (expectedTarget) {
       await this.client.begin(async tx => {
+        if ((requiresCycleV2 || expectedTarget.requiresCycleV2) && !(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
         const policies = await tx<{ policy_json: unknown; status: string; policy_version: string; financial_account_id: string; state_json: unknown; last_run_id: string | null }[]>`
           select policy_json, status, policy_version, financial_account_id, state_json, last_run_id
           from public.standing_paper_policies where policy_id=${policyId} for update
@@ -311,18 +324,24 @@ export class StandingPaperPolicyRepository {
       });
       return;
     }
-    const rows = await this.client<{ policy_id: string }[]>`
-      insert into public.standing_paper_worker_heartbeats
-        (policy_id, financial_account_id, worker_id, process_instance_id, status)
-      select p.policy_id, p.financial_account_id, ${workerId}, ${processInstanceId}::uuid,
-        case when p.status = 'PAUSED' then 'WAITING_PAUSED' else 'RUNNING' end
-      from public.standing_paper_policies p
-      join public.financial_accounts a on a.id = p.financial_account_id
-      where p.policy_id = ${policyId} and p.status in ('ACTIVE', 'PAUSED', 'STOPPED')
-        and a.status = 'ACTIVE' and a.mode = 'PAPER' and a.base_currency_code = 'NOK'
-        and (${expectedOwnerId ?? null}::uuid is null or a.owner_id = ${expectedOwnerId ?? null}::uuid)
-      returning policy_id
-    `;
+    const insertHeartbeat = async (tx: Sql) => tx<{ policy_id: string }[]>`
+        insert into public.standing_paper_worker_heartbeats
+          (policy_id, financial_account_id, worker_id, process_instance_id, status)
+        select p.policy_id, p.financial_account_id, ${workerId}, ${processInstanceId}::uuid,
+          case when p.status = 'PAUSED' then 'WAITING_PAUSED' else 'RUNNING' end
+        from public.standing_paper_policies p
+        join public.financial_accounts a on a.id = p.financial_account_id
+        where p.policy_id = ${policyId} and p.status in ('ACTIVE', 'PAUSED', 'STOPPED')
+          and a.status = 'ACTIVE' and a.mode = 'PAPER' and a.base_currency_code = 'NOK'
+          and (${expectedOwnerId ?? null}::uuid is null or a.owner_id = ${expectedOwnerId ?? null}::uuid)
+        returning policy_id
+      `;
+    const rows = requiresCycleV2
+      ? await this.client.begin(async tx => {
+          if (!(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+          return insertHeartbeat(tx);
+        })
+      : await insertHeartbeat(this.client);
     if (!rows[0]) throw new Error("PAPER_WORKER_HEARTBEAT_POLICY_NOT_RUNNABLE");
   }
 
@@ -424,7 +443,8 @@ export class StandingPaperPolicyRepository {
         from ranked where policy_rank <= 20
         order by policy_id asc, policy_rank asc
       `;
-      const cycleDecisionRows = await tx<{
+      const cycleV2Schema = await this.hasCycleV2Schema(tx);
+      const cycleDecisionRows = cycleV2Schema ? await tx<{
         policy_id: string; financial_account_id: string; decision_id: string; order_id: string; action: string; reason_code: string; input_hash: string; decision_json: unknown; created_at: Date;
       }[]>`
         with ranked as (
@@ -435,8 +455,12 @@ export class StandingPaperPolicyRepository {
         )
         select policy_id, financial_account_id, decision_id, order_id, action, reason_code, input_hash, decision_json, created_at
         from ranked where policy_rank <= 20 order by policy_id asc, policy_rank asc
-      `;
-      const fillRows = await tx<{
+      ` : [];
+      let fillRows: {
+        policy_id: string; financial_account_id: string; fill_id: string; order_id: string; side: string;
+        execution_json: unknown; acquisition_json: unknown; disposal_json: unknown; run_id: string; created_at: Date;
+      }[];
+      if (cycleV2Schema) fillRows = await tx<{
         policy_id: string; financial_account_id: string; fill_id: string; order_id: string; side: string;
         execution_json: unknown; acquisition_json: unknown; disposal_json: unknown; run_id: string; created_at: Date;
       }[]>`
@@ -452,12 +476,30 @@ export class StandingPaperPolicyRepository {
         from ranked where policy_rank <= 20
         order by policy_id asc, policy_rank asc
       `;
+      else {
+        const legacyFillRows = await tx<{
+          policy_id: string; financial_account_id: string; fill_id: string; order_id: string;
+          execution_json: unknown; acquisition_json: unknown; run_id: string; created_at: Date;
+        }[]>`
+          with ranked as (
+            select f.policy_id, f.financial_account_id, f.fill_id, f.order_id, f.execution_json,
+              f.acquisition_json, f.run_id, f.created_at,
+              row_number() over (partition by f.policy_id order by r.created_at desc, f.fill_id asc) as policy_rank
+            from public.standing_paper_fills f join public.standing_paper_runs r on r.id=f.run_id
+            where f.policy_id in ${tx(policyIds)}
+          )
+          select policy_id, financial_account_id, fill_id, order_id, execution_json, acquisition_json, run_id, created_at
+          from ranked where policy_rank <= 20 order by policy_id asc, policy_rank asc
+        `;
+        fillRows = legacyFillRows.map(row => ({ ...row, side: "BUY", disposal_json: null }));
+      }
       const cards: StandingPaperPolicyStatusCard[] = [];
       for (const row of rows) {
         try {
           const policy = parsePolicy(row.policy_json);
           if (policy.policyId !== row.policy_id || policy.financialAccountId !== row.financial_account_id || policy.version !== row.policy_version || policy.status !== row.status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
           const state = parseState(row.state_json, row.financial_account_id);
+          if (!cycleV2Schema && state.disposals !== undefined) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
           await this.assertLedgerCheckpointMatches(tx, row.financial_account_id, state, row.last_run_id);
           const run = runRows.find(item => item.id === row.last_run_id);
           if (row.last_run_id && (!run || run.policy_id !== row.policy_id || run.financial_account_id !== row.financial_account_id)) throw new Error("PAPER_CHECKPOINT_INVALID");
@@ -547,12 +589,27 @@ export class StandingPaperPolicyRepository {
     if (sha256(actualLedger) !== sha256(expectedLedger) || sha256(transactions.map(row => row.id)) !== sha256(expectedTransactionIds)) {
       throw new Error("PAPER_LEDGER_CHECKPOINT_MISMATCH");
     }
-    const actualAcquisitions = await tx<{ acquisition_json: unknown }[]>`select acquisition_json from public.standing_paper_fills where financial_account_id=${accountId} and side='BUY' order by fill_id`;
+    for (const acquisition of state.acquisitions) {
+      const journal = actualLedger.filter(item => item.transactionId === acquisition.ledgerTransactionId);
+      const signedAmount = (code: string) => journal.filter(item => item.code === code).reduce((sum, item) => sum + (item.direction === "DEBIT" ? item.amountAtoms : -item.amountAtoms), 0n);
+      if (signedAmount("CASH") !== -(acquisition.grossMinor + acquisition.feeMinor) ||
+        signedAmount(`ASSET_COST_BASIS:${acquisition.assetId}`) !== acquisition.grossMinor + (state.disposals !== undefined ? acquisition.feeMinor : 0n) ||
+        signedAmount("FEE_EXPENSE") !== (state.disposals !== undefined ? 0n : acquisition.feeMinor) ||
+        signedAmount(`ASSET_HOLDING:${acquisition.assetId}`) !== acquisition.quantityAtoms ||
+        signedAmount(`ASSET_CLEARING:${acquisition.assetId}`) !== -acquisition.quantityAtoms) throw new Error("PAPER_BUY_LEDGER_CHECKPOINT_MISMATCH");
+    }
+    const cycleV2 = state.disposals !== undefined;
+    if (cycleV2 && !(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    const actualAcquisitions = cycleV2
+      ? await tx<{ acquisition_json: unknown }[]>`select acquisition_json from public.standing_paper_fills where financial_account_id=${accountId} and side='BUY' order by fill_id`
+      : await tx<{ acquisition_json: unknown }[]>`select acquisition_json from public.standing_paper_fills where financial_account_id=${accountId} order by fill_id`;
     const acquisitions = actualAcquisitions.map(row => decode(typeof row.acquisition_json === "string" ? JSON.parse(row.acquisition_json) : row.acquisition_json));
     if (sha256(acquisitions) !== sha256([...state.acquisitions].sort((a,b) => a.fillId.localeCompare(b.fillId)))) throw new Error("PAPER_ACQUISITION_CHECKPOINT_MISMATCH");
-    const actualDisposals = await tx<{ disposal_json: unknown }[]>`select disposal_json from public.standing_paper_fills where financial_account_id=${accountId} and side='SELL' order by fill_id`;
-    const disposals = actualDisposals.map(row => decode(typeof row.disposal_json === "string" ? JSON.parse(row.disposal_json) : row.disposal_json));
-    if (sha256(disposals) !== sha256([...(state.disposals ?? [])].sort((a,b) => a.fillId.localeCompare(b.fillId)))) throw new Error("PAPER_DISPOSAL_CHECKPOINT_MISMATCH");
+    if (cycleV2) {
+      const actualDisposals = await tx<{ disposal_json: unknown }[]>`select disposal_json from public.standing_paper_fills where financial_account_id=${accountId} and side='SELL' order by fill_id`;
+      const disposals = actualDisposals.map(row => decode(typeof row.disposal_json === "string" ? JSON.parse(row.disposal_json) : row.disposal_json));
+      if (sha256(disposals) !== sha256([...state.disposals!].sort((a,b) => a.fillId.localeCompare(b.fillId)))) throw new Error("PAPER_DISPOSAL_CHECKPOINT_MISMATCH");
+    }
     if (state.disposals !== undefined) {
       const lots = [...state.acquisitions].sort((a,b) => a.executedAt.getTime()-b.executedAt.getTime() || a.fillId.localeCompare(b.fillId)).map(item => ({
         lotId: item.fillId, fillId: item.fillId, executionId: item.executionId, ledgerTransactionId: item.ledgerTransactionId,
@@ -699,6 +756,7 @@ export class StandingPaperPolicyRepository {
     const seed = options.initialContribution;
     if (seed && (seed.currency !== "NOK" || !seed.eventId.trim() || !/^\d+$/.test(seed.amountMinor) || BigInt(seed.amountMinor) <= 0n)) throw new Error("PAPER_INITIAL_CAPITAL_INVALID");
     return this.client.begin(async tx => {
+      if (config.paperCycleContractVersion === "standing-paper-cycle/v2" && !(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
       const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
       if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
       const policy = parsePolicy(rows[0].policy_json);
@@ -803,7 +861,11 @@ export class StandingPaperPolicyRepository {
       for (const fill of result.executions) {
         const acquisition = result.persistentState.acquisitions.find(item => item.fillId === fill.fillId);
         if (acquisition) {
-          await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, side, execution_json, acquisition_json, disposal_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${acquisition.ledgerTransactionId}, 'BUY', ${tx.json(json(fill))}, ${tx.json(json(acquisition))}, null, ${runId})`;
+          if (config.paperCycleContractVersion === "standing-paper-cycle/v2") {
+            await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, side, execution_json, acquisition_json, disposal_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${acquisition.ledgerTransactionId}, 'BUY', ${tx.json(json(fill))}, ${tx.json(json(acquisition))}, null, ${runId})`;
+          } else {
+            await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, execution_json, acquisition_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${acquisition.ledgerTransactionId}, ${tx.json(json(fill))}, ${tx.json(json(acquisition))}, ${runId})`;
+          }
           continue;
         }
         const disposal = result.persistentState.disposals?.find(item => item.fillId === fill.fillId);

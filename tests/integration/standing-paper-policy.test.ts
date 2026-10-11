@@ -13,6 +13,7 @@ import { StandingPaperWorker } from "@/application/paper-trading/run-standing-pa
 import { PAPER_CYCLE_CONTRACT_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
 
 const enabled = process.env.MONEY_MACHINE_INTEGRATION_TEST === "1";
+const preCycleMode = process.env.MONEY_MACHINE_PRE_CYCLE_TEST === "1";
 const testUrl = process.env.MM_STANDING_PAPER_TEST_DATABASE_URL;
 function assertTaskOwnedLocalDatabase(url: string | undefined): asserts url is string {
   if (!url) throw new Error("STANDING_PAPER_TEST_DATABASE_URL_REQUIRED");
@@ -146,6 +147,30 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(Number(evidence.journals)).toBe(Number(evidence.audits));
     const duplicates = await sql`select count(*)::text n from public.standing_paper_decisions where financial_account_id=${f.policy.financialAccountId} group by order_id having count(*) > 1`;
     expect(duplicates).toHaveLength(0);
+  });
+
+  it("keeps v1 status reads and worker rounds working without the cycle-v2 schema", async () => {
+    const f = await setup("pre-cycle-v1-compatibility");
+    const worker = new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "pre-cycle-v1-worker", maxRounds: 1 });
+    await expect(worker.run()).resolves.toMatchObject({ status: "COMPLETED", roundsCompleted: 1 });
+    const status = await f.repository.loadOwnedStatus(f.ownerId);
+    expect(status.policies).toHaveLength(1);
+    expect(status.policies[0]!.status).toBe("AVAILABLE");
+    expect(status.policies[0]!.workerStatus).toBe("ENDED");
+  });
+
+  it.skipIf(!preCycleMode)("rejects cycle-v2 before heartbeat or writes when its migration is absent", async () => {
+    const f = await setup("pre-cycle-v2-rejected");
+    const before = await counts(f.policy.financialAccountId);
+    const heartbeatBefore = await sql<{ n: string }[]>`select count(*)::text n from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    const exitPolicy = { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1_000 } as const;
+    await expect(new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "pre-cycle-v2-worker", maxRounds: 1,
+      initialCapitalMinor: 20_000n, exitPolicy,
+    }).run()).rejects.toThrow("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+    const heartbeatAfter = await sql<{ n: string }[]>`select count(*)::text n from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    expect(heartbeatAfter).toEqual(heartbeatBefore);
   });
 
   it("creates only one DRAFT under concurrent owner requests and requires fresh confirmation to activate", async () => {
