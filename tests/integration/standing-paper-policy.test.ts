@@ -1015,5 +1015,30 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(privileges).toHaveLength(9);
     expect(privileges.every(row => row.can_select && row.rls_enabled)).toBe(true);
   });
+
+  it.skipIf(process.env.MM_STANDING_PAPER_PRE_CYCLE_SCHEMA !== "1")("keeps the v1 worker and status readable on the schema before cycle-v2", async () => {
+    const f = await setup("pre-cycle-v1-worker");
+    const schema = await sql<{ cycle_decisions: string | null }[]>`select to_regclass('public.standing_paper_cycle_decisions')::text as cycle_decisions`;
+    expect(schema[0]?.cycle_decisions).toBeNull();
+    const result = await new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "pre-cycle-v1", maxRounds: 1 }).run();
+    expect(result).toMatchObject({ status: "COMPLETED", roundsCompleted: 1 });
+    await expect(f.repository.loadOwnedStatus(f.ownerId)).resolves.toMatchObject({ status: "AVAILABLE", policies: [{ policyId: f.policy.policyId, status: "AVAILABLE" }] });
+  });
+
+  it.skipIf(process.env.MM_STANDING_PAPER_PRE_CYCLE_SCHEMA !== "1")("fails v2 closed with the schema requirement before any writes", async () => {
+    const f = await setup("pre-cycle-v2-block");
+    const before = await counts(f.policy.financialAccountId);
+    const cycleConfig: Omit<BacktestRunConfig, "standingPaperPolicy"> = {
+      ...config("pre-cycle-v2", stamp(10)), financialAccountId: f.policy.financialAccountId,
+      contributionEvents: [], strategyEvaluationTimestamps: [stamp(10)], fifoCostBasisVersion: "fifo-cost-basis/v2",
+      paperCycleContractVersion: PAPER_CYCLE_CONTRACT_VERSION,
+      standingPaperExitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 86_400_000 },
+    };
+    await expect(f.repository.run(f.policy.policyId, cycleConfig, pricesAt(stamp(9)), "pre-cycle-v2-run")).rejects.toThrow("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    await expect(new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "pre-cycle-v2", maxRounds: 1, initialCapitalMinor: 100_000n, exitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 86_400_000 } }).run()).rejects.toThrow("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+    const heartbeatRows = await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    expect(heartbeatRows[0]?.count).toBe("0");
+  });
 });
 const configWithEndAt = (eventId: string, availableAt: string, endAt: string): Omit<BacktestRunConfig, "standingPaperPolicy"> => ({ ...config(eventId, availableAt), endAt });

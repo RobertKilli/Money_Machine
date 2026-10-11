@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runDeterministicBacktest, type BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
+import { quantityWithinSellOrderLimit, runDeterministicBacktest, type BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
 import { StandingPaperWorker } from "@/application/paper-trading/run-standing-paper-worker";
 import { executeSimulationSell } from "@/domain/execution/simulation-execution";
 import { price } from "@/domain/financial/price";
@@ -48,6 +48,18 @@ describe("standing paper cycle v2", () => {
     expect(result.endingState.integrityStatus).toBe("CONSISTENT");
     expect(result.endingState.holdings.every(item => BigInt(item.quantityAtoms) >= 0n)).toBe(true);
     expect(result.persistentState.netContributionsMinor).toBe(20_000n);
+    for (const acquisition of result.persistentState.acquisitions) {
+      const entries = result.persistentState.ledger.filter(item => item.transactionId === acquisition.ledgerTransactionId);
+      const signed = (code: string) => entries.filter(item => item.code === code).reduce((sum, item) => sum + (item.direction === "DEBIT" ? item.amountAtoms : -item.amountAtoms), 0n);
+      expect(signed(`ASSET_COST_BASIS:${acquisition.assetId}`)).toBe(acquisition.grossMinor + acquisition.feeMinor);
+      expect(signed("FEE_EXPENSE")).toBe(0n);
+    }
+  });
+
+  it("searches the monotone sell-order ceiling before checking minimum-fee proceeds", () => {
+    const input = { assetId: asset.assetId, quantityScale: 4, incrementAtoms: 10_000n, executionPrice: price("NOK", 1_000_000n, 4), maxOrderMinor: 500n };
+    expect(quantityWithinSellOrderLimit({ ...input, availableAtoms: 20_000n })).toBe(20_000n);
+    expect(quantityWithinSellOrderLimit({ ...input, availableAtoms: 10_000n })).toBe(0n);
   });
 
   it.each([
