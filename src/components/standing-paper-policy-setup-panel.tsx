@@ -7,6 +7,8 @@ import { requestPaperAccount } from "@/components/paper-account-creation";
 type EmptyPaperAccount = { financialAccountId: string };
 type AccountState = { kind: "LOADING" } | { kind: "READY"; accounts: readonly EmptyPaperAccount[] } | { kind: "ERROR" };
 const priceAges = [{ minutes: 15, label: "15 minutter" }, { minutes: 60, label: "1 time" }, { minutes: 1_440, label: "24 timer" }, { minutes: 10_080, label: "7 dager" }] as const;
+export const STANDING_PAPER_STOP_LOSS_PATTERN = "(?:0|[1-9][0-9]?)(?:[.][0-9]{1,2})?";
+export const STANDING_PAPER_TAKE_PROFIT_PATTERN = "(?:0|[1-9][0-9]{0,3})(?:[.][0-9]{1,2})?";
 
 async function readAccounts(): Promise<AccountState> {
   try {
@@ -160,8 +162,8 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
               <label className="flex min-h-11 items-start gap-3 text-sm"><input type="checkbox" checked={cycleV2Enabled} onChange={event => setCycleV2Enabled(event.target.checked)} className="mt-1" /><span><strong>Aktiver kjøp → salg (cycle v2)</strong><span className="mt-1 block text-xs font-normal text-[var(--muted)]">Valgfri, eksplisitt kontrakt. Uten dette forblir policyen V1 og kjøpsbasert.</span></span></label>
               {cycleV2Enabled && <>
                 <div className="grid gap-4 sm:grid-cols-3">
-                  <CycleField label="Stop-loss (%)" value={stopLossPercent} setValue={setStopLossPercent} placeholder="f.eks. 20" pattern="(?:0|[1-9][0-9]?)(?:\\.[0-9]{1,2})?" />
-                  <CycleField label="Take-profit (%)" value={takeProfitPercent} setValue={setTakeProfitPercent} placeholder="f.eks. 10" pattern="(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,2})?" />
+                  <CycleField label="Stop-loss (%)" value={stopLossPercent} setValue={setStopLossPercent} placeholder="f.eks. 20" pattern={STANDING_PAPER_STOP_LOSS_PATTERN} />
+                  <CycleField label="Take-profit (%)" value={takeProfitPercent} setValue={setTakeProfitPercent} placeholder="f.eks. 10" pattern={STANDING_PAPER_TAKE_PROFIT_PATTERN} />
                   <CycleField label="Maksimal holdetid (timer)" value={maxHoldingHours} setValue={setMaxHoldingHours} placeholder="f.eks. 120" pattern="[1-9][0-9]{0,3}" />
                 </div>
                 <p className="text-xs text-[var(--muted)]">Cycle v2 og FIFO kostgrunnlag versjoneres og lagres i DRAFT. Grensene du angir må bekreftes separat før aktivering. Tersklene er scenario-regler, ikke investeringsråd.</p>
@@ -192,7 +194,7 @@ function AmountField({ label, value, setValue }: { label: string; value: string;
   </label>;
 }
 
-function CycleField({ label, value, setValue, placeholder, pattern }: { label: string; value: string; setValue: (value: string) => void; placeholder: string; pattern: string }) {
+export function CycleField({ label, value, setValue, placeholder, pattern }: { label: string; value: string; setValue: (value: string) => void; placeholder: string; pattern: string }) {
   return <label className="grid gap-2 text-sm font-medium">{label}
     <input required type="text" inputMode="decimal" value={value} onChange={event => setValue(event.target.value)} placeholder={placeholder} pattern={pattern} className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[var(--foreground)]" />
   </label>;

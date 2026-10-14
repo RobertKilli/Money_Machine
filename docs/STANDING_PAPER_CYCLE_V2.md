@@ -18,6 +18,13 @@ policy is rejected before heartbeat or settlement writes if the cycle schema
 is missing or its stored configuration is invalid. No existing hosted policy
 is converted by this change.
 
+Before a v2 worker can create a heartbeat, the operator must also provide one
+explicit positive start-capital amount within the policy budget. The worker
+binds this virtual contribution idempotently to the policy and reuses that
+binding for later rounds and process restarts. A v2 policy never uses the
+local v1 demo's 1,000 NOK contribution per round. V1 worker contribution
+behavior is unchanged.
+
 ## Scenario policy inputs
 
 The versioned exit rule is `standing-paper-exit-policy/v1`. It evaluates stop

@@ -7,7 +7,7 @@ import { PAPER_CYCLE_CONTRACT_VERSION, PAPER_CYCLE_FIFO_COST_BASIS_VERSION, STAN
 import { price } from "@/domain/financial/price";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION } from "@/domain/strategy/fixture-assets";
 import { CycleConfigurationView, isStandingPaperActivationConfirmed, loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
-import { PaperAccountEmptyState, StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
+import { CycleField, PaperAccountEmptyState, STANDING_PAPER_STOP_LOSS_PATTERN, STANDING_PAPER_TAKE_PROFIT_PATTERN, StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
 
 const testPolicy: StandingPaperPolicy = {
   policyId: "paper-policy-test", identity: "synthetic-test-account", version: "standing-paper-policy/v1", mode: "PAPER_ONLY", status: "ACTIVE",
@@ -94,11 +94,38 @@ describe("standing paper status view", () => {
     expect(draftHtml).toContain("Syntetiske priser");
   });
 
-  it("shows every approved cycle limit and contract version before activation", () => {
+  it("renders HTML-valid stop-loss and take-profit patterns for integer and decimal percentages", () => {
+    const html = [
+      renderToStaticMarkup(<CycleField label="Stop-loss (%)" value="" setValue={() => undefined} placeholder="20" pattern={STANDING_PAPER_STOP_LOSS_PATTERN} />),
+      renderToStaticMarkup(<CycleField label="Take-profit (%)" value="" setValue={() => undefined} placeholder="10" pattern={STANDING_PAPER_TAKE_PROFIT_PATTERN} />),
+    ];
+    const patterns = html.map(markup => markup.match(/pattern="([^"]+)"/)?.[1]);
+    const [stopLossPattern, takeProfitPattern] = patterns;
+    expect(stopLossPattern).toBe(STANDING_PAPER_STOP_LOSS_PATTERN);
+    expect(takeProfitPattern).toBe(STANDING_PAPER_TAKE_PROFIT_PATTERN);
+    const stopLoss = new RegExp(`^(?:${stopLossPattern})$`, "v");
+    const takeProfit = new RegExp(`^(?:${takeProfitPattern})$`, "v");
+    for (const value of ["1", "20", "12.5", "0.25"]) expect(stopLoss.test(value)).toBe(true);
+    for (const value of ["1", "30", "12.5", "9999.99"]) expect(takeProfit.test(value)).toBe(true);
+    for (const value of ["", "100", "01", "12.", "1.234", "-1", "1,5"]) expect(stopLoss.test(value)).toBe(false);
+    for (const value of ["", "10000", "01", "12.", "1.234", "-1", "1,5"]) expect(takeProfit.test(value)).toBe(false);
+  });
+
+  it("labels cycle configuration as proposed, not approved, while a policy is DRAFT", () => {
+    const draft = projectStandingPaperStatusCard({ policy: { ...cyclePolicy, status: "DRAFT" }, state: cycleResult.persistentState, run: null });
+    const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: projectStandingPaperStatusReadModel([draft]) }} />);
+    expect(html).toContain("Foreslått cycle v2-konfigurasjon (ikke godkjent)");
+    expect(html).not.toContain("Godkjent cycle v2-konfigurasjon");
+    const active = projectStandingPaperStatusCard({ policy: cyclePolicy, state: cycleResult.persistentState, run: null });
+    const activeHtml = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: projectStandingPaperStatusReadModel([active]) }} />);
+    expect(activeHtml).toContain("Godkjent cycle v2-konfigurasjon");
+  });
+
+  it("shows every proposed cycle limit and version before activation", () => {
     const card = projectStandingPaperStatusCard({ policy: { ...cyclePolicy, status: "DRAFT" }, state: cycleResult.persistentState, run: null });
     expect(card.cycleConfiguration).not.toBeNull();
     const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: projectStandingPaperStatusReadModel([card]) }} />);
-    expect(html).toContain("Godkjent cycle v2-konfigurasjon");
+    expect(html).toContain("Foreslått cycle v2-konfigurasjon (ikke godkjent)");
     expect(html).toContain("standing-paper-cycle/v2");
     expect(html).toContain("fifo-cost-basis/v2");
     expect(html).toContain("Stop-loss");

@@ -697,13 +697,47 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(() => new StandingPaperWorker(f.repository, { ...options, exitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 100n, takeProfitBps: 100n, maxHoldingMs: 1_000 } })).toThrow("PAPER_WORKER_CYCLE_CONFIG_OVERRIDE_FORBIDDEN");
   });
 
+  it("requires explicit cycle-v2 start capital before heartbeat or any write", async () => {
+    const f = await setup("hosted-cycle-v2", 20_000n, 20_000n);
+    const before = await counts(f.policy.financialAccountId);
+    await expect(new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "cycle-v2-no-seed", expectedAccountId: f.policy.financialAccountId,
+      expectedOwnerId: f.ownerId, policyScopedRoundOrdinal: true, maxRounds: 2,
+    }).run()).rejects.toThrow("PAPER_CYCLE_INITIAL_CAPITAL_REQUIRED");
+    const heartbeatCount = await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    expect(heartbeatCount[0]!.count).toBe("0");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+
+    const seeded = await new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "cycle-v2-seeded", expectedAccountId: f.policy.financialAccountId,
+      expectedOwnerId: f.ownerId, policyScopedRoundOrdinal: true, initialCapitalMinor: 20_000n, maxRounds: 2,
+      waitForRoundInterval: async () => undefined,
+    }).run();
+    expect(seeded.roundsCompleted).toBe(2);
+    const restarted = await new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "cycle-v2-restarted", expectedAccountId: f.policy.financialAccountId,
+      expectedOwnerId: f.ownerId, policyScopedRoundOrdinal: true, initialCapitalMinor: 20_000n, maxRounds: 1,
+    }).run();
+    expect(restarted.roundsCompleted).toBe(1);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "3", contributions: "1" });
+  });
+
   it.skipIf(!preCycleMode)("rejects stored cycle v2 before heartbeat when its schema is absent", async () => {
     const f = await setup("pre-cycle-v2-target", 20_000n, 20_000n);
     await sql`update public.standing_paper_policies set policy_json = jsonb_set(policy_json, '{cycleConfiguration}', '{"contractVersion":"standing-paper-cycle/v2","fifoCostBasisVersion":"fifo-cost-basis/v2","exitPolicy":{"version":"standing-paper-exit-policy/v1","stopLossBps":{"$type":"bigint","value":"2000"},"takeProfitBps":{"$type":"bigint","value":"1000"},"maxHoldingMs":432000000}}'::jsonb, true) where policy_id=${f.policy.policyId}`;
-    const before = await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
-    await expect(f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 20_000n)).rejects.toThrow("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    const countsBefore = await counts(f.policy.financialAccountId);
+    await expect(new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "pre-cycle-v2-no-seed", expectedAccountId: f.policy.financialAccountId,
+      expectedOwnerId: f.ownerId, policyScopedRoundOrdinal: true, maxRounds: 1,
+    }).run()).rejects.toThrow("PAPER_CYCLE_INITIAL_CAPITAL_REQUIRED");
+    await expect(new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "pre-cycle-v2-schema-gate", expectedAccountId: f.policy.financialAccountId,
+      expectedOwnerId: f.ownerId, policyScopedRoundOrdinal: true, initialCapitalMinor: 20_000n, maxRounds: 1,
+    }).run()).rejects.toThrow("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    const heartbeatBefore = await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
     const after = await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
-    expect(after[0]!.count).toBe(before[0]!.count);
+    expect(after[0]!.count).toBe(heartbeatBefore[0]!.count);
+    expect(await counts(f.policy.financialAccountId)).toEqual(countsBefore);
   });
 
   it("runs v2 workers through one seed, concurrent round replay, restart, sale and rebuy", async () => {

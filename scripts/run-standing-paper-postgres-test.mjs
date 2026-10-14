@@ -136,6 +136,7 @@ try {
     "posts one policy-scoped 200 NOK initial contribution across hosted worker rounds and restart",
     "settles a one-deposit BUY-SELL-BUY cycle atomically across restart, replay, concurrency, pause, and stop",
     "hosted worker resumes from the saved cycle configuration and cannot accept caller overrides",
+      "requires explicit cycle-v2 start capital before heartbeat or any write",
     "runs v2 workers through one seed, concurrent round replay, restart, sale and rebuy",
     "serializes concurrent hosted processes to one policy-scoped initial contribution",
     "rolls back hosted initial capital and all settlement writes after a forced transaction failure",

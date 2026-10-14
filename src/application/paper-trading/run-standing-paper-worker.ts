@@ -115,6 +115,17 @@ export class StandingPaperWorker {
     let heartbeatStarted = false;
     let exitReason: "COMPLETED" | "STOPPED" | "FAILED" = "FAILED";
     try {
+      // The policy is authoritative for whether cycle v2 is enabled. Check it
+      // before creating a heartbeat so v2 can never enter the v1 per-round
+      // contribution path when its explicit policy-scoped seed is absent.
+      const startupPolicy = await this.repository.getPolicy(this.options.policyId);
+      if (!startupPolicy) throw new Error("PAPER_POLICY_NOT_FOUND");
+      if (startupPolicy.cycleConfiguration && this.options.initialCapitalMinor === undefined) {
+        throw new Error("PAPER_CYCLE_INITIAL_CAPITAL_REQUIRED");
+      }
+      if (this.options.initialCapitalMinor !== undefined && this.options.initialCapitalMinor > startupPolicy.capitalBudgetMinor) {
+        throw new Error("PAPER_WORKER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
+      }
       await this.repository.startWorkerHeartbeat(
         this.options.policyId,
         this.options.workerId,
