@@ -173,6 +173,57 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(heartbeatAfter).toEqual(heartbeatBefore);
   });
 
+  it.skipIf(!preCycleMode)("uses the snapshotted cycle version for a run waiting on the policy lock", async () => {
+    const f = await setup("pre-cycle-config-snapshot");
+    const before = await counts(f.policy.financialAccountId);
+    const mutableConfig: { -readonly [K in keyof Omit<BacktestRunConfig, "standingPaperPolicy">]: Omit<BacktestRunConfig, "standingPaperPolicy">[K] } = {
+      ...config("snapshot-v1", stamp(10)),
+    };
+    let runnerOutcome!: Promise<
+      | { status: "resolved"; result: BacktestResult }
+      | { status: "rejected"; error: unknown }
+    >;
+    let reachedPolicyLock = false;
+    await sql.begin(async tx => {
+      const locked = await tx<{ policy_id: string }[]>`select policy_id from public.standing_paper_policies where policy_id=${f.policy.policyId} for update`;
+      expect(locked).toHaveLength(1);
+      runnerOutcome = f.repository.run(f.policy.policyId, mutableConfig, pricesAt(stamp(9)), "snapshot-v1-lock-race").then(
+        result => ({ status: "resolved" as const, result }),
+        error => ({ status: "rejected" as const, error }),
+      );
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const waiters = await tx<{ pid: number }[]>`
+          select waiter.pid
+          from pg_stat_activity waiter
+          where waiter.datname=current_database()
+            and waiter.wait_event_type='Lock'
+            and waiter.query ilike '%standing_paper_policies%'
+            and pg_blocking_pids(waiter.pid) @> array[pg_backend_pid()]
+        `;
+        if (waiters.length > 0) { reachedPolicyLock = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      expect(reachedPolicyLock).toBe(true);
+      mutableConfig.paperCycleContractVersion = PAPER_CYCLE_CONTRACT_VERSION;
+    });
+
+    const outcome = await runnerOutcome;
+    expect(outcome.status).toBe("resolved");
+    if (outcome.status === "rejected") throw outcome.error;
+    expect(outcome.result.config.paperCycleContractVersion).toBeUndefined();
+    expect(outcome.result.paperCycleDecisions).toBeUndefined();
+    expect(outcome.result.executions.length).toBeGreaterThan(0);
+    const persisted = await sql<{ result_json: BacktestResult }[]>`
+      select result_json from public.standing_paper_runs where policy_id=${f.policy.policyId} and idempotency_key='snapshot-v1-lock-race'
+    `;
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.result_json.config.paperCycleContractVersion).toBeUndefined();
+    const after = await counts(f.policy.financialAccountId);
+    expect(Number(after.fills) - Number(before.fills)).toBe(outcome.result.executions.length);
+    expect(Number(after.runs) - Number(before.runs)).toBe(1);
+  });
+
   it("creates only one DRAFT under concurrent owner requests and requires fresh confirmation to activate", async () => {
     const { ownerId, financialAccountId } = await ownedAccount();
     const firstRepo = new StandingPaperPolicyRepository(testUrl!); repositories.push(firstRepo);

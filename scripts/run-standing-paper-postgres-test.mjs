@@ -119,7 +119,7 @@ try {
   ensureWorkNotInterrupted();
   if (probeMode === "interrupt-tests") setTimeout(() => onSignal("SIGINT"), 250).unref();
   const testArgs = [resolve(root, "node_modules", "vitest", "vitest.mjs"), "run", "--config", "vitest.integration.config.ts", "tests/integration/standing-paper-policy.test.ts"];
-  if (probeMode === "pre-cycle-v1") testArgs.push("--testNamePattern=keeps v1 status reads and worker rounds working without the cycle-v2 schema|rejects cycle-v2 before heartbeat or writes when its migration is absent");
+  if (probeMode === "pre-cycle-v1") testArgs.push("--testNamePattern=keeps v1 status reads and worker rounds working without the cycle-v2 schema|rejects cycle-v2 before heartbeat or writes when its migration is absent|uses the snapshotted cycle version for a run waiting on the policy lock");
   testArgs.push("--reporter=json", `--outputFile=${report}`);
   try { await run(process.execPath, testArgs, { env }); }
   catch (error) { suiteError = error; }
@@ -168,6 +168,7 @@ try {
   const preCycleCases = [
     "keeps v1 status reads and worker rounds working without the cycle-v2 schema",
     "rejects cycle-v2 before heartbeat or writes when its migration is absent",
+    "uses the snapshotted cycle version for a run waiting on the policy lock",
   ];
   const expectedCases = probeMode === "pre-cycle-v1" ? preCycleCases : cases;
   if (probeMode === "failure") {
@@ -181,7 +182,7 @@ try {
   }
   ensureWorkNotInterrupted();
   if (suiteError) throw suiteError;
-  if (probeMode === "pre-cycle-v1") console.log("Confirmed both pre-cycle v1 compatibility guards passed; cycle-v2 migration was not applied.");
+  if (probeMode === "pre-cycle-v1") console.log("Confirmed all targeted pre-cycle compatibility checks passed; cycle-v2 migration was not applied.");
   else if (probeMode !== "failure") console.log("Confirmed all standing paper PostgreSQL cases passed (not skipped).");
   if (workerDemo) {
     ensureWorkNotInterrupted();

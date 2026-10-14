@@ -756,7 +756,7 @@ export class StandingPaperPolicyRepository {
     const seed = options.initialContribution;
     if (seed && (seed.currency !== "NOK" || !seed.eventId.trim() || !/^\d+$/.test(seed.amountMinor) || BigInt(seed.amountMinor) <= 0n)) throw new Error("PAPER_INITIAL_CAPITAL_INVALID");
     return this.client.begin(async tx => {
-      if (config.paperCycleContractVersion === "standing-paper-cycle/v2" && !(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+      if (baseSnapshot.config.paperCycleContractVersion === "standing-paper-cycle/v2" && !(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
       const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
       if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
       const policy = parsePolicy(rows[0].policy_json);
@@ -861,7 +861,7 @@ export class StandingPaperPolicyRepository {
       for (const fill of result.executions) {
         const acquisition = result.persistentState.acquisitions.find(item => item.fillId === fill.fillId);
         if (acquisition) {
-          if (config.paperCycleContractVersion === "standing-paper-cycle/v2") {
+          if (baseSnapshot.config.paperCycleContractVersion === "standing-paper-cycle/v2") {
             await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, side, execution_json, acquisition_json, disposal_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${acquisition.ledgerTransactionId}, 'BUY', ${tx.json(json(fill))}, ${tx.json(json(acquisition))}, null, ${runId})`;
           } else {
             await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, execution_json, acquisition_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${acquisition.ledgerTransactionId}, ${tx.json(json(fill))}, ${tx.json(json(acquisition))}, ${runId})`;
