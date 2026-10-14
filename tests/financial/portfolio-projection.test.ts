@@ -12,6 +12,58 @@ describe("ledger-derived portfolio", () => {
   it("cash-only needs no prices", () => { const p = project({ ...portfolioFixture(), prices: [] }); expect(p).toMatchObject({ cash: "100000", nav: "100000", investedMarketValue: "0", unrealizedPnl: "0", holdings: [], cashWeightBps: "10000" }); });
   it("empty portfolio is complete with undefined zero-NAV weights", () => { expect(project(portfolioFixture(0n))).toMatchObject({ cash: "0", nav: "0", totalOpenCostBasis: "0", unrealizedPnl: "0", holdings: [], valuationStatus: "COMPLETE", cashWeightBps: null, allocationRoundingResidueBps: null }); });
   it("one BUY reconciles cash, holding and fee-inclusive lot basis", () => { const p = project(buy()); expect(p.cash).toBe("86386"); expect(p.holdings[0]).toMatchObject({ quantityAtoms: "270000000", marketValueMinor: "13500", openCostBasisMinor: "13614", unrealizedPnlMinor: "-114" }); });
+  it("v2 BUY fee is capitalized into FIFO basis and the ledger without changing v1", () => {
+    const source = buy();
+    source.disposals = [];
+    source.ledger = source.ledger.flatMap(entry => {
+      if (entry.transactionId !== "buy") return [entry];
+      if (entry.code === "FEE_EXPENSE") return [];
+      if (entry.code === `ASSET_COST_BASIS:${FIXTURE_ASSETS[0]!.assetId}`) return [{ ...entry, amountAtoms: entry.amountAtoms + 100n }];
+      return [entry];
+    });
+    const projected = project(source);
+    expect(projected.violations).toEqual([]);
+    expect(projected.holdings[0]!.openCostBasisMinor).toBe("13614");
+    expect(projected.versions.fifo).toBe("fifo-cost-basis/v2");
+    const invalid = { ...source, ledger: source.ledger.map(entry => entry.code === `ASSET_COST_BASIS:${FIXTURE_ASSETS[0]!.assetId}` ? { ...entry, amountAtoms: entry.amountAtoms - 100n } : entry) };
+    expect(project(invalid).violations).toContain("SETTLEMENT_EVIDENCE_MISMATCH");
+    expect(project(buy()).versions.fifo).toBe("fifo-cost-basis/v1");
+  });
+  it("releases v2 BUY fee basis correctly on partial and final FIFO realization", () => {
+    const assetId = FIXTURE_ASSETS[0]!.assetId;
+    const source = buy();
+    source.disposals = [];
+    const v2BuyLedger = source.ledger.flatMap(entry => {
+      if (entry.transactionId !== "buy") return [entry];
+      if (entry.code === "FEE_EXPENSE") return [];
+      if (entry.code === `ASSET_COST_BASIS:${assetId}`) return [{ ...entry, amountAtoms: entry.amountAtoms + 100n }];
+      return [entry];
+    });
+    const halfQuantity = 135_000_000n;
+    const halfBasis = 6_807n;
+    const saleEntries = (transactionId: string, quantityAtoms: bigint, basisMinor: bigint, ordinal: number) => {
+      const moneyEntry = (code: string, direction: "DEBIT" | "CREDIT", amountAtoms: bigint) => ({ entryId: `${transactionId}-${ordinal}-${code}-${direction}`, transactionId, financialAccountId: source.financialAccountId, code, commodityKind: "MONEY" as const, currency: "NOK" as const, assetId: null, direction, amountAtoms, occurredAt: AS_OF, recordedAt: AS_OF });
+      const assetEntry = (code: string, direction: "DEBIT" | "CREDIT") => ({ entryId: `${transactionId}-${ordinal}-${code}-${direction}`, transactionId, financialAccountId: source.financialAccountId, code: `${code}:${assetId}`, commodityKind: "ASSET" as const, currency: null, assetId, direction, amountAtoms: quantityAtoms, occurredAt: AS_OF, recordedAt: AS_OF });
+      return [moneyEntry("CASH", "DEBIT", 7_000n), moneyEntry("CASH", "CREDIT", 100n), moneyEntry("FEE_EXPENSE", "DEBIT", 100n), assetEntry("ASSET_HOLDING", "CREDIT"), assetEntry("ASSET_CLEARING", "DEBIT"), moneyEntry(`ASSET_COST_BASIS:${assetId}`, "CREDIT", basisMinor), ...(7_000n > basisMinor ? [moneyEntry("REALIZED_GAIN", "CREDIT", 7_000n - basisMinor)] : [])];
+    };
+    const disposal = (fillId: string, transactionId: string, quantityAtoms: bigint, basisMinor: bigint) => ({
+      fillId, executionId: `execution-${fillId}`, ledgerTransactionId: transactionId, financialAccountId: source.financialAccountId,
+      assetId, quantityAtoms, quantityScale: 4, currency: "NOK" as const, grossMinor: 7_000n, feeMinor: 100n,
+      executedAt: AS_OF, recordedAt: AS_OF, executionPolicyVersion: "standing-paper-sell-execution/v1", executionMatchesFill: true,
+      lotConsumptions: [{ fillId: "buy", quantityAtoms, costBasisMinor: basisMinor }], realizedPnlMinor: 7_000n - 100n - basisMinor,
+    });
+    const partial = { ...source, ledger: [...v2BuyLedger, ...saleEntries("sale-partial", halfQuantity, halfBasis, 1)], disposals: [disposal("sale-partial-fill", "sale-partial", halfQuantity, halfBasis)] };
+    const afterPartial = project(partial);
+    expect(afterPartial.violations).toEqual([]);
+    expect(afterPartial.holdings[0]).toMatchObject({ quantityAtoms: "135000000", openCostBasisMinor: "6807" });
+    expect(afterPartial.realizedPnlMinor).toBe("93");
+    const full = { ...partial, ledger: [...partial.ledger, ...saleEntries("sale-final", halfQuantity, halfBasis, 2)], disposals: [...partial.disposals, disposal("sale-final-fill", "sale-final", halfQuantity, halfBasis)] };
+    const afterFull = project(full);
+    expect(afterFull.violations).toEqual([]);
+    expect(afterFull.holdings[0]!.quantityAtoms).toBe("0");
+    expect(afterFull.holdings[0]!.openCostBasisMinor).toBe("0");
+    expect(afterFull.realizedPnlMinor).toBe("186");
+  });
   it("multiple BUY fills aggregate ledger quantity and basis", () => { const p = project(withBuy(buy(), "second", 10_000n, 2n, 1n)); expect(p.holdings[0]).toMatchObject({ quantityAtoms: "270010000", openCostBasisMinor: "13617" }); expect(p.holdings[0]!.lots).toHaveLength(2); });
   it("multiple assets remain distinct", () => { const p = project(withBuy(buy(), "second", 20_000n, 1n, 1n, FIXTURE_ASSETS[1]!.assetId)); expect(p.holdings).toHaveLength(2); expect(p.investedMarketValue).toBe("13501"); });
   it("clearing and NOK cost debits are not holdings or extra NAV", () => { const p = project(buy()); expect(p.nav).toBe("99886"); expect(p.holdings).toHaveLength(1); });

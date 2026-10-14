@@ -28,7 +28,7 @@ export interface LedgerTransaction {
   readonly id: string;
   readonly financialAccountId: string;
   readonly idempotencyRecordId?: string;
-  readonly type: "VIRTUAL_DEPOSIT" | "SIMULATED_BUY_SETTLEMENT" | "REVERSAL";
+  readonly type: "VIRTUAL_DEPOSIT" | "SIMULATED_BUY_SETTLEMENT" | "SIMULATED_SELL_SETTLEMENT" | "REVERSAL";
   readonly occurredAt: Date;
   readonly narrative: string;
   readonly reversalOfTransactionId?: string;

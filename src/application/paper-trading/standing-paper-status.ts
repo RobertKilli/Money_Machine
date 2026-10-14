@@ -16,9 +16,10 @@ export interface StandingPaperWorkerInstanceStatusRecord {
 export interface StandingPaperStatusDecision {
   readonly orderId: string;
   readonly decisionId: string;
-  readonly outcome: "SIMULATED_FILLED" | "REJECTED";
+  readonly action?: "BUY" | "SELL" | "HOLD";
+  readonly outcome: "SIMULATED_FILLED" | "REJECTED" | "HOLD";
   readonly reasonCode: string;
-  readonly disposition: "APPROVE" | "REJECT";
+  readonly disposition: "APPROVE" | "REJECT" | "HOLD";
   readonly recordedAt: string;
 }
 
@@ -33,6 +34,8 @@ export interface StandingPaperStatusFill {
   readonly currency: "NOK";
   readonly simulatedAt: string;
   readonly executionPolicyVersion: string;
+  readonly side?: "BUY" | "SELL";
+  readonly realizedPnlMinor?: string;
 }
 
 export interface StandingPaperPolicyStatusCard {
@@ -59,7 +62,10 @@ export interface StandingPaperPolicyStatusCard {
   readonly lastRound: null | { readonly id: string; readonly completedAt: string; readonly asOf: string };
   readonly netContributionsMinor: string | null;
   readonly committedCapitalMinor: string | null;
+  readonly capitalBudgetUsedMinor: string | null;
   readonly remainingCapitalBudgetMinor: string | null;
+  readonly cumulativeTurnoverMinor: string | null;
+  readonly realizedPnlMinor: string | null;
   readonly portfolioValueMinor: string | null;
   readonly portfolioValueAsOf: string | null;
   readonly currentLossMinor: string | null;
@@ -86,14 +92,21 @@ export function projectStandingPaperStatusCard(input: {
   readonly workerSummary?: { readonly status: StandingPaperWorkerInstanceStatus | "UNKNOWN"; readonly count: number; readonly truncated: boolean };
 }): StandingPaperPolicyStatusCard {
   const { policy, state, run } = input;
-  const decisions = input.decisions ?? (run?.result.paperPolicyDecisions.map(item => {
+  const decisions = input.decisions ?? (run?.result.paperCycleDecisions?.map(item => ({
+    orderId: item.orderId, decisionId: item.decisionId, action: item.action,
+    outcome: item.evidence.disposition === "EXECUTED" ? "SIMULATED_FILLED" as const : item.evidence.disposition === "REJECTED" ? "REJECTED" as const : "HOLD" as const,
+    reasonCode: item.reasonCode, disposition: item.evidence.disposition === "EXECUTED" ? "APPROVE" as const : item.evidence.disposition === "REJECTED" ? "REJECT" as const : "HOLD" as const,
+    recordedAt: item.evidence.priceAvailableAt,
+  })) ?? run?.result.paperPolicyDecisions.map(item => {
     const strategyDecision = run.result.decisions.find(decision => decision.decisionId === item.decisionId);
     return { orderId: item.orderId, decisionId: item.decisionId, outcome: item.outcome, reasonCode: item.evidence.reasonCode, disposition: item.evidence.disposition, recordedAt: strategyDecision?.decisionTimestamp.toISOString() ?? run.createdAt };
   }) ?? []);
-  const fills = input.fills ?? (run?.result.executions.flatMap(fill => {
+  const fills = input.fills ?? (run?.result.executions.flatMap<StandingPaperStatusFill>(fill => {
     const acquisition = run.result.persistentState.acquisitions.find(item => item.fillId === fill.fillId);
-    if (!acquisition) return [];
-    return [{ fillId: fill.fillId, orderId: fill.proposalId, instrumentId: acquisition.assetId, quantityAtoms: fill.quantity.atomicUnits.toString(), quantityScale: fill.quantity.quantityScale, grossMinor: fill.grossNotional.minorUnits.toString(), feeMinor: fill.fee.minorUnits.toString(), currency: "NOK" as const, simulatedAt: fill.executionTimestamp.toISOString(), executionPolicyVersion: fill.executionPolicyVersion }];
+    if (acquisition) return [{ fillId: fill.fillId, orderId: fill.proposalId, instrumentId: acquisition.assetId, quantityAtoms: fill.quantity.atomicUnits.toString(), quantityScale: fill.quantity.quantityScale, grossMinor: fill.grossNotional.minorUnits.toString(), feeMinor: fill.fee.minorUnits.toString(), currency: "NOK" as const, simulatedAt: fill.executionTimestamp.toISOString(), executionPolicyVersion: fill.executionPolicyVersion, side: "BUY" as const }];
+    const disposal = run.result.persistentState.disposals?.find(item => item.fillId === fill.fillId);
+    if (!disposal) return [];
+    return [{ fillId: fill.fillId, orderId: fill.proposalId, instrumentId: disposal.assetId, quantityAtoms: disposal.quantityAtoms.toString(), quantityScale: disposal.quantityScale, grossMinor: disposal.grossMinor.toString(), feeMinor: disposal.feeMinor.toString(), currency: "NOK" as const, simulatedAt: disposal.executedAt.toISOString(), executionPolicyVersion: disposal.executionPolicyVersion, side: "SELL" as const, realizedPnlMinor: disposal.realizedPnlMinor.toString() }];
   }) ?? []);
   const workers = input.workers ?? [];
   const workerStatus = input.workerSummary?.status ?? (workers.length === 0 ? "UNKNOWN"
@@ -104,7 +117,8 @@ export function projectStandingPaperStatusCard(input: {
   const workerInstanceCount = input.workerSummary?.count ?? workers.length;
   const workerInstancesTruncated = input.workerSummary?.truncated ?? false;
   const loss = run?.valuation.navMinor === null || !run ? null : maxBigInt(0n, state.adjustedEquityHighWaterMinor - (BigInt(run.valuation.navMinor) - state.netContributionsMinor));
-  const remainingBudget = maxBigInt(0n, policy.capitalBudgetMinor - state.committedCapitalMinor);
+  const capitalBudgetUsed = state.disposals === undefined ? state.committedCapitalMinor : state.netContributionsMinor;
+  const remainingBudget = maxBigInt(0n, policy.capitalBudgetMinor - capitalBudgetUsed);
   const remainingLoss = loss === null ? null : maxBigInt(0n, policy.maxLossMinor - loss);
   const status = !run ? "NO_ROUNDS" : run.valuation.complete ? "AVAILABLE" : "INCOMPLETE";
   return {
@@ -119,7 +133,9 @@ export function projectStandingPaperStatusCard(input: {
     },
     lastRound: run ? { id: run.id, completedAt: run.createdAt, asOf: run.valuation.asOf } : null,
     netContributionsMinor: state.netContributionsMinor.toString(), committedCapitalMinor: state.committedCapitalMinor.toString(),
-    remainingCapitalBudgetMinor: remainingBudget.toString(), portfolioValueMinor: run?.valuation.navMinor ?? null,
+    capitalBudgetUsedMinor: capitalBudgetUsed.toString(), remainingCapitalBudgetMinor: remainingBudget.toString(),
+    cumulativeTurnoverMinor: state.cumulativeTurnoverMinor?.toString() ?? null, realizedPnlMinor: state.realizedPnlMinor?.toString() ?? null,
+    portfolioValueMinor: run?.valuation.navMinor ?? null,
     portfolioValueAsOf: run?.valuation.asOf ?? null, currentLossMinor: loss?.toString() ?? null,
     remainingLossMarginMinor: remainingLoss?.toString() ?? null, decisions, fills,
     issueCode: !run || run.valuation.complete ? null : "PAPER_VALUATION_INCOMPLETE",

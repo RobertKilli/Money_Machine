@@ -3,15 +3,17 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
+import type { BacktestResult, BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
 import { price } from "@/domain/financial/price";
 import { standingPaperActivationConfirmationHash, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
 import { PostgresFinancialRepository } from "@/infrastructure/postgres/postgres-financial-repository";
 import { StandingPaperWorker } from "@/application/paper-trading/run-standing-paper-worker";
+import { PAPER_CYCLE_CONTRACT_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
 
 const enabled = process.env.MONEY_MACHINE_INTEGRATION_TEST === "1";
+const preCycleMode = process.env.MONEY_MACHINE_PRE_CYCLE_TEST === "1";
 const testUrl = process.env.MM_STANDING_PAPER_TEST_DATABASE_URL;
 function assertTaskOwnedLocalDatabase(url: string | undefined): asserts url is string {
   if (!url) throw new Error("STANDING_PAPER_TEST_DATABASE_URL_REQUIRED");
@@ -145,6 +147,81 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(Number(evidence.journals)).toBe(Number(evidence.audits));
     const duplicates = await sql`select count(*)::text n from public.standing_paper_decisions where financial_account_id=${f.policy.financialAccountId} group by order_id having count(*) > 1`;
     expect(duplicates).toHaveLength(0);
+  });
+
+  it("keeps v1 status reads and worker rounds working without the cycle-v2 schema", async () => {
+    const f = await setup("pre-cycle-v1-compatibility");
+    const worker = new StandingPaperWorker(f.repository, { policyId: f.policy.policyId, workerId: "pre-cycle-v1-worker", maxRounds: 1 });
+    await expect(worker.run()).resolves.toMatchObject({ status: "COMPLETED", roundsCompleted: 1 });
+    const status = await f.repository.loadOwnedStatus(f.ownerId);
+    expect(status.policies).toHaveLength(1);
+    expect(status.policies[0]!.status).toBe("AVAILABLE");
+    expect(status.policies[0]!.workerStatus).toBe("ENDED");
+  });
+
+  it.skipIf(!preCycleMode)("rejects cycle-v2 before heartbeat or writes when its migration is absent", async () => {
+    const f = await setup("pre-cycle-v2-rejected");
+    const before = await counts(f.policy.financialAccountId);
+    const heartbeatBefore = await sql<{ n: string }[]>`select count(*)::text n from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    const exitPolicy = { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1_000 } as const;
+    await expect(new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "pre-cycle-v2-worker", maxRounds: 1,
+      initialCapitalMinor: 20_000n, exitPolicy,
+    }).run()).rejects.toThrow("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+    const heartbeatAfter = await sql<{ n: string }[]>`select count(*)::text n from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    expect(heartbeatAfter).toEqual(heartbeatBefore);
+  });
+
+  it.skipIf(!preCycleMode)("uses the snapshotted cycle version for a run waiting on the policy lock", async () => {
+    const f = await setup("pre-cycle-config-snapshot");
+    const before = await counts(f.policy.financialAccountId);
+    const mutableConfig: { -readonly [K in keyof Omit<BacktestRunConfig, "standingPaperPolicy">]: Omit<BacktestRunConfig, "standingPaperPolicy">[K] } = {
+      ...config("snapshot-v1", stamp(10)),
+    };
+    let runnerOutcome!: Promise<
+      | { status: "resolved"; result: BacktestResult }
+      | { status: "rejected"; error: unknown }
+    >;
+    let reachedPolicyLock = false;
+    await sql.begin(async tx => {
+      const locked = await tx<{ policy_id: string }[]>`select policy_id from public.standing_paper_policies where policy_id=${f.policy.policyId} for update`;
+      expect(locked).toHaveLength(1);
+      runnerOutcome = f.repository.run(f.policy.policyId, mutableConfig, pricesAt(stamp(9)), "snapshot-v1-lock-race").then(
+        result => ({ status: "resolved" as const, result }),
+        error => ({ status: "rejected" as const, error }),
+      );
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const waiters = await tx<{ pid: number }[]>`
+          select waiter.pid
+          from pg_stat_activity waiter
+          where waiter.datname=current_database()
+            and waiter.wait_event_type='Lock'
+            and waiter.query ilike '%standing_paper_policies%'
+            and pg_blocking_pids(waiter.pid) @> array[pg_backend_pid()]
+        `;
+        if (waiters.length > 0) { reachedPolicyLock = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      expect(reachedPolicyLock).toBe(true);
+      mutableConfig.paperCycleContractVersion = PAPER_CYCLE_CONTRACT_VERSION;
+    });
+
+    const outcome = await runnerOutcome;
+    expect(outcome.status).toBe("resolved");
+    if (outcome.status === "rejected") throw outcome.error;
+    expect(outcome.result.config.paperCycleContractVersion).toBeUndefined();
+    expect(outcome.result.paperCycleDecisions).toBeUndefined();
+    expect(outcome.result.executions.length).toBeGreaterThan(0);
+    const persisted = await sql<{ result_json: BacktestResult }[]>`
+      select result_json from public.standing_paper_runs where policy_id=${f.policy.policyId} and idempotency_key='snapshot-v1-lock-race'
+    `;
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.result_json.config.paperCycleContractVersion).toBeUndefined();
+    const after = await counts(f.policy.financialAccountId);
+    expect(Number(after.fills) - Number(before.fills)).toBe(outcome.result.executions.length);
+    expect(Number(after.runs) - Number(before.runs)).toBe(1);
   });
 
   it("creates only one DRAFT under concurrent owner requests and requires fresh confirmation to activate", async () => {
@@ -504,6 +581,112 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(rejected?.status).toBe("rejected");
     if (rejected?.status === "rejected") expect((rejected.reason as Error).message).toBe("PAPER_INITIAL_CAPITAL_CONFLICT");
     expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "2", contributions: "1" });
+  });
+
+  it("settles a one-deposit BUY-SELL-BUY cycle atomically across restart, replay, concurrency, pause, and stop", async () => {
+    const f = await setup("cycle-v2", 20_000n, 20_000n);
+    const second = new StandingPaperPolicyRepository(testUrl!); repositories.push(second);
+    const exitPolicy = { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1_000 } as const;
+    const at0 = stamp(10); const at1 = stamp(11); const at2 = stamp(12);
+    const cycleConfig = (at: string): Omit<BacktestRunConfig, "standingPaperPolicy"> => ({
+      ...hostedEvaluationConfig(f.policy.financialAccountId, at), valuationTimestamps: [at],
+      fifoCostBasisVersion: "fifo-cost-basis/v2", paperCycleContractVersion: PAPER_CYCLE_CONTRACT_VERSION, standingPaperExitPolicy: exitPolicy,
+    });
+    const seed = hostedCapital(f.policy.policyId, "20000");
+    const initialPrices = pricesAt(at0, 1_000_000n);
+    const first = await f.repository.run(f.policy.policyId, cycleConfig(at0), initialPrices, "cycle-round-000", { initialContribution: seed, expectedOwnerId: f.ownerId });
+    expect(first.persistentState.netContributionsMinor).toBe(20_000n);
+    expect(first.executions.some(fill => !("side" in fill))).toBe(true);
+    const beforeSale = await counts(f.policy.financialAccountId);
+
+    await sql`create function public.mm_test_fail_cycle_sell() returns trigger language plpgsql as $$ begin if exists (select 1 from public.ledger_transactions where id = new.ledger_transaction_id and transaction_type = 'SIMULATED_SELL_SETTLEMENT') then raise exception 'CONTROLLED_CYCLE_SELL_ROLLBACK'; end if; return new; end $$`;
+    await sql`create trigger mm_test_fail_cycle_sell before insert on public.ledger_entries for each row execute function public.mm_test_fail_cycle_sell()`;
+    try {
+      await expect(f.repository.run(f.policy.policyId, cycleConfig(at1), pricesAt(at1, 500_000n), "cycle-round-001", { initialContribution: seed, expectedOwnerId: f.ownerId })).rejects.toThrow("CONTROLLED_CYCLE_SELL_ROLLBACK");
+    } finally {
+      await sql`drop trigger if exists mm_test_fail_cycle_sell on public.ledger_entries`;
+      await sql`drop function if exists public.mm_test_fail_cycle_sell()`;
+    }
+    expect(await counts(f.policy.financialAccountId)).toEqual(beforeSale);
+
+    const attempts = await Promise.allSettled([
+      f.repository.run(f.policy.policyId, cycleConfig(at1), pricesAt(at1, 500_000n), "cycle-round-001", { initialContribution: seed, expectedOwnerId: f.ownerId }),
+      second.run(f.policy.policyId, cycleConfig(at1), pricesAt(at1, 500_000n), "cycle-round-001", { initialContribution: { ...seed, amountMinor: "19000" }, expectedOwnerId: f.ownerId }),
+    ]);
+    expect(attempts.filter(item => item.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter(item => item.status === "rejected")).toHaveLength(1);
+    const saleResult = attempts.find(item => item.status === "fulfilled") as PromiseFulfilledResult<Awaited<ReturnType<typeof f.repository.run>>>;
+    expect(saleResult.value.paperCycleDecisions?.some(item => item.action === "SELL" && item.reasonCode === "SELL_STOP_LOSS")).toBe(true);
+    expect(saleResult.value.paperCycleDecisions?.some(item => item.action === "BUY" && item.reasonCode === "BUY_FILLED")).toBe(true);
+    expect(saleResult.value.persistentState.netContributionsMinor).toBe(20_000n);
+    expect(saleResult.value.persistentState.cumulativeTurnoverMinor).toBeGreaterThan(0n);
+    expect(saleResult.value.persistentState.realizedPnlMinor).toBeDefined();
+    expect(saleResult.value.persistentState.realizedPnlMinor).toBeLessThan(0n);
+    expect(saleResult.value.endingState.nav).not.toBeNull();
+    expect(saleResult.value.persistentState.adjustedEquityHighWaterMinor - (BigInt(saleResult.value.endingState.nav!) - saleResult.value.persistentState.netContributionsMinor)).toBeGreaterThan(0n);
+    const countsAfterSale = await counts(f.policy.financialAccountId);
+    const replay = await second.run(f.policy.policyId, cycleConfig(at1), pricesAt(at1, 500_000n), "cycle-round-001", { initialContribution: seed, expectedOwnerId: f.ownerId });
+    expect(replay.persistentState).toEqual(saleResult.value.persistentState);
+    await expect(f.repository.run(f.policy.policyId, cycleConfig(at1), pricesAt(at1, 500_000n), "cycle-round-001", { initialContribution: { ...seed, amountMinor: "19000" }, expectedOwnerId: f.ownerId })).rejects.toThrow("PAPER_INITIAL_CAPITAL_CONFLICT");
+    expect(await counts(f.policy.financialAccountId)).toEqual(countsAfterSale);
+    const persisted = await sql<{ buys: string; sells: string; cycle_decisions: string; decision_audits: string; contribution: string; audits: string }[]>`
+      select (select count(*)::text from public.standing_paper_fills where policy_id=${f.policy.policyId} and side='BUY') buys,
+        (select count(*)::text from public.standing_paper_fills where policy_id=${f.policy.policyId} and side='SELL') sells,
+        (select count(*)::text from public.standing_paper_cycle_decisions where policy_id=${f.policy.policyId}) cycle_decisions,
+        (select count(*)::text from public.standing_paper_cycle_decision_audit where policy_id=${f.policy.policyId}) decision_audits,
+        (select count(*)::text from public.standing_paper_contributions where policy_id=${f.policy.policyId}) contribution,
+        (select count(*)::text from public.audit_events where financial_account_id=${f.policy.financialAccountId}) audits`;
+    expect(BigInt(persisted[0]!.buys)).toBeGreaterThan(1n);
+    expect(BigInt(persisted[0]!.sells)).toBeGreaterThan(0n);
+    expect(BigInt(persisted[0]!.cycle_decisions)).toBeGreaterThan(0n);
+    expect(persisted[0]!.decision_audits).toBe(persisted[0]!.cycle_decisions);
+    expect(persisted[0]!.contribution).toBe("1");
+    expect(BigInt(persisted[0]!.audits)).toBeGreaterThan(BigInt(persisted[0]!.buys) + BigInt(persisted[0]!.sells));
+
+    await f.repository.transition(f.policy.policyId, "PAUSE");
+    const pausedCounts = await counts(f.policy.financialAccountId);
+    await expect(f.repository.run(f.policy.policyId, cycleConfig(at2), pricesAt(at2, 1_800_000n), "cycle-round-002", { initialContribution: seed })).rejects.toThrow("POLICY_NOT_ACTIVE");
+    expect(await counts(f.policy.financialAccountId)).toEqual(pausedCounts);
+    await f.repository.transition(f.policy.policyId, "ACTIVATE");
+    await f.repository.transition(f.policy.policyId, "STOP");
+    const stoppedCounts = await counts(f.policy.financialAccountId);
+    await expect(f.repository.run(f.policy.policyId, cycleConfig(at2), pricesAt(at2, 1_800_000n), "cycle-round-002", { initialContribution: seed })).rejects.toThrow("POLICY_NOT_ACTIVE");
+    expect(await counts(f.policy.financialAccountId)).toEqual(stoppedCounts);
+  });
+
+  it("runs v2 workers through one seed, concurrent round replay, restart, sale and rebuy", async () => {
+    const f = await setup("cycle-worker-v2", 20_000n, 20_000n);
+    const second = new StandingPaperPolicyRepository(testUrl!); repositories.push(second);
+    const exitPolicy = { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1_000 } as const;
+    const options = { policyId: f.policy.policyId, workerId: "cycle-v2-worker", maxRounds: 1, policyScopedRoundOrdinal: true, expectedAccountId: f.policy.financialAccountId, expectedOwnerId: f.ownerId, initialCapitalMinor: 20_000n, exitPolicy };
+    const results: BacktestResult[] = [];
+    let waitingAtRound = 0; let releaseBarrier!: () => void;
+    const roundBarrier = new Promise<void>(resolve => { releaseBarrier = resolve; });
+    const synchronizeRound = async () => { waitingAtRound += 1; if (waitingAtRound === 2) releaseBarrier(); await roundBarrier; };
+    const [first, concurrent] = await Promise.all([
+      new StandingPaperWorker(f.repository, { ...options, beforeRound: synchronizeRound, onRound: (_identity, result) => { results.push(result); } }).run(),
+      new StandingPaperWorker(second, { ...options, beforeRound: synchronizeRound, onRound: (_identity, result) => { results.push(result); } }).run(),
+    ]);
+    expect(first.status).toBe("COMPLETED");
+    expect(concurrent.status).toBe("COMPLETED");
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "1", contributions: "1" });
+    expect(results[0]!.persistentState.netContributionsMinor).toBe(20_000n);
+
+    const resumed: typeof results = [];
+    const restarted = new StandingPaperWorker(second, { ...options, workerId: "cycle-v2-restarted", onRound: (_identity, result) => { resumed.push(result); } });
+    await restarted.run();
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]!.paperCycleDecisions?.some(item => item.action === "SELL" && item.reasonCode === "SELL_STOP_LOSS")).toBe(true);
+    expect(resumed[0]!.paperCycleDecisions?.some(item => item.action === "BUY" && item.reasonCode === "BUY_FILLED")).toBe(true);
+    expect(resumed[0]!.persistentState.netContributionsMinor).toBe(20_000n);
+    expect(resumed[0]!.persistentState.realizedPnlMinor).toBeLessThan(0n);
+    expect(await counts(f.policy.financialAccountId)).toMatchObject({ runs: "2", contributions: "1" });
+    const ownedStatus = await f.repository.loadOwnedStatus(f.ownerId);
+    expect(ownedStatus.status).toBe("AVAILABLE");
+    expect(ownedStatus.policies[0]?.decisions.some(item => item.action === "SELL")).toBe(true);
+    expect(ownedStatus.policies[0]?.fills.some(item => item.side === "SELL")).toBe(true);
+    expect(BigInt(ownedStatus.policies[0]!.currentLossMinor!)).toBeGreaterThan(0n);
+    expect(BigInt(ownedStatus.policies[0]!.remainingLossMarginMinor!)).toBeLessThan(f.policy.maxLossMinor);
   });
 
   it("serializes concurrent hosted processes to one policy-scoped initial contribution", async () => {
