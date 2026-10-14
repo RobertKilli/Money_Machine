@@ -308,7 +308,7 @@ export class StandingPaperPolicyRepository {
 
   /** Heartbeat rows have their own short transaction and process-instance key.
    * They never acquire the settlement checkpoint or append ledger material. */
-  async startWorkerHeartbeat(policyId: string, workerId: string, processInstanceId: string, expectedOwnerId?: string, expectedTarget?: { readonly accountId: string; readonly initialCapitalMinor: bigint; readonly requiresCycleV2?: boolean }, requiresCycleV2 = false): Promise<void> {
+  async startWorkerHeartbeat(policyId: string, workerId: string, processInstanceId: string, expectedOwnerId?: string, expectedTarget?: { readonly accountId: string; readonly initialCapitalMinor: bigint }): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(workerId) || !isProcessInstanceUuid(processInstanceId)) throw new Error("PAPER_WORKER_HEARTBEAT_ID_INVALID");
     if (expectedTarget) {
       await this.client.begin(async tx => {
@@ -362,7 +362,7 @@ export class StandingPaperPolicyRepository {
     if (!policies[0]) throw new Error("PAPER_WORKER_HEARTBEAT_POLICY_NOT_RUNNABLE");
     const policy = parsePolicy(policies[0].policy_json);
     if (policy.policyId !== policyId || policy.status !== policies[0].status || policy.financialAccountId !== policies[0].financial_account_id) throw new Error("PAPER_WORKER_POLICY_INVALID");
-    if ((requiresCycleV2 || policy.cycleConfiguration !== undefined) && !(await this.hasCycleV2Schema(this.client))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    if (policy.cycleConfiguration && !(await this.hasCycleV2Schema(this.client))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
     const rows = await insertHeartbeat(this.client);
     if (!rows[0]) throw new Error("PAPER_WORKER_HEARTBEAT_POLICY_NOT_RUNNABLE");
   }

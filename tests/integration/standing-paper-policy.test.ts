@@ -167,10 +167,10 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     const f = await setup("pre-cycle-v2-rejected");
     const before = await counts(f.policy.financialAccountId);
     const heartbeatBefore = await sql<{ n: string }[]>`select count(*)::text n from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
-    const exitPolicy = { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1_000 } as const;
+    await sql`update public.standing_paper_policies set policy_json = jsonb_set(policy_json, '{cycleConfiguration}', '{"contractVersion":"standing-paper-cycle/v2","fifoCostBasisVersion":"fifo-cost-basis/v2","exitPolicy":{"version":"standing-paper-exit-policy/v1","stopLossBps":{"$type":"bigint","value":"2000"},"takeProfitBps":{"$type":"bigint","value":"1000"},"maxHoldingMs":432000000}}'::jsonb, true) where policy_id=${f.policy.policyId}`;
     await expect(new StandingPaperWorker(f.repository, {
-      policyId: f.policy.policyId, workerId: "pre-cycle-v2-worker", maxRounds: 1,
-      initialCapitalMinor: 20_000n, exitPolicy,
+      policyId: f.policy.policyId, workerId: "pre-cycle-v2-worker", expectedAccountId: f.policy.financialAccountId,
+      expectedOwnerId: f.ownerId, maxRounds: 1, initialCapitalMinor: 20_000n,
     }).run()).rejects.toThrow("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
     expect(await counts(f.policy.financialAccountId)).toEqual(before);
     const heartbeatAfter = await sql<{ n: string }[]>`select count(*)::text n from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;

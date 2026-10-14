@@ -94,7 +94,7 @@ export class StandingPaperWorker {
     if (options.maxRounds !== undefined && (!Number.isSafeInteger(options.maxRounds) || options.maxRounds < 1)) throw new Error("PAPER_WORKER_MAX_ROUNDS_INVALID");
     if (options.initialCapitalMinor !== undefined && options.initialCapitalMinor <= 0n) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_INVALID");
     if (options.exitPolicy && options.initialCapitalMinor === undefined) throw new Error("PAPER_CYCLE_INITIAL_CAPITAL_REQUIRED");
-    if (options.exitPolicy && (options.expectedAccountId !== undefined || options.expectedOwnerId !== undefined)) throw new Error("PAPER_WORKER_CYCLE_CONFIG_OVERRIDE_FORBIDDEN");
+    if (options.exitPolicy) throw new Error("PAPER_WORKER_CYCLE_CONFIG_OVERRIDE_FORBIDDEN");
     if (options.pollIntervalMs !== undefined && (!Number.isSafeInteger(options.pollIntervalMs) || options.pollIntervalMs < 10)) throw new Error("PAPER_WORKER_POLL_INTERVAL_INVALID");
     if (options.maxRounds === undefined && options.roundIntervalMs === undefined) throw new Error("PAPER_WORKER_ROUND_INTERVAL_REQUIRED");
     if (options.roundIntervalMs !== undefined && (!Number.isSafeInteger(options.roundIntervalMs) || options.roundIntervalMs < 1_000 || options.roundIntervalMs > 86_400_000)) throw new Error("PAPER_WORKER_ROUND_INTERVAL_INVALID");
@@ -123,7 +123,6 @@ export class StandingPaperWorker {
         this.options.initialCapitalMinor !== undefined && this.options.expectedAccountId
           ? { accountId: this.options.expectedAccountId, initialCapitalMinor: this.options.initialCapitalMinor }
           : undefined,
-        this.options.expectedAccountId === undefined ? this.options.exitPolicy !== undefined : false,
       );
       heartbeatStarted = true;
       this.heartbeatTask = this.renewHeartbeat();
@@ -183,9 +182,7 @@ export class StandingPaperWorker {
         const policy = await this.repository.getPolicy(this.options.policyId);
         if (!policy) throw new Error("PAPER_POLICY_NOT_FOUND");
         if (this.options.expectedAccountId && policy.financialAccountId !== this.options.expectedAccountId) throw new Error("PAPER_WORKER_ACCOUNT_MISMATCH");
-        const exitPolicy = this.options.expectedAccountId !== undefined
-          ? policy.cycleConfiguration?.exitPolicy
-          : this.options.exitPolicy ?? policy.cycleConfiguration?.exitPolicy;
+        const exitPolicy = policy.cycleConfiguration?.exitPolicy;
         const hostedSeeded = this.options.initialCapitalMinor !== undefined;
         const config = configForRound(policy, this.options.workerId, round, hostedSeeded, exitPolicy);
         const initialContribution = hostedSeeded ? {
