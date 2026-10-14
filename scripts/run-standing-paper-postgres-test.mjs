@@ -119,7 +119,7 @@ try {
   ensureWorkNotInterrupted();
   if (probeMode === "interrupt-tests") setTimeout(() => onSignal("SIGINT"), 250).unref();
   const testArgs = [resolve(root, "node_modules", "vitest", "vitest.mjs"), "run", "--config", "vitest.integration.config.ts", "tests/integration/standing-paper-policy.test.ts"];
-  if (probeMode === "pre-cycle-v1") testArgs.push("--testNamePattern=keeps v1 status reads and worker rounds working without the cycle-v2 schema|rejects cycle-v2 before heartbeat or writes when its migration is absent|uses the snapshotted cycle version for a run waiting on the policy lock");
+  if (probeMode === "pre-cycle-v1") testArgs.push("--testNamePattern=keeps v1 status reads and worker rounds working without the cycle-v2 schema|rejects cycle-v2 before heartbeat or writes when its migration is absent|uses the snapshotted cycle version for a run waiting on the policy lock|rejects stored cycle v2 before heartbeat when its schema is absent");
   testArgs.push("--reporter=json", `--outputFile=${report}`);
   try { await run(process.execPath, testArgs, { env }); }
   catch (error) { suiteError = error; }
@@ -135,11 +135,13 @@ try {
     "preflights the exact hosted target and rejects wrong account, policy, status, or capital without writes",
     "posts one policy-scoped 200 NOK initial contribution across hosted worker rounds and restart",
     "settles a one-deposit BUY-SELL-BUY cycle atomically across restart, replay, concurrency, pause, and stop",
+    "hosted worker resumes from the saved cycle configuration and cannot accept caller overrides",
     "runs v2 workers through one seed, concurrent round replay, restart, sale and rebuy",
     "serializes concurrent hosted processes to one policy-scoped initial contribution",
     "rolls back hosted initial capital and all settlement writes after a forced transaction failure",
     "continues one account across runner instances; replay and concurrent budget use stay idempotent",
     "creates only one DRAFT under concurrent owner requests and requires fresh confirmation to activate",
+    "rejects activation when persisted cycle-v2 limits change after the owner reviewed them",
     "rejects existing ledger activity and foreign ownership without inserting policy history",
     "rejects a pre-existing account ledger and an external ledger change between rounds",
     "rechecks account eligibility after waiting for the locked account row",
@@ -169,6 +171,7 @@ try {
     "keeps v1 status reads and worker rounds working without the cycle-v2 schema",
     "rejects cycle-v2 before heartbeat or writes when its migration is absent",
     "uses the snapshotted cycle version for a run waiting on the policy lock",
+    "rejects stored cycle v2 before heartbeat when its schema is absent",
   ];
   const expectedCases = probeMode === "pre-cycle-v1" ? preCycleCases : cases;
   if (probeMode === "failure") {

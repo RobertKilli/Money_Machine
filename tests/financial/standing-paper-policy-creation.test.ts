@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createStandingPaperDraft } from "@/application/paper-trading/create-standing-paper-policy";
+import { standingPaperActivationConfirmationHash } from "@/domain/risk/standing-paper-policy";
 
 const valid = {
   financialAccountId: "123e4567-e89b-42d3-a456-426614174000",
@@ -18,6 +19,34 @@ describe("standing paper policy draft input", () => {
     expect(policy).toMatchObject({ version: "standing-paper-policy/v1", identity: `PAPER_ONLY ${policy.policyId}`, status: "DRAFT", mode: "PAPER_ONLY", financialAccountId: valid.financialAccountId });
     expect(policy.capitalBudgetMinor).toBe(500_000n);
     expect(policy.maxPriceAgeMs).toBe(3_600_000);
+  });
+
+  it("stores explicit cycle-v2 thresholds in the DRAFT and binds every version and limit to activation", () => {
+    const policy = createStandingPaperDraft({ ...valid, cycleV2: { stopLossPercent: "12.5", takeProfitPercent: "30", maxHoldingHours: "72" } });
+    expect(policy.cycleConfiguration).toEqual({
+      contractVersion: "standing-paper-cycle/v2", fifoCostBasisVersion: "fifo-cost-basis/v2",
+      exitPolicy: { version: "standing-paper-exit-policy/v1", stopLossBps: 1_250n, takeProfitBps: 3_000n, maxHoldingMs: 72 * 60 * 60 * 1_000 },
+    });
+    const hash = standingPaperActivationConfirmationHash(policy);
+    const cycle = policy.cycleConfiguration!;
+    const variants = [
+      { ...cycle, exitPolicy: { ...cycle.exitPolicy, stopLossBps: 1_251n } },
+      { ...cycle, exitPolicy: { ...cycle.exitPolicy, takeProfitBps: 3_001n } },
+      { ...cycle, exitPolicy: { ...cycle.exitPolicy, maxHoldingMs: cycle.exitPolicy.maxHoldingMs + 1 } },
+    ];
+    for (const cycleConfiguration of variants) expect(standingPaperActivationConfirmationHash({ ...policy, cycleConfiguration })).not.toBe(hash);
+    expect(standingPaperActivationConfirmationHash({ ...policy, cycleConfiguration: undefined })).not.toBe(hash);
+    expect(() => standingPaperActivationConfirmationHash({ ...policy, cycleConfiguration: { ...cycle, contractVersion: "standing-paper-cycle/v3" as never } })).toThrow("PAPER_CYCLE_CONFIGURATION_INVALID");
+  });
+
+  it.each([
+    { stopLossPercent: "0", takeProfitPercent: "30", maxHoldingHours: "72" },
+    { stopLossPercent: "100", takeProfitPercent: "30", maxHoldingHours: "72" },
+    { stopLossPercent: "12.5", takeProfitPercent: "0", maxHoldingHours: "72" },
+    { stopLossPercent: "12.5", takeProfitPercent: "30", maxHoldingHours: "0" },
+    { stopLossPercent: "12.5", takeProfitPercent: "30", maxHoldingHours: "8761" },
+  ])("rejects invalid explicit cycle limits", cycleV2 => {
+    expect(() => createStandingPaperDraft({ ...valid, cycleV2 })).toThrow("PAPER_POLICY_LIMIT_INVALID");
   });
 
   it.each([

@@ -40,6 +40,17 @@ describe("owner-bound standing paper policy creation route", () => {
     expect(mocks.createOwnedDraft).toHaveBeenCalledWith("owner-1", expect.objectContaining({ status: "DRAFT", mode: "PAPER_ONLY", financialAccountId: body.financialAccountId }));
   });
 
+  it("passes explicitly selected cycle-v2 limits into the server-created DRAFT", async () => {
+    const response = await POST(request({ ...body, cycleV2: { stopLossPercent: "12.5", takeProfitPercent: "30", maxHoldingHours: "72" } }));
+    expect(response.status).toBe(201);
+    expect(mocks.createOwnedDraft).toHaveBeenCalledWith("owner-1", expect.objectContaining({
+      cycleConfiguration: expect.objectContaining({
+        contractVersion: "standing-paper-cycle/v2", fifoCostBasisVersion: "fifo-cost-basis/v2",
+        exitPolicy: expect.objectContaining({ stopLossBps: 1_250n, takeProfitBps: 3_000n, maxHoldingMs: 72 * 60 * 60 * 1_000 }),
+      }),
+    }));
+  });
+
   it("rejects CSRF, wrong-owner account, and invalid limits before repository writes", async () => {
     expect((await POST(request(body, "https://attacker.example"))).status).toBe(403);
     const wrongAccount = { ...body, financialAccountId: "123e4567-e89b-42d3-a456-426614174001" };

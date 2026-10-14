@@ -40,6 +40,10 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
   const [maxGrossExposureNok, setMaxGrossExposureNok] = useState("2000");
   const [maxLossNok, setMaxLossNok] = useState("250");
   const [maxPriceAgeMinutes, setMaxPriceAgeMinutes] = useState(60);
+  const [cycleV2Enabled, setCycleV2Enabled] = useState(false);
+  const [stopLossPercent, setStopLossPercent] = useState("");
+  const [takeProfitPercent, setTakeProfitPercent] = useState("");
+  const [maxHoldingHours, setMaxHoldingHours] = useState("");
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -94,7 +98,8 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
       const response = await fetch("/api/dashboard/paper-policies", {
         method: "POST", cache: "no-store", credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
-        body: JSON.stringify({ financialAccountId: accountId, allowedInstrumentIds: instruments, capitalBudgetNok, maxOrderNok, maxPositionNok, maxGrossExposureNok, maxLossNok, maxPriceAgeMinutes }),
+        body: JSON.stringify({ financialAccountId: accountId, allowedInstrumentIds: instruments, capitalBudgetNok, maxOrderNok, maxPositionNok, maxGrossExposureNok, maxLossNok, maxPriceAgeMinutes,
+          ...(cycleV2Enabled ? { cycleV2: { stopLossPercent, takeProfitPercent, maxHoldingHours } } : {}) }),
       });
       const payload = await response.json().catch(() => ({})) as { policyId?: unknown; status?: unknown; error?: unknown };
       if (!response.ok || typeof payload.policyId !== "string" || payload.status !== "DRAFT") {
@@ -150,6 +155,18 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
                 </select>
               </label>
             </div>
+            <fieldset className="grid gap-4 rounded-xl border border-[var(--border)] p-4">
+              <legend className="px-1 text-sm font-semibold">Utførelse</legend>
+              <label className="flex min-h-11 items-start gap-3 text-sm"><input type="checkbox" checked={cycleV2Enabled} onChange={event => setCycleV2Enabled(event.target.checked)} className="mt-1" /><span><strong>Aktiver kjøp → salg (cycle v2)</strong><span className="mt-1 block text-xs font-normal text-[var(--muted)]">Valgfri, eksplisitt kontrakt. Uten dette forblir policyen V1 og kjøpsbasert.</span></span></label>
+              {cycleV2Enabled && <>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <CycleField label="Stop-loss (%)" value={stopLossPercent} setValue={setStopLossPercent} placeholder="f.eks. 20" pattern="(?:0|[1-9][0-9]?)(?:\\.[0-9]{1,2})?" />
+                  <CycleField label="Take-profit (%)" value={takeProfitPercent} setValue={setTakeProfitPercent} placeholder="f.eks. 10" pattern="(?:0|[1-9][0-9]{0,3})(?:\\.[0-9]{1,2})?" />
+                  <CycleField label="Maksimal holdetid (timer)" value={maxHoldingHours} setValue={setMaxHoldingHours} placeholder="f.eks. 120" pattern="[1-9][0-9]{0,3}" />
+                </div>
+                <p className="text-xs text-[var(--muted)]">Cycle v2 og FIFO kostgrunnlag versjoneres og lagres i DRAFT. Grensene du angir må bekreftes separat før aktivering. Tersklene er scenario-regler, ikke investeringsråd.</p>
+              </>}
+            </fieldset>
             <p className="text-xs text-[var(--muted)]">NOK med opptil to desimaler. Kapitalbudsjettet må være 100–1 000 000 NOK. Maks ordre ≤ maks posisjon ≤ samlet eksponering ≤ kapitalbudsjett; tapsgrensen kan ikke overstige budsjettet.</p>
             <p className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-50">Alle priser er syntetiske fixture-data. Eventuelle fills blir simulerte, fullførte antakelser og er ikke børsutførelser.</p>
             <div className="flex flex-wrap items-center gap-3">
@@ -172,5 +189,11 @@ function AmountField({ label, value, setValue }: { label: string; value: string;
   return <label className="grid gap-2 text-sm font-medium">{label}
     <input required type="text" inputMode="decimal" value={value} onChange={event => setValue(event.target.value)} pattern="(?:0|[1-9][0-9]{0,6})(?:\.[0-9]{1,2})?" className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[var(--foreground)]" />
     <span className="text-xs font-normal text-[var(--muted)]">NOK med opptil to desimaler, maks 1 000 000 NOK.</span>
+  </label>;
+}
+
+function CycleField({ label, value, setValue, placeholder, pattern }: { label: string; value: string; setValue: (value: string) => void; placeholder: string; pattern: string }) {
+  return <label className="grid gap-2 text-sm font-medium">{label}
+    <input required type="text" inputMode="decimal" value={value} onChange={event => setValue(event.target.value)} placeholder={placeholder} pattern={pattern} className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[var(--foreground)]" />
   </label>;
 }

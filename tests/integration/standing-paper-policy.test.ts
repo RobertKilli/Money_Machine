@@ -10,7 +10,7 @@ import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation }
 import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
 import { PostgresFinancialRepository } from "@/infrastructure/postgres/postgres-financial-repository";
 import { StandingPaperWorker } from "@/application/paper-trading/run-standing-paper-worker";
-import { PAPER_CYCLE_CONTRACT_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
+import { PAPER_CYCLE_CONTRACT_VERSION, PAPER_CYCLE_FIFO_COST_BASIS_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
 
 const enabled = process.env.MONEY_MACHINE_INTEGRATION_TEST === "1";
 const preCycleMode = process.env.MONEY_MACHINE_PRE_CYCLE_TEST === "1";
@@ -69,6 +69,10 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
       mode: "PAPER_ONLY", status: "DRAFT", financialAccountId, allowedInstrumentIds: FIXTURE_ASSETS.map(asset => asset.assetId),
       capitalBudgetMinor, maxOrderMinor: capitalBudgetMinor, maxPositionMinor: capitalBudgetMinor,
       maxGrossExposureMinor: capitalBudgetMinor, maxLossMinor, maxPriceAgeMs: 7 * 24 * 60 * 60 * 1000,
+      ...(label === "cycle-v2" || label === "hosted-cycle-v2" || label === "cycle-worker-v2" ? { cycleConfiguration: {
+        contractVersion: PAPER_CYCLE_CONTRACT_VERSION, fifoCostBasisVersion: PAPER_CYCLE_FIFO_COST_BASIS_VERSION,
+        exitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1000 },
+      } } : {}),
     };
     const repository = new StandingPaperPolicyRepository(testUrl!); repositories.push(repository);
     await repository.create(policy);
@@ -255,6 +259,22 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     await expect(firstRepo.activateOwnedDraft(ownerId, actualPolicy.policyId, hash)).rejects.toThrow("PAPER_POLICY_STALE_STATUS");
     const afterTransitions = await sql<{ n: string }[]>`select count(*)::text n from public.standing_paper_policy_transitions where policy_id=${actualPolicy.policyId}`;
     expect(Number(afterTransitions[0]!.n)).toBe(Number(beforeTransitions[0]!.n) + 1);
+  });
+
+  it("rejects activation when persisted cycle-v2 limits change after the owner reviewed them", async () => {
+    const { ownerId, financialAccountId } = await ownedAccount();
+    const repository = new StandingPaperPolicyRepository(testUrl!); repositories.push(repository);
+    const draft = { ...ownedDraft(financialAccountId, "cycle-confirmation"), cycleConfiguration: {
+      contractVersion: PAPER_CYCLE_CONTRACT_VERSION, fifoCostBasisVersion: PAPER_CYCLE_FIFO_COST_BASIS_VERSION,
+      exitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 432_000_000 },
+    } } as StandingPaperPolicy;
+    await repository.createOwnedDraft(ownerId, draft);
+    const reviewedHash = standingPaperActivationConfirmationHash(draft);
+    await sql`update public.standing_paper_policies set policy_json = jsonb_set(policy_json, '{cycleConfiguration,exitPolicy,stopLossBps}', '{"$type":"bigint","value":"2500"}'::jsonb, true) where policy_id=${draft.policyId}`;
+    const before = await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_policy_transitions where policy_id=${draft.policyId}`;
+    await expect(repository.activateOwnedDraft(ownerId, draft.policyId, reviewedHash)).rejects.toThrow("PAPER_POLICY_STALE_CONFIRMATION");
+    const after = await sql<{ count: string; status: string }[]>`select (select count(*)::text from public.standing_paper_policy_transitions where policy_id=${draft.policyId}) as count, status from public.standing_paper_policies where policy_id=${draft.policyId}`;
+    expect(after[0]).toEqual({ count: before[0]!.count, status: "DRAFT" });
   });
 
   it("rejects existing ledger activity and foreign ownership without inserting policy history", async () => {
@@ -654,11 +674,42 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(await counts(f.policy.financialAccountId)).toEqual(stoppedCounts);
   });
 
+  it("hosted worker resumes from the saved cycle configuration and cannot accept caller overrides", async () => {
+    const f = await setup("hosted-cycle-v2", 20_000n, 20_000n);
+    const settled: BacktestResult[] = [];
+    const options = {
+      policyId: f.policy.policyId, workerId: "hosted-cycle-test", expectedAccountId: f.policy.financialAccountId,
+      expectedOwnerId: f.ownerId, policyScopedRoundOrdinal: true, initialCapitalMinor: 20_000n, maxRounds: 2,
+      onRound: (_identity: string, result: BacktestResult) => settled.push(result),
+    };
+    const firstWorker = new StandingPaperWorker(f.repository, options);
+    await expect(firstWorker.run()).resolves.toMatchObject({ status: "COMPLETED", roundsCompleted: 2 });
+    expect(settled).toHaveLength(2);
+    expect(settled[0]!.config.paperCycleContractVersion).toBe(PAPER_CYCLE_CONTRACT_VERSION);
+    expect(settled[0]!.config.standingPaperExitPolicy).toEqual(f.policy.cycleConfiguration!.exitPolicy);
+    expect(settled[1]!.paperCycleDecisions?.some(decision => decision.action === "SELL" && decision.reasonCode === "SELL_STOP_LOSS")).toBe(true);
+    const restartResults: BacktestResult[] = [];
+    const restarted = new StandingPaperWorker(f.repository, { ...options, workerId: "hosted-cycle-restart", maxRounds: 1, onRound: (_identity, result) => restartResults.push(result) });
+    await expect(restarted.run()).resolves.toMatchObject({ status: "COMPLETED", roundsCompleted: 1 });
+    expect(restartResults[0]!.config.standingPaperExitPolicy).toEqual(f.policy.cycleConfiguration!.exitPolicy);
+    expect((await counts(f.policy.financialAccountId)).contributions).toBe("1");
+    expect((await counts(f.policy.financialAccountId)).runs).toBe("3");
+    expect(() => new StandingPaperWorker(f.repository, { ...options, exitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 100n, takeProfitBps: 100n, maxHoldingMs: 1_000 } })).toThrow("PAPER_WORKER_CYCLE_CONFIG_OVERRIDE_FORBIDDEN");
+  });
+
+  it.skipIf(!preCycleMode)("rejects stored cycle v2 before heartbeat when its schema is absent", async () => {
+    const f = await setup("pre-cycle-v2-target", 20_000n, 20_000n);
+    await sql`update public.standing_paper_policies set policy_json = jsonb_set(policy_json, '{cycleConfiguration}', '{"contractVersion":"standing-paper-cycle/v2","fifoCostBasisVersion":"fifo-cost-basis/v2","exitPolicy":{"version":"standing-paper-exit-policy/v1","stopLossBps":{"$type":"bigint","value":"2000"},"takeProfitBps":{"$type":"bigint","value":"1000"},"maxHoldingMs":432000000}}'::jsonb, true) where policy_id=${f.policy.policyId}`;
+    const before = await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    await expect(f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 20_000n)).rejects.toThrow("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    const after = await sql<{ count: string }[]>`select count(*)::text as count from public.standing_paper_worker_heartbeats where policy_id=${f.policy.policyId}`;
+    expect(after[0]!.count).toBe(before[0]!.count);
+  });
+
   it("runs v2 workers through one seed, concurrent round replay, restart, sale and rebuy", async () => {
     const f = await setup("cycle-worker-v2", 20_000n, 20_000n);
     const second = new StandingPaperPolicyRepository(testUrl!); repositories.push(second);
-    const exitPolicy = { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1_000 } as const;
-    const options = { policyId: f.policy.policyId, workerId: "cycle-v2-worker", maxRounds: 1, policyScopedRoundOrdinal: true, expectedAccountId: f.policy.financialAccountId, expectedOwnerId: f.ownerId, initialCapitalMinor: 20_000n, exitPolicy };
+    const options = { policyId: f.policy.policyId, workerId: "cycle-v2-worker", maxRounds: 1, policyScopedRoundOrdinal: true, expectedAccountId: f.policy.financialAccountId, expectedOwnerId: f.ownerId, initialCapitalMinor: 20_000n };
     const results: BacktestResult[] = [];
     let waitingAtRound = 0; let releaseBarrier!: () => void;
     const roundBarrier = new Promise<void>(resolve => { releaseBarrier = resolve; });

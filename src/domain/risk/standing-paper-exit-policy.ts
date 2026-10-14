@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 export const STANDING_PAPER_EXIT_POLICY_VERSION = "standing-paper-exit-policy/v1" as const;
 export const PAPER_CYCLE_CONTRACT_VERSION = "standing-paper-cycle/v2" as const;
+export const PAPER_CYCLE_FIFO_COST_BASIS_VERSION = "fifo-cost-basis/v2" as const;
 
 export interface StandingPaperExitPolicy {
   readonly version: typeof STANDING_PAPER_EXIT_POLICY_VERSION;
@@ -11,6 +12,13 @@ export interface StandingPaperExitPolicy {
   readonly takeProfitBps: bigint;
   /** Trigger when the oldest still-open FIFO lot has reached this age. */
   readonly maxHoldingMs: number;
+}
+
+/** Owner-approved, immutable v2 terms persisted with the standing policy. */
+export interface StandingPaperCycleConfiguration {
+  readonly contractVersion: typeof PAPER_CYCLE_CONTRACT_VERSION;
+  readonly fifoCostBasisVersion: typeof PAPER_CYCLE_FIFO_COST_BASIS_VERSION;
+  readonly exitPolicy: StandingPaperExitPolicy;
 }
 
 export type PaperExitAction = "SELL" | "HOLD";
@@ -33,6 +41,15 @@ export function assertValidStandingPaperExitPolicy(policy: StandingPaperExitPoli
     !Number.isSafeInteger(policy.maxHoldingMs) || policy.maxHoldingMs <= 0 || policy.maxHoldingMs > 365 * 24 * 60 * 60 * 1_000) {
     throw new Error("PAPER_EXIT_POLICY_INVALID");
   }
+}
+
+export function assertValidStandingPaperCycleConfiguration(configuration: StandingPaperCycleConfiguration): void {
+  if (!configuration || configuration.contractVersion !== PAPER_CYCLE_CONTRACT_VERSION ||
+    configuration.fifoCostBasisVersion !== PAPER_CYCLE_FIFO_COST_BASIS_VERSION ||
+    !configuration.exitPolicy || Object.keys(configuration).length !== 3 ||
+    Object.keys(configuration.exitPolicy).some(key => !["version", "stopLossBps", "takeProfitBps", "maxHoldingMs"].includes(key)) ||
+    Object.keys(configuration.exitPolicy).length !== 4) throw new Error("PAPER_CYCLE_CONFIGURATION_INVALID");
+  assertValidStandingPaperExitPolicy(configuration.exitPolicy);
 }
 
 /**

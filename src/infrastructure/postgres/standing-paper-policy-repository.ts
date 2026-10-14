@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
 import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, standingPaperActivationConfirmationHash, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { assertValidStandingPaperCycleConfiguration } from "@/domain/risk/standing-paper-exit-policy";
 import { FIXTURE_ASSETS, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import type { ContributionEvent } from "@/application/backtest/run-deterministic-backtest";
 import { planFifoLotConsumption } from "@/domain/portfolio/portfolio-projection";
@@ -52,7 +53,7 @@ const record = (value: unknown): Record<string, unknown> => {
 const signedInteger = (value: unknown): value is string => typeof value === "string" && /^-?\d+$/.test(value);
 const isProcessInstanceUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const invalidCard = (policyId: string): StandingPaperPolicyStatusCard => ({
-  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", activationConfirmationHash: null, mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [], workerInstanceCount: 0, workerInstancesTruncated: false,
+  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", activationConfirmationHash: null, cycleConfiguration: null, mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [], workerInstanceCount: 0, workerInstancesTruncated: false,
   allowedInstrumentIds: [], riskLimits: { capitalBudgetMinor: null, maxOrderMinor: null, maxPositionMinor: null, maxGrossExposureMinor: null, maxLossMinor: null, maxPriceAgeMs: null },
   lastRound: null, netContributionsMinor: null, committedCapitalMinor: null, remainingCapitalBudgetMinor: null,
   capitalBudgetUsedMinor: null, cumulativeTurnoverMinor: null, realizedPnlMinor: null,
@@ -60,7 +61,7 @@ const invalidCard = (policyId: string): StandingPaperPolicyStatusCard => ({
   decisions: [], fills: [], issueCode: "PAPER_MATERIAL_INVALID",
 });
 
-function validateSavedResult(raw: unknown, state: DeterministicBacktestState, accountId: string): { navMinor: string | null; asOf: string; complete: boolean } {
+function validateSavedResult(raw: unknown, state: DeterministicBacktestState, accountId: string, policy: StandingPaperPolicy): { navMinor: string | null; asOf: string; complete: boolean } {
   const result = record(raw);
   const config = record(result.config);
   const ending = record(result.endingState);
@@ -80,6 +81,8 @@ function validateSavedResult(raw: unknown, state: DeterministicBacktestState, ac
     throw new Error("PAPER_MATERIAL_INVALID");
   }
   const cycle = config.paperCycleContractVersion === "standing-paper-cycle/v2";
+  try { assertPolicyCycleConfig(policy, config as unknown as BacktestRunConfig); }
+  catch { throw new Error("PAPER_MATERIAL_INVALID"); }
   if (cycle) {
     const exit = record(config.standingPaperExitPolicy);
     if (config.fifoCostBasisVersion !== "fifo-cost-basis/v2" || exit.version !== "standing-paper-exit-policy/v1" ||
@@ -117,6 +120,22 @@ function validateSavedResult(raw: unknown, state: DeterministicBacktestState, ac
   const complete = ending.valuationStatus === "COMPLETE" && ending.nav !== null;
   if (ending.valuationStatus === "COMPLETE" && !complete) throw new Error("PAPER_MATERIAL_INVALID");
   return { navMinor: complete ? ending.nav as string : null, asOf, complete };
+}
+
+function assertPolicyCycleConfig(policy: StandingPaperPolicy, config: BacktestRunConfig): void {
+  const requestedV2 = config.paperCycleContractVersion === "standing-paper-cycle/v2";
+  if (!requestedV2 && policy.cycleConfiguration) throw new Error("PAPER_CYCLE_CONFIGURATION_MISMATCH");
+  if (requestedV2 && !policy.cycleConfiguration) throw new Error("PAPER_CYCLE_CONFIGURATION_MISSING");
+  if (!requestedV2) return;
+  try { assertValidStandingPaperCycleConfiguration(policy.cycleConfiguration!); }
+  catch { throw new Error("PAPER_CYCLE_CONFIGURATION_INVALID"); }
+  const saved = policy.cycleConfiguration!;
+  const requestedExit = config.standingPaperExitPolicy;
+  if (config.fifoCostBasisVersion !== saved.fifoCostBasisVersion || !requestedExit ||
+    requestedExit.version !== saved.exitPolicy.version || requestedExit.stopLossBps !== saved.exitPolicy.stopLossBps ||
+    requestedExit.takeProfitBps !== saved.exitPolicy.takeProfitBps || requestedExit.maxHoldingMs !== saved.exitPolicy.maxHoldingMs) {
+    throw new Error("PAPER_CYCLE_CONFIGURATION_MISMATCH");
+  }
 }
 
 function validateDecisionRow(row: { policy_id: string; financial_account_id: string; order_id: string; input_hash: string; decision_json: unknown; created_at: Date }, policyId: string, accountId: string): StandingPaperStatusDecision {
@@ -222,7 +241,7 @@ export class StandingPaperPolicyRepository {
     this.client = postgres(connectionString, { max: 5, prepare: true, ...(connectionOptions.ssl ? { ssl: connectionOptions.ssl } : {}) });
   }
 
-  private async hasCycleV2Schema(tx: TransactionSql): Promise<boolean> {
+  private async hasCycleV2Schema(tx: Sql | TransactionSql): Promise<boolean> {
     const rows = await tx<{ decisions: boolean; audit: boolean; fillSide: boolean; fillDisposal: boolean; sellType: boolean }[]>`
       select to_regclass('public.standing_paper_cycle_decisions') is not null as decisions,
         to_regclass('public.standing_paper_cycle_decision_audit') is not null as audit,
@@ -263,6 +282,7 @@ export class StandingPaperPolicyRepository {
       if (!row.owner_exists || !row.owner_id) throw new Error("PAPER_WORKER_ACCOUNT_OWNER_MISSING");
       if (row.policy_version !== "standing-paper-policy/v1" || policy.version !== row.policy_version || policy.policyId !== policyId || policy.status !== row.policy_status || policy.mode !== "PAPER_ONLY") throw new Error("PAPER_WORKER_POLICY_INVALID");
       if (row.policy_status !== "ACTIVE") throw new Error("PAPER_WORKER_POLICY_NOT_ACTIVE");
+      if (policy.cycleConfiguration && !(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
       if (row.account_status !== "ACTIVE" || row.account_mode !== "PAPER" || row.currency_code !== "NOK") throw new Error("PAPER_WORKER_ACCOUNT_NOT_RUNNABLE");
       const fixtureIds = new Set(FIXTURE_ASSETS.map(asset => asset.assetId));
       if (!policy.allowedInstrumentIds.length || policy.allowedInstrumentIds.some(id => !fixtureIds.has(id))) throw new Error("PAPER_WORKER_INSTRUMENT_SCOPE_INVALID");
@@ -292,7 +312,6 @@ export class StandingPaperPolicyRepository {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(workerId) || !isProcessInstanceUuid(processInstanceId)) throw new Error("PAPER_WORKER_HEARTBEAT_ID_INVALID");
     if (expectedTarget) {
       await this.client.begin(async tx => {
-        if ((requiresCycleV2 || expectedTarget.requiresCycleV2) && !(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
         const policies = await tx<{ policy_json: unknown; status: string; policy_version: string; financial_account_id: string; state_json: unknown; last_run_id: string | null }[]>`
           select policy_json, status, policy_version, financial_account_id, state_json, last_run_id
           from public.standing_paper_policies where policy_id=${policyId} for update
@@ -301,6 +320,7 @@ export class StandingPaperPolicyRepository {
         if (!stored) throw new Error("PAPER_WORKER_TARGET_NOT_FOUND");
         const policy = parsePolicy(stored.policy_json);
         if (policy.policyId !== policyId || policy.financialAccountId !== stored.financial_account_id || policy.status !== stored.status || policy.version !== stored.policy_version || policy.mode !== "PAPER_ONLY") throw new Error("PAPER_WORKER_POLICY_INVALID");
+        if (policy.cycleConfiguration && !(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
         if (stored.status !== "ACTIVE") throw new Error("PAPER_WORKER_POLICY_NOT_ACTIVE");
         if (stored.financial_account_id !== expectedTarget.accountId) throw new Error("PAPER_WORKER_ACCOUNT_MISMATCH");
         const accounts = await tx<{ owner_id: string; status: string; mode: string; base_currency_code: string }[]>`
@@ -336,12 +356,14 @@ export class StandingPaperPolicyRepository {
           and (${expectedOwnerId ?? null}::uuid is null or a.owner_id = ${expectedOwnerId ?? null}::uuid)
         returning policy_id
       `;
-    const rows = requiresCycleV2
-      ? await this.client.begin(async tx => {
-          if (!(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
-          return insertHeartbeat(tx);
-        })
-      : await insertHeartbeat(this.client);
+    const policies = await this.client<{ policy_json: unknown; status: string; financial_account_id: string }[]>`
+      select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id=${policyId}
+    `;
+    if (!policies[0]) throw new Error("PAPER_WORKER_HEARTBEAT_POLICY_NOT_RUNNABLE");
+    const policy = parsePolicy(policies[0].policy_json);
+    if (policy.policyId !== policyId || policy.status !== policies[0].status || policy.financialAccountId !== policies[0].financial_account_id) throw new Error("PAPER_WORKER_POLICY_INVALID");
+    if ((requiresCycleV2 || policy.cycleConfiguration !== undefined) && !(await this.hasCycleV2Schema(this.client))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    const rows = await insertHeartbeat(this.client);
     if (!rows[0]) throw new Error("PAPER_WORKER_HEARTBEAT_POLICY_NOT_RUNNABLE");
   }
 
@@ -498,6 +520,7 @@ export class StandingPaperPolicyRepository {
         try {
           const policy = parsePolicy(row.policy_json);
           if (policy.policyId !== row.policy_id || policy.financialAccountId !== row.financial_account_id || policy.version !== row.policy_version || policy.status !== row.status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
+          if (policy.cycleConfiguration && !cycleV2Schema) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
           const state = parseState(row.state_json, row.financial_account_id);
           if (!cycleV2Schema && state.disposals !== undefined) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
           await this.assertLedgerCheckpointMatches(tx, row.financial_account_id, state, row.last_run_id);
@@ -505,7 +528,7 @@ export class StandingPaperPolicyRepository {
           if (row.last_run_id && (!run || run.policy_id !== row.policy_id || run.financial_account_id !== row.financial_account_id)) throw new Error("PAPER_CHECKPOINT_INVALID");
           if (!row.last_run_id && (state.lastProcessedAt !== null || state.ledger.length || state.acquisitions.length)) throw new Error("PAPER_CHECKPOINT_INVALID");
           const result = run ? decode(typeof run.result_json === "string" ? JSON.parse(run.result_json) as unknown : run.result_json) : null;
-          const valuation = run ? validateSavedResult(result, state, row.financial_account_id) : null;
+          const valuation = run ? validateSavedResult(result, state, row.financial_account_id, policy) : null;
           const legacyDecisions = decisionRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateDecisionRow(item, policy.policyId, row.financial_account_id));
           const cycleDecisions = cycleDecisionRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateCycleDecisionRow(item, policy.policyId, row.financial_account_id));
           const decisions = cycleDecisions.length ? cycleDecisions : legacyDecisions;
@@ -603,11 +626,11 @@ export class StandingPaperPolicyRepository {
     const actualAcquisitions = cycleV2
       ? await tx<{ acquisition_json: unknown }[]>`select acquisition_json from public.standing_paper_fills where financial_account_id=${accountId} and side='BUY' order by fill_id`
       : await tx<{ acquisition_json: unknown }[]>`select acquisition_json from public.standing_paper_fills where financial_account_id=${accountId} order by fill_id`;
-    const acquisitions = actualAcquisitions.map(row => decode(typeof row.acquisition_json === "string" ? JSON.parse(row.acquisition_json) : row.acquisition_json));
+    const acquisitions = actualAcquisitions.map(row => decode(typeof row.acquisition_json === "string" ? JSON.parse(row.acquisition_json) : row.acquisition_json)).sort((a, b) => String(record(a).fillId).localeCompare(String(record(b).fillId)));
     if (sha256(acquisitions) !== sha256([...state.acquisitions].sort((a,b) => a.fillId.localeCompare(b.fillId)))) throw new Error("PAPER_ACQUISITION_CHECKPOINT_MISMATCH");
     if (cycleV2) {
       const actualDisposals = await tx<{ disposal_json: unknown }[]>`select disposal_json from public.standing_paper_fills where financial_account_id=${accountId} and side='SELL' order by fill_id`;
-      const disposals = actualDisposals.map(row => decode(typeof row.disposal_json === "string" ? JSON.parse(row.disposal_json) : row.disposal_json));
+      const disposals = actualDisposals.map(row => decode(typeof row.disposal_json === "string" ? JSON.parse(row.disposal_json) : row.disposal_json)).sort((a, b) => String(record(a).fillId).localeCompare(String(record(b).fillId)));
       if (sha256(disposals) !== sha256([...state.disposals!].sort((a,b) => a.fillId.localeCompare(b.fillId)))) throw new Error("PAPER_DISPOSAL_CHECKPOINT_MISMATCH");
     }
     if (state.disposals !== undefined) {
@@ -761,6 +784,7 @@ export class StandingPaperPolicyRepository {
       if (!rows[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
       const policy = parsePolicy(rows[0].policy_json);
       if (policy.financialAccountId !== rows[0].financial_account_id || policy.status !== rows[0].status) throw new Error("PAPER_POLICY_STATE_CORRUPT");
+      assertPolicyCycleConfig(policy, baseSnapshot.config as BacktestRunConfig);
       if (baseSnapshot.config.financialAccountId && baseSnapshot.config.financialAccountId !== policy.financialAccountId) throw new Error("PAPER_ACCOUNT_MISMATCH");
       if (seed && seed.amountMinor && BigInt(seed.amountMinor) > policy.capitalBudgetMinor) throw new Error("PAPER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
       let seedAlreadyPosted = false;

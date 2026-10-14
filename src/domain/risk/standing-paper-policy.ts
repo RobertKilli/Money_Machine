@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { FEE_POLICY_VERSION, SIMULATION_EXECUTION_POLICY_VERSION, SPREAD_SLIPPAGE_POLICY_VERSION } from "@/domain/execution/simulation-execution";
 import { M1_ROUNDING_POLICY_VERSION } from "@/domain/financial/rounding";
 import type { FixtureAsset, FixturePriceObservation, ProposedOrder } from "@/domain/strategy/fixture-assets";
+import { assertValidStandingPaperCycleConfiguration, type StandingPaperCycleConfiguration } from "@/domain/risk/standing-paper-exit-policy";
 
 export const STANDING_PAPER_POLICY_VERSION = "standing-paper-policy/v1";
 export type PaperPolicyStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "STOPPED";
@@ -21,6 +22,7 @@ export interface StandingPaperPolicy {
   readonly maxGrossExposureMinor: bigint;
   readonly maxLossMinor: bigint;
   readonly maxPriceAgeMs: number;
+  readonly cycleConfiguration?: StandingPaperCycleConfiguration;
 }
 
 export interface PaperPolicyEvidence {
@@ -92,6 +94,7 @@ export function assertValidPaperPolicy(policy: StandingPaperPolicy): void {
     policy.allowedInstrumentIds.length === 0 || new Set(policy.allowedInstrumentIds).size !== policy.allowedInstrumentIds.length ||
     policy.capitalBudgetMinor <= 0n || policy.maxOrderMinor <= 0n || policy.maxPositionMinor <= 0n || policy.maxGrossExposureMinor <= 0n || policy.maxLossMinor < 0n ||
     !Number.isSafeInteger(policy.maxPriceAgeMs) || policy.maxPriceAgeMs <= 0) throw new Error("PAPER_POLICY_INVALID");
+  if (policy.cycleConfiguration !== undefined) assertValidStandingPaperCycleConfiguration(policy.cycleConfiguration);
 }
 
 /** Hashes the exact DRAFT terms the owner sees before first activation. */
@@ -111,6 +114,16 @@ export function standingPaperActivationConfirmationHash(policy: StandingPaperPol
     maxGrossExposureMinor: policy.maxGrossExposureMinor.toString(),
     maxLossMinor: policy.maxLossMinor.toString(),
     maxPriceAgeMs: policy.maxPriceAgeMs,
+    cycleConfiguration: policy.cycleConfiguration ? {
+      contractVersion: policy.cycleConfiguration.contractVersion,
+      fifoCostBasisVersion: policy.cycleConfiguration.fifoCostBasisVersion,
+      exitPolicy: {
+        version: policy.cycleConfiguration.exitPolicy.version,
+        stopLossBps: policy.cycleConfiguration.exitPolicy.stopLossBps.toString(),
+        takeProfitBps: policy.cycleConfiguration.exitPolicy.takeProfitBps.toString(),
+        maxHoldingMs: policy.cycleConfiguration.exitPolicy.maxHoldingMs,
+      },
+    } : null,
   })).digest("hex");
 }
 

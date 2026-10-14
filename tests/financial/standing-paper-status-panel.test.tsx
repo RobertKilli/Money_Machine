@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { runDeterministicBacktest } from "@/application/backtest/run-deterministic-backtest";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel } from "@/application/paper-trading/standing-paper-status";
 import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
-import { PAPER_CYCLE_CONTRACT_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
+import { PAPER_CYCLE_CONTRACT_VERSION, PAPER_CYCLE_FIFO_COST_BASIS_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
 import { price } from "@/domain/financial/price";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION } from "@/domain/strategy/fixture-assets";
-import { isStandingPaperActivationConfirmed, loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
+import { CycleConfigurationView, isStandingPaperActivationConfirmed, loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
 import { PaperAccountEmptyState, StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
 
 const testPolicy: StandingPaperPolicy = {
@@ -42,7 +42,8 @@ const secondPolicyCard = projectStandingPaperStatusCard({
   run: { id: "available-run", createdAt: "2026-10-08T10:00:03.000Z", result: testResult, valuation: { navMinor: testResult.endingState.nav, asOf: testResult.endingState.asOf, complete: true } },
   decisions: [], fills: [],
 });
-const cyclePolicy: StandingPaperPolicy = { ...testPolicy, policyId: "paper-cycle-ui-v2", identity: "synthetic-cycle-ui", capitalBudgetMinor: 20_000n, maxOrderMinor: 20_000n, maxPositionMinor: 20_000n, maxGrossExposureMinor: 20_000n };
+const cyclePolicy: StandingPaperPolicy = { ...testPolicy, policyId: "paper-cycle-ui-v2", identity: "synthetic-cycle-ui", capitalBudgetMinor: 20_000n, maxOrderMinor: 20_000n, maxPositionMinor: 20_000n, maxGrossExposureMinor: 20_000n,
+  cycleConfiguration: { contractVersion: PAPER_CYCLE_CONTRACT_VERSION, fifoCostBasisVersion: PAPER_CYCLE_FIFO_COST_BASIS_VERSION, exitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1_000 } } };
 const cycleAt = "2026-10-08T11:00:00.000Z";
 const cycleResult = runDeterministicBacktest({
   startAt: testAt, endAt: cycleAt, baseCurrency: "NOK", financialAccountId: cyclePolicy.financialAccountId,
@@ -53,7 +54,7 @@ const cycleResult = runDeterministicBacktest({
   assetRegistryVersion: "fixture-asset-registry/v1", marketDatasetVersion: FIXTURE_DATASET_VERSION, standingPaperPolicy: cyclePolicy,
 }, FIXTURE_ASSETS.flatMap((asset, index) => [
   { recordId: `cycle-ui-before-${index}`, assetId: asset.assetId, price: price("NOK", BigInt((index + 1) * 1_000_000), 4), observedAt: new Date(testAt), availableAt: new Date(testAt), ingestedAt: new Date(testAt), datasetVersion: FIXTURE_DATASET_VERSION },
-  { recordId: `cycle-ui-rise-${index}`, assetId: asset.assetId, price: price("NOK", BigInt((index + 1) * 2_000_000), 4), observedAt: new Date(cycleAt), availableAt: new Date(cycleAt), ingestedAt: new Date(cycleAt), datasetVersion: FIXTURE_DATASET_VERSION },
+  { recordId: `cycle-ui-rise-${index}`, assetId: asset.assetId, price: price("NOK", BigInt((index + 1) * 500_000), 4), observedAt: new Date(cycleAt), availableAt: new Date(cycleAt), ingestedAt: new Date(cycleAt), datasetVersion: FIXTURE_DATASET_VERSION },
 ]));
 const cycleCard = projectStandingPaperStatusCard({
   policy: cyclePolicy, state: cycleResult.persistentState,
@@ -67,9 +68,11 @@ describe("standing paper status view", () => {
   it("validates and renders backend-projected v2 BUY, SELL, turnover, and realized result", () => {
     expect(parseStandingPaperStatus(cycleModel)).toEqual(cycleModel);
     const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: cycleModel }} />);
-    expect(html).toContain("SELL");
+    expect(html).toContain("Stop-loss utløst");
     expect(html).toContain("Kumulativ handelsomsetning");
     expect(html).toContain("realisert resultat");
+    expect(html).toContain("SELL");
+    expect(html).toContain("Godkjent cycle v2-konfigurasjon");
   });
 
   it("requests the private endpoint with no-store and validates the returned model", async () => {
@@ -89,6 +92,22 @@ describe("standing paper status view", () => {
     expect(draftHtml).toContain("Gjennomgå og aktiver");
     expect(draftHtml).toContain("Policy: Draft");
     expect(draftHtml).toContain("Syntetiske priser");
+  });
+
+  it("shows every approved cycle limit and contract version before activation", () => {
+    const card = projectStandingPaperStatusCard({ policy: { ...cyclePolicy, status: "DRAFT" }, state: cycleResult.persistentState, run: null });
+    expect(card.cycleConfiguration).not.toBeNull();
+    const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: projectStandingPaperStatusReadModel([card]) }} />);
+    expect(html).toContain("Godkjent cycle v2-konfigurasjon");
+    expect(html).toContain("standing-paper-cycle/v2");
+    expect(html).toContain("fifo-cost-basis/v2");
+    expect(html).toContain("Stop-loss");
+    expect(html).toContain("Take-profit");
+    expect(html).toContain("Maksimal holdetid");
+    const reviewedTerms = renderToStaticMarkup(<CycleConfigurationView configuration={cycleModel.policies[0]!.cycleConfiguration!} title="Activation review" />);
+    expect(reviewedTerms).toContain("20,00%");
+    expect(reviewedTerms).toContain("10,00%");
+    expect(reviewedTerms).toContain("120 timer");
   });
 
   it("renders a keyboard-operable PAPER account creation action for the empty state", () => {
