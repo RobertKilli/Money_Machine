@@ -94,6 +94,7 @@ export class StandingPaperWorker {
     if (options.maxRounds !== undefined && (!Number.isSafeInteger(options.maxRounds) || options.maxRounds < 1)) throw new Error("PAPER_WORKER_MAX_ROUNDS_INVALID");
     if (options.initialCapitalMinor !== undefined && options.initialCapitalMinor <= 0n) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_INVALID");
     if (options.exitPolicy && options.initialCapitalMinor === undefined) throw new Error("PAPER_CYCLE_INITIAL_CAPITAL_REQUIRED");
+    if (options.exitPolicy) throw new Error("PAPER_WORKER_CYCLE_CONFIG_OVERRIDE_FORBIDDEN");
     if (options.pollIntervalMs !== undefined && (!Number.isSafeInteger(options.pollIntervalMs) || options.pollIntervalMs < 10)) throw new Error("PAPER_WORKER_POLL_INTERVAL_INVALID");
     if (options.maxRounds === undefined && options.roundIntervalMs === undefined) throw new Error("PAPER_WORKER_ROUND_INTERVAL_REQUIRED");
     if (options.roundIntervalMs !== undefined && (!Number.isSafeInteger(options.roundIntervalMs) || options.roundIntervalMs < 1_000 || options.roundIntervalMs > 86_400_000)) throw new Error("PAPER_WORKER_ROUND_INTERVAL_INVALID");
@@ -114,15 +115,25 @@ export class StandingPaperWorker {
     let heartbeatStarted = false;
     let exitReason: "COMPLETED" | "STOPPED" | "FAILED" = "FAILED";
     try {
+      // The policy is authoritative for whether cycle v2 is enabled. Check it
+      // before creating a heartbeat so v2 can never enter the v1 per-round
+      // contribution path when its explicit policy-scoped seed is absent.
+      const startupPolicy = await this.repository.getPolicy(this.options.policyId);
+      if (!startupPolicy) throw new Error("PAPER_POLICY_NOT_FOUND");
+      if (startupPolicy.cycleConfiguration && this.options.initialCapitalMinor === undefined) {
+        throw new Error("PAPER_CYCLE_INITIAL_CAPITAL_REQUIRED");
+      }
+      if (this.options.initialCapitalMinor !== undefined && this.options.initialCapitalMinor > startupPolicy.capitalBudgetMinor) {
+        throw new Error("PAPER_WORKER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
+      }
       await this.repository.startWorkerHeartbeat(
         this.options.policyId,
         this.options.workerId,
         this.processInstanceId,
         this.options.expectedOwnerId,
         this.options.initialCapitalMinor !== undefined && this.options.expectedAccountId
-          ? { accountId: this.options.expectedAccountId, initialCapitalMinor: this.options.initialCapitalMinor, requiresCycleV2: this.options.exitPolicy !== undefined }
+          ? { accountId: this.options.expectedAccountId, initialCapitalMinor: this.options.initialCapitalMinor }
           : undefined,
-        this.options.exitPolicy !== undefined,
       );
       heartbeatStarted = true;
       this.heartbeatTask = this.renewHeartbeat();
@@ -182,8 +193,9 @@ export class StandingPaperWorker {
         const policy = await this.repository.getPolicy(this.options.policyId);
         if (!policy) throw new Error("PAPER_POLICY_NOT_FOUND");
         if (this.options.expectedAccountId && policy.financialAccountId !== this.options.expectedAccountId) throw new Error("PAPER_WORKER_ACCOUNT_MISMATCH");
+        const exitPolicy = policy.cycleConfiguration?.exitPolicy;
         const hostedSeeded = this.options.initialCapitalMinor !== undefined;
-        const config = configForRound(policy, this.options.workerId, round, hostedSeeded, this.options.exitPolicy);
+        const config = configForRound(policy, this.options.workerId, round, hostedSeeded, exitPolicy);
         const initialContribution = hostedSeeded ? {
           eventId: `standing-paper-hosted-capital/v1/${policy.policyId}`,
           availableAt: roundAt(0).toISOString(),
@@ -192,7 +204,7 @@ export class StandingPaperWorker {
         } : undefined;
         try {
           if (this.options.signal?.aborted) throw abortError();
-          const result = await this.repository.run(this.options.policyId, config, pricesForRound(round, this.options.exitPolicy !== undefined), identity, {
+          const result = await this.repository.run(this.options.policyId, config, pricesForRound(round, exitPolicy !== undefined), identity, {
             ...(initialContribution ? { initialContribution } : {}),
             ...(this.options.expectedOwnerId ? { expectedOwnerId: this.options.expectedOwnerId } : {}),
           });

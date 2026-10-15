@@ -1,9 +1,29 @@
 # Standing paper cycle v2
 
-`standing-paper-cycle/v2` is an explicit, opt-in contract for local or review
-scenarios. Existing `standing-paper-policy/v1` policies and worker entrypoints
-remain BUY-only. The production/hosted worker does not select v2 automatically,
-and this change does not edit or activate any hosted policy.
+`standing-paper-cycle/v2` is an explicit, opt-in contract. Existing
+`standing-paper-policy/v1` policies without a saved cycle configuration remain
+BUY-only. They are never converted automatically. A new dashboard draft may
+opt in to cycle v2, but stays DRAFT until a separate owner confirmation.
+
+The dashboard collects stop-loss, take-profit, and maximum holding time with
+no hidden values. The activation hash includes the policy identity and limits,
+cycle contract version, FIFO cost-basis version, exit-policy version, and all
+three thresholds. The review shows the same values before activation. If any
+term changes, the earlier confirmation no longer matches.
+
+The hosted worker derives cycle behavior only from the active policy's saved,
+owner-approved configuration. Hosted caller overrides are rejected. A policy
+with no cycle configuration uses the existing BUY-only v1 behavior. A v2
+policy is rejected before heartbeat or settlement writes if the cycle schema
+is missing or its stored configuration is invalid. No existing hosted policy
+is converted by this change.
+
+Before a v2 worker can create a heartbeat, the operator must also provide one
+explicit positive start-capital amount within the policy budget. The worker
+binds this virtual contribution idempotently to the policy and reuses that
+binding for later rounds and process restarts. A v2 policy never uses the
+local v1 demo's 1,000 NOK contribution per round. V1 worker contribution
+behavior is unchanged.
 
 ## Scenario policy inputs
 

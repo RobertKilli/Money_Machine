@@ -45,6 +45,11 @@ export interface StandingPaperPolicyStatusCard {
   readonly version: string | null;
   readonly policyStatus: "DRAFT" | "ACTIVE" | "PAUSED" | "STOPPED" | "UNKNOWN";
   readonly activationConfirmationHash: string | null;
+  readonly cycleConfiguration: null | {
+    readonly contractVersion: string;
+    readonly fifoCostBasisVersion: string;
+    readonly exitPolicy: { readonly version: string; readonly stopLossBps: string; readonly takeProfitBps: string; readonly maxHoldingMs: number };
+  };
   readonly mode: "PAPER_ONLY" | "UNKNOWN";
   readonly workerStatus: StandingPaperWorkerInstanceStatus | "UNKNOWN";
   readonly workerInstances: readonly StandingPaperWorkerInstanceStatusRecord[];
@@ -125,6 +130,16 @@ export function projectStandingPaperStatusCard(input: {
     status, policyId: policy.policyId, identity: policy.identity, version: policy.version,
     policyStatus: policy.status, mode: policy.mode, workerStatus, workerInstances: [...workers], workerInstanceCount, workerInstancesTruncated,
     activationConfirmationHash: policy.status === "DRAFT" ? standingPaperActivationConfirmationHash(policy) : null,
+    cycleConfiguration: policy.cycleConfiguration ? {
+      contractVersion: policy.cycleConfiguration.contractVersion,
+      fifoCostBasisVersion: policy.cycleConfiguration.fifoCostBasisVersion,
+      exitPolicy: {
+        version: policy.cycleConfiguration.exitPolicy.version,
+        stopLossBps: policy.cycleConfiguration.exitPolicy.stopLossBps.toString(),
+        takeProfitBps: policy.cycleConfiguration.exitPolicy.takeProfitBps.toString(),
+        maxHoldingMs: policy.cycleConfiguration.exitPolicy.maxHoldingMs,
+      },
+    } : null,
     allowedInstrumentIds: [...policy.allowedInstrumentIds].sort(),
     riskLimits: {
       capitalBudgetMinor: policy.capitalBudgetMinor.toString(), maxOrderMinor: policy.maxOrderMinor.toString(),

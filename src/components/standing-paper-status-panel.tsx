@@ -32,6 +32,7 @@ function summaryWorkerStatus(workers: readonly Record<string, unknown>[]) {
 
 function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
   if (!isRecord(value) || !cardStatuses.includes(String(value.status)) || !isText(value.policyId) || !policyStatuses.includes(String(value.policyStatus)) ||
+    !Object.hasOwn(value, "cycleConfiguration") || !validCycleConfiguration(value.cycleConfiguration) ||
     !Array.isArray(value.workerInstances) || value.workerInstances.length > 20 || !Number.isSafeInteger(value.workerInstanceCount) || (value.workerInstanceCount as number) < value.workerInstances.length ||
     typeof value.workerInstancesTruncated !== "boolean" || value.workerInstancesTruncated !== ((value.workerInstanceCount as number) > value.workerInstances.length) ||
     (value.workerInstancesTruncated && (value.workerInstances.length !== 20 || (value.workerInstanceCount as number) <= 20)) ||
@@ -50,7 +51,7 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
   const limits = value.riskLimits;
   const monetaryLimits = [limits.capitalBudgetMinor, limits.maxOrderMinor, limits.maxPositionMinor, limits.maxGrossExposureMinor, limits.maxLossMinor];
   if (value.status === "INVALID") return value.identity === null && value.version === null && value.policyStatus === "UNKNOWN" && value.mode === "UNKNOWN" &&
-    value.activationConfirmationHash === null &&
+    value.activationConfirmationHash === null && value.cycleConfiguration === null &&
     monetaryLimits.every(item => item === null) && limits.maxPriceAgeMs === null && value.allowedInstrumentIds.length === 0 && value.lastRound === null &&
     value.workerInstances.length === 0 && value.workerInstanceCount === 0 && !value.workerInstancesTruncated && value.netContributionsMinor === null && value.committedCapitalMinor === null && value.capitalBudgetUsedMinor === null && value.remainingCapitalBudgetMinor === null && value.cumulativeTurnoverMinor === null && value.realizedPnlMinor === null && value.portfolioValueMinor === null &&
     value.portfolioValueAsOf === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null && value.decisions.length === 0 && value.fills.length === 0 &&
@@ -98,6 +99,17 @@ export function parseStandingPaperStatus(value: unknown): StandingPaperStatusRea
   return value as unknown as StandingPaperStatusReadModel;
 }
 
+function validCycleConfiguration(value: unknown): boolean {
+  if (value === null) return true;
+  if (!isRecord(value) || Object.keys(value).length !== 3 || value.contractVersion !== "standing-paper-cycle/v2" || value.fifoCostBasisVersion !== "fifo-cost-basis/v2" || !isRecord(value.exitPolicy)) return false;
+  const exit = value.exitPolicy;
+  if (Object.keys(exit).length !== 4 || exit.version !== "standing-paper-exit-policy/v1" || !isPositiveAmount(exit.stopLossBps) || !isPositiveAmount(exit.takeProfitBps) ||
+    typeof exit.maxHoldingMs !== "number" || !Number.isSafeInteger(exit.maxHoldingMs)) return false;
+  const stopLoss = BigInt(exit.stopLossBps as string);
+  const takeProfit = BigInt(exit.takeProfitBps as string);
+  return stopLoss < 10_000n && takeProfit <= 1_000_000n && exit.maxHoldingMs > 0 && exit.maxHoldingMs <= 365 * 24 * 60 * 60 * 1_000;
+}
+
 export async function loadStandingPaperStatus(fetcher: Fetcher = fetch): Promise<PaperStatusPanelState> {
   try {
     const response = await fetcher("/api/dashboard/paper-status", { cache: "no-store", credentials: "same-origin" });
@@ -111,6 +123,8 @@ export async function loadStandingPaperStatus(fetcher: Fetcher = fetch): Promise
 const amount = (minor: string | null) => minor === null ? "Ikke tilgjengelig" : formatMoney(money("NOK", BigInt(minor)));
 const dateLabel = (value: string | null) => value ? new Date(value).toLocaleString("nb-NO", { timeZone: "UTC", year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : "Ikke tilgjengelig";
 const titleCase = (value: string) => value.replaceAll("_", " ").toLocaleLowerCase("nb-NO").replace(/^./, character => character.toLocaleUpperCase("nb-NO"));
+const percentFromBps = (value: string) => { const bps = BigInt(value); return `${bps / 100n},${String(bps % 100n).padStart(2, "0")}%`; };
+const exitReasonLabel = (reason: string) => ({ SELL_STOP_LOSS: "Stop-loss utløst", SELL_TAKE_PROFIT: "Take-profit utløst", SELL_MAX_HOLD: "Maksimal holdetid nådd", SELL_ORDER_LIMIT_REJECTED: "Salg avvist av ordregrense", HOLD_NO_EXIT_TRIGGER: "Ingen exit-regel utløst" } as Record<string, string>)[reason] ?? reason;
 
 function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; onRefresh?: () => Promise<void> }) {
   const [reviewing, setReviewing] = useState(false);
@@ -156,6 +170,7 @@ function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolic
         <Limit label="Maks prisalder" value={card.riskLimits.maxPriceAgeMs === null ? "Ikke tilgjengelig" : `${card.riskLimits.maxPriceAgeMs} ms`} />
       </dl>
       <p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p>
+      {card.cycleConfiguration && <CycleConfigurationView configuration={card.cycleConfiguration} title="Cycle-konfigurasjon som godkjennes" />}
       <p className="mt-3 rounded-lg bg-amber-400/5 p-3 text-sm">Kun PAPER_ONLY. Prisene er syntetiske, og fills simuleres. Dette er ikke børsutførelse.</p>
       <label className="mt-4 flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmedHash(event.target.checked ? card.activationConfirmationHash : null)} className="mt-1" /><span>Jeg har gjennomgått og godkjenner grensene ovenfor.</span></label>
       <div className="mt-4 flex flex-wrap gap-2"><button type="button" disabled={!confirmed || pending} onClick={() => void activate()} className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">{pending ? "Aktiverer …" : "Bekreft aktivering"}</button><button type="button" disabled={pending} onClick={() => { setReviewing(false); setConfirmedHash(null); }} className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm">Avbryt</button></div>
@@ -231,12 +246,17 @@ function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; 
     </div>
     <PolicyActivationControl card={card} onRefresh={onRefresh} />
     <PolicyControls card={card} onRefresh={onRefresh} />
+    {card.cycleConfiguration && <CycleConfigurationView configuration={card.cycleConfiguration} title={card.policyStatus === "DRAFT" ? "Foreslått cycle v2-konfigurasjon (ikke godkjent)" : "Godkjent cycle v2-konfigurasjon"} />}
     <div className="grid gap-5 lg:grid-cols-2">
       <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Risikogrenser</h3><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2"><Limit label="Maks ordre" value={amount(risk.maxOrderMinor)} /><Limit label="Maks posisjon" value={amount(risk.maxPositionMinor)} /><Limit label="Maks samlet eksponering" value={amount(risk.maxGrossExposureMinor)} /><Limit label="Maks tapsgrense" value={amount(risk.maxLossMinor)} /><Limit label="Maks prisalder" value={risk.maxPriceAgeMs === null ? "Ikke tilgjengelig" : `${risk.maxPriceAgeMs} ms`} /></dl><p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p></section>
       <section className="rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Policy og worker</h3><dl className="mt-3 grid gap-3 text-sm"><Limit label="Policy-status" value={titleCase(card.policyStatus)} /><Limit label="Worker-status" value={workerLabel(card.workerStatus)} /><Limit label="Modus" value="PAPER_ONLY" /><Limit label="Versjon" value={card.version ?? "Ukjent"} /></dl>{card.workerInstancesTruncated && <p className="mt-3 text-xs text-[var(--muted)]">Viser de 20 siste av {card.workerInstanceCount} worker-instanser.</p>}{card.workerInstances.length > 0 && <ul className="mt-3 space-y-2 border-t border-[var(--border)] pt-3 text-xs">{card.workerInstances.map(worker => <li key={worker.processInstanceId} className="flex flex-wrap justify-between gap-2"><span>{worker.workerId} · {workerLabel(worker.status)}</span><span className="text-[var(--muted)]">Heartbeat {dateLabel(worker.lastHeartbeatAt)}</span></li>)}</ul>}</section>
     </div>
     <HistoryList card={card} />
   </section>;
+}
+
+export function CycleConfigurationView({ configuration, title }: { configuration: NonNullable<StandingPaperPolicyStatusCard["cycleConfiguration"]>; title: string }) {
+  return <section className="min-w-0 rounded-xl border border-[var(--accent)]/30 p-4"><h3 className="font-semibold">{title}</h3><p className="mt-1 text-xs text-[var(--muted)]">{configuration.contractVersion} · {configuration.fifoCostBasisVersion} · {configuration.exitPolicy.version}</p><dl className="mt-3 grid gap-2 text-sm sm:grid-cols-3"><Limit label="Stop-loss" value={percentFromBps(configuration.exitPolicy.stopLossBps)} /><Limit label="Take-profit" value={percentFromBps(configuration.exitPolicy.takeProfitBps)} /><Limit label="Maksimal holdetid" value={`${configuration.exitPolicy.maxHoldingMs / 3_600_000} timer`} /></dl><p className="mt-2 text-xs text-[var(--muted)]">Exit-reglene styrer syntetiske handler mot syntetiske priser. De er testparametere, ikke lønnsomhetsråd.</p></section>;
 }
 
 function workerLabel(status: string): string {
@@ -249,7 +269,7 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
 function Limit({ label, value }: { label: string; value: string }) { return <div className="flex min-w-0 justify-between gap-3"><dt className="min-w-0 break-words text-[var(--muted)]">{label}</dt><dd className="min-w-0 max-w-[55%] break-words text-right font-medium">{value}</dd></div>; }
 function HistoryList({ card }: { card: StandingPaperPolicyStatusCard }) {
   return <div className="grid gap-5 lg:grid-cols-2">
-    <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Siste beslutninger</h3>{card.decisions.length ? <ol className="mt-3 space-y-3">{card.decisions.map(item => <li key={item.decisionId} className="rounded-lg border border-[var(--border)] p-3 text-sm"><p className="break-all font-mono text-xs">{item.orderId}</p><p className="mt-2">{item.action ?? "BUY"} · {item.outcome === "SIMULATED_FILLED" ? "Simulert fill" : item.outcome === "HOLD" ? "Behold" : "Avvist"}</p><p className="mt-1 text-xs text-[var(--muted)]">Årsak: {item.reasonCode} · {dateLabel(item.recordedAt)}</p></li>)}</ol> : <p className="mt-3 text-sm text-[var(--muted)]">Ingen lagrede beslutninger.</p>}</section>
+    <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Siste beslutninger</h3>{card.decisions.length ? <ol className="mt-3 space-y-3">{card.decisions.map(item => <li key={item.decisionId} className="rounded-lg border border-[var(--border)] p-3 text-sm"><p className="break-all font-mono text-xs">{item.orderId}</p><p className="mt-2">{item.action ?? "BUY"} · {item.outcome === "SIMULATED_FILLED" ? "Simulert fill" : item.outcome === "HOLD" ? "Behold" : "Avvist"}</p><p className="mt-1 text-xs text-[var(--muted)]">Årsak: {exitReasonLabel(item.reasonCode)} · {dateLabel(item.recordedAt)}</p></li>)}</ol> : <p className="mt-3 text-sm text-[var(--muted)]">Ingen lagrede beslutninger.</p>}</section>
     <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Siste simulerte fills</h3>{card.fills.length ? <ol className="mt-3 space-y-3">{card.fills.map(item => <li key={item.fillId} className="rounded-lg border border-[var(--border)] p-3 text-sm"><p className="break-all font-mono text-xs">{item.fillId}</p><p className="mt-2">{item.side ?? "BUY"} · {item.instrumentId} · {item.quantityAtoms} atomiske enheter (skala {item.quantityScale})</p><p className="mt-1">Brutto {amount(item.grossMinor)} · gebyr {amount(item.feeMinor)}{item.realizedPnlMinor === undefined ? "" : ` · realisert resultat ${amount(item.realizedPnlMinor)}`}</p><p className="mt-1 text-xs text-[var(--muted)]">Simulert {dateLabel(item.simulatedAt)} · {item.executionPolicyVersion}</p></li>)}</ol> : <p className="mt-3 text-sm text-[var(--muted)]">Ingen simulerte fills.</p>}</section>
   </div>;
 }

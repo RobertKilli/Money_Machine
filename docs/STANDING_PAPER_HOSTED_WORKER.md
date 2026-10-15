@@ -64,3 +64,7 @@ it relies on the standing-paper and worker-heartbeat schema already present in
 the migration chain. A review of whether those migrations are deployed remains
 separate from code review. Merging this PR must not be treated as permission to
 start the hosted worker.
+
+## Stored cycle-v2 policy behavior
+
+The hosted entrypoint does not accept exit-policy arguments. It reads cycle-v2 and FIFO versions plus stop-loss, take-profit, and maximum holding time from the active policy JSON that was reviewed and explicitly activated by its owner. A v1 policy without cycle configuration remains BUY-only. No migration or automatic conversion is performed by this code. The hosted preflight validates the complete stored cycle configuration and verifies the cycle-v2 schema before creating a heartbeat. Missing schema or invalid configuration fails closed before heartbeat or settlement writes.
