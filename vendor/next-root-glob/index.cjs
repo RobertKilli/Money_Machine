@@ -5,7 +5,7 @@ const { globSync, isDynamicPattern } = require("tinyglobby");
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- Synchronous filesystem observation preserves directory-symlink results.
 const { readdirSync, statSync } = require("node:fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- The calling plugin is CommonJS.
-const { isAbsolute, relative, resolve } = require("node:path");
+const { dirname, isAbsolute, parse, relative, resolve } = require("node:path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- The calling plugin is CommonJS.
 const picomatch = require("picomatch");
 
@@ -18,9 +18,17 @@ module.exports = {
     if (pattern.startsWith("!") && !pattern.startsWith("!(")) return [];
     // fast-glob excludes the base directory of a terminal globstar.
     const search = pattern === "**" ? "**/*" : pattern.replace(/\/\*\*\/?$/, "/**/*");
+    const absolute = isAbsolute(search);
+    let cwd;
+    if (absolute) {
+      // Avoid crawling a common ancestor of the project and the target, which
+      // may be unlistable even when the target directory itself is readable.
+      const { base, isGlob } = picomatch.scan(search);
+      cwd = isGlob ? resolve(parse(search).root, base) : dirname(search);
+    }
     const links = new Set();
     const paths = globSync(search, {
-      onlyDirectories: true, expandDirectories: false, followSymbolicLinks: true, absolute: isAbsolute(pattern),
+      cwd, onlyDirectories: true, expandDirectories: false, followSymbolicLinks: true, absolute,
       fs: { readdirSync(directory, settings) {
         const entries = readdirSync(directory, settings);
         for (const entry of entries) {
@@ -37,7 +45,7 @@ module.exports = {
     // Add only matching aliases; keep its traversal and cycle handling intact.
     const matches = picomatch(search, { dot: false, posix: true });
     for (const link of links) {
-      let path = (isAbsolute(pattern) ? link : relative(process.cwd(), link)).replaceAll("\\", "/");
+      let path = (absolute ? link : relative(process.cwd(), link)).replaceAll("\\", "/");
       if (pattern.startsWith("./")) path = `./${path}`;
       if (matches(path) || matches(`${path}/`)) paths.push(path);
     }
