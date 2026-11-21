@@ -7,7 +7,7 @@ import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, stan
 import { assertValidStandingPaperCycleConfiguration } from "@/domain/risk/standing-paper-exit-policy";
 import { FIXTURE_ASSETS, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import type { ContributionEvent } from "@/application/backtest/run-deterministic-backtest";
-import { planFifoLotConsumption } from "@/domain/portfolio/portfolio-projection";
+import { consumeFifoLots, type FifoLotConsumption } from "@/domain/portfolio/portfolio-projection";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill, type StandingPaperWorkerInstanceStatus, type StandingPaperWorkerInstanceStatusRecord } from "@/application/paper-trading/standing-paper-status";
 
 type StoredPolicy = { policy_json: unknown; status: StandingPaperPolicy["status"]; financial_account_id: string };
@@ -635,13 +635,18 @@ export class StandingPaperPolicyRepository {
     }
     if (state.disposals !== undefined) {
       const lots = [...state.acquisitions].sort((a,b) => a.executedAt.getTime()-b.executedAt.getTime() || a.fillId.localeCompare(b.fillId)).map(item => ({
-        lotId: item.fillId, fillId: item.fillId, executionId: item.executionId, ledgerTransactionId: item.ledgerTransactionId,
-        acquiredAt: item.executedAt.toISOString(), quantityAtoms: item.quantityAtoms.toString(), remainingQuantityAtoms: item.quantityAtoms.toString(),
-        executedNotionalMinor: item.grossMinor.toString(), allocatedBuyFeeMinor: item.feeMinor.toString(), openCostBasisMinor: (item.grossMinor + item.feeMinor).toString(), fifoVersion: "fifo-cost-basis/v2" as const,
+        fillId: item.fillId, assetId: item.assetId, executedAt: item.executedAt, recordedAt: item.recordedAt,
+        remainingQuantityAtoms: item.quantityAtoms, openCostBasisMinor: item.grossMinor + item.feeMinor,
       }));
       for (const disposal of [...state.disposals].sort((a,b) => a.executedAt.getTime()-b.executedAt.getTime() || a.fillId.localeCompare(b.fillId))) {
-        const assetLots = lots.filter(lot => state.acquisitions.find(acquisition => acquisition.fillId === lot.fillId)?.assetId === disposal.assetId);
-        const planned = planFifoLotConsumption(assetLots, disposal.quantityAtoms);
+        // Cycle evaluation settles exits before any BUY at the same timestamp.
+        const assetLots = lots.filter(lot => lot.assetId === disposal.assetId && lot.executedAt < disposal.executedAt && lot.recordedAt <= disposal.executedAt);
+        let planned: FifoLotConsumption[];
+        try {
+          planned = consumeFifoLots(assetLots, disposal.quantityAtoms);
+        } catch (error) {
+          throw new Error("PAPER_FIFO_CHECKPOINT_MISMATCH", { cause: error });
+        }
         if (sha256(planned) !== sha256(disposal.lotConsumptions)) throw new Error("PAPER_FIFO_CHECKPOINT_MISMATCH");
         const basis = planned.reduce((sum,item) => sum + item.costBasisMinor, 0n);
         if (disposal.realizedPnlMinor !== disposal.grossMinor - disposal.feeMinor - basis) throw new Error("PAPER_REALIZED_RESULT_CHECKPOINT_MISMATCH");

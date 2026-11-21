@@ -6,7 +6,7 @@ import { planFifoLotConsumption, projectPortfolio, type AcquisitionEvidence, typ
 import { assessProposal } from "@/domain/risk/m1-risk";
 import { assessStandingPaperPolicy, type PaperPolicyEvidence, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { basisPoints } from "@/domain/financial/basis-points";
-import { feeCeiling, buyExecutionPrice, buySettlementNotional } from "@/domain/financial/rounding";
+import { feeCeiling, floorDivision, buyExecutionPrice, buySettlementNotional } from "@/domain/financial/rounding";
 import { CONTRIBUTION_REBALANCING_VERSION, FIXTURE_ASSETS, FIXTURE_ASSET_REGISTRY_VERSION, FIXTURE_DATASET_VERSION, latestAvailablePrice, contributionRebalancing, type FixturePriceObservation, type DecisionPortfolioState, type StrategyDecision } from "@/domain/strategy/fixture-assets";
 import { evaluateStandingPaperExit, PAPER_CYCLE_CONTRACT_VERSION, type PaperExitReasonCode, type StandingPaperExitPolicy, assertValidStandingPaperExitPolicy } from "@/domain/risk/standing-paper-exit-policy";
 import { sellExecutionPrice, sellSettlementProceeds } from "@/domain/financial/rounding";
@@ -263,15 +263,26 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
           const executionPrice = buyExecutionPrice(reference.price, basisPoints(5n), basisPoints(5n));
           const notional = buySettlementNotional(order.quantity, executionPrice);
           const estimatedFee = feeCeiling(notional, basisPoints(10n), money("NOK", 100n));
-          const holdingValue = live.projection.holdings.find(item => item.assetId === asset.assetId)?.marketValueMinor;
+          const holding = live.projection.holdings.find(item => item.assetId === asset.assetId);
+          const holdingValue = BigInt(holding?.marketValueMinor ?? "0");
           const grossExposure = live.projection.holdings.reduce((sum, item) => sum + BigInt(item.marketValueMinor ?? "0"), 0n);
+          const debit = notional.minorUnits + estimatedFee.minorUnits;
+          const adjustedEquity = live.state.decisionNavMinor - netContributionsMinor;
+          const lossAt = (equity: bigint) => adjustedEquityHighWaterMinor > equity ? adjustedEquityHighWaterMinor - equity : 0n;
+          // Value the combined holding with one FLOOR, as in the ledger projection.
+          const projectedMark = cycleMode ? floorDivision(
+            (BigInt(holding?.quantityAtoms ?? "0") + order.quantity.atomicUnits) * reference.price.priceAtoms,
+            10n ** BigInt(asset.quantityScale + reference.price.priceScale),
+          ) : holdingValue;
           policyEvidence = assessStandingPaperPolicy(config.standingPaperPolicy, order, {
             now: event.at, assets: FIXTURE_ASSETS, prices, openOrderReservationsMinor: [], committedCapitalMinor,
-            ...(cycleMode ? { capitalBudgetUsageMinor: netContributionsMinor, capitalBudgetProspectiveDebitMinor: 0n } : {}),
-            currentCashMinor: live.state.cashMinor, currentPositionMinor: BigInt(holdingValue ?? "0"),
+            ...(cycleMode ? {
+              capitalBudgetUsageMinor: netContributionsMinor, capitalBudgetProspectiveDebitMinor: 0n,
+              projectedLossMinor: lossAt(adjustedEquity - debit + projectedMark - holdingValue),
+            } : {}),
+            currentCashMinor: live.state.cashMinor, currentPositionMinor: holdingValue,
             currentGrossExposureMinor: grossExposure,
-            currentLossMinor: adjustedEquityHighWaterMinor > BigInt(live.projection.nav) - netContributionsMinor ? adjustedEquityHighWaterMinor - (BigInt(live.projection.nav) - netContributionsMinor) : 0n,
-            prospectiveOrderDebitMinor: notional.minorUnits + estimatedFee.minorUnits,
+            currentLossMinor: lossAt(adjustedEquity), prospectiveOrderDebitMinor: debit,
           });
         }
         const cycleBuyInputHash = cycleMode && policyEvidence ? hash(canonical({

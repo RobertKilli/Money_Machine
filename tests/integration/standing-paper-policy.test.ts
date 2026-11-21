@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import postgres, { type Sql, type TransactionSql } from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { BacktestResult, BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
 import { price } from "@/domain/financial/price";
 import { standingPaperActivationConfirmationHash, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
@@ -62,7 +62,7 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
   function ownedDraft(financialAccountId: string, label = "owner-created"): StandingPaperPolicy {
     return { policyId: `paper-${label}-${randomUUID()}`, version: "standing-paper-policy/v1", identity: `synthetic-${label}`, mode: "PAPER_ONLY", status: "DRAFT", financialAccountId, allowedInstrumentIds: FIXTURE_ASSETS.map(asset => asset.assetId), capitalBudgetMinor: 500_000n, maxOrderMinor: 50_000n, maxPositionMinor: 100_000n, maxGrossExposureMinor: 200_000n, maxLossMinor: 25_000n, maxPriceAgeMs: 3_600_000 };
   }
-  async function setup(label: string, capitalBudgetMinor = 1_000_000n, maxLossMinor = 1_000_000n) {
+  async function setup(label: string, capitalBudgetMinor = 1_000_000n, maxLossMinor = 1_000_000n, limits: Partial<Pick<StandingPaperPolicy, "allowedInstrumentIds" | "maxOrderMinor" | "maxPriceAgeMs">> = {}) {
     const financialAccountId = await account();
     const policy: StandingPaperPolicy = {
       policyId: `persistent-${label}-${randomUUID()}`, version: "standing-paper-policy/v1", identity: `synthetic-${label}`,
@@ -73,6 +73,7 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
         contractVersion: PAPER_CYCLE_CONTRACT_VERSION, fifoCostBasisVersion: PAPER_CYCLE_FIFO_COST_BASIS_VERSION,
         exitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1000 },
       } } : {}),
+      ...limits,
     };
     const repository = new StandingPaperPolicyRepository(testUrl!); repositories.push(repository);
     await repository.create(policy);
@@ -772,6 +773,70 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(ownedStatus.policies[0]?.fills.some(item => item.side === "SELL")).toBe(true);
     expect(BigInt(ownedStatus.policies[0]!.currentLossMinor!)).toBeGreaterThan(0n);
     expect(BigInt(ownedStatus.policies[0]!.remainingLossMarginMinor!)).toBeLessThan(f.policy.maxLossMinor);
+  });
+
+  it.each([
+    { maxLoss: 2_000n, expectedFills: [["BUY"], ["SELL"], []], cash: "4646", realized: -2_000n },
+    { maxLoss: 20_000n, expectedFills: [["BUY"], ["SELL", "BUY"], ["SELL", "BUY"]], cash: "3091", realized: 299n },
+  ])("reconciles three worker rounds with loss cap $maxLoss across restart and replay", async ({ maxLoss, expectedFills, cash, realized }) => {
+    const global = FIXTURE_ASSETS[0]!.assetId;
+    const f = await setup("cycle-worker-v2", 20_000n, maxLoss, {
+      allowedInstrumentIds: [global], maxOrderMinor: 10_000n, maxPriceAgeMs: 3_600_000,
+    });
+    const initialCapitalMinor = 6_646n;
+    const run = vi.spyOn(f.repository, "run");
+    const rounds: BacktestResult[] = [];
+    const worker = new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: "fifo-checkpoint", expectedAccountId: f.policy.financialAccountId,
+      expectedOwnerId: f.ownerId, policyScopedRoundOrdinal: true, initialCapitalMinor, maxRounds: 3,
+      waitForRoundInterval: async () => undefined, onRound: (_key, result) => rounds.push(result),
+    });
+    await expect(worker.run()).resolves.toMatchObject({ status: "COMPLETED", roundsCompleted: 3 });
+    expect(rounds.map(round => round.executions.map(fill => "side" in fill ? fill.side : "BUY"))).toEqual(expectedFills);
+    expect(rounds.map(round => round.config.contributionEvents.length)).toEqual([1, 0, 0]);
+    expect(rounds[0]!.executions[0]).toMatchObject({ grossNotional: { minorUnits: 3_592n }, fee: { minorUnits: 100n }, totalCashDebit: { minorUnits: 3_692n } });
+    expect(rounds[1]!.executions[0]).toMatchObject({ grossNotional: { minorUnits: 1_792n }, fee: { minorUnits: 100n }, netCashCredit: { minorUnits: 1_692n } });
+    expect(rounds[1]!.paperCycleDecisions?.[0]?.reasonCode).toBe("SELL_STOP_LOSS");
+    expect(rounds[1]!.persistentState.realizedPnlMinor).toBe(-2_000n);
+    for (const round of rounds) {
+      expect(round.paperPolicyDecisions.slice(-2).map(item => item.evidence.reasonCode)).toEqual(["INSTRUMENT_NOT_ALLOWED", "INSTRUMENT_NOT_ALLOWED"]);
+    }
+    const constrained = maxLoss === 2_000n;
+    for (const round of rounds.slice(1, constrained ? 3 : 2)) {
+      expect(round.paperPolicyDecisions[0]!.evidence).toMatchObject({
+        currentLossMinor: "2000", projectedLossMinor: "2103", reasonCode: constrained ? "LOSS_LIMIT_EXCEEDED" : "APPROVED",
+      });
+    }
+    const final = rounds[2]!;
+    expect(final.endingState.cash).toBe(cash);
+    expect(final.persistentState.realizedPnlMinor).toBe(realized);
+    if (!constrained) {
+      const [firstBuy, secondBuy, thirdBuy] = final.persistentState.acquisitions;
+      expect(final.persistentState.disposals?.map(sale => sale.lotConsumptions)).toEqual([firstBuy, secondBuy].map(buy => [{
+        fillId: buy!.fillId, quantityAtoms: buy!.quantityAtoms, costBasisMinor: buy!.grossMinor + buy!.feeMinor,
+      }]));
+      expect(final.endingState.holdings[0]?.lots.map(lot => lot.fillId)).toEqual([thirdBuy!.fillId]);
+    }
+    const beforeReplay = await counts(f.policy.financialAccountId);
+    expect(beforeReplay).toMatchObject({ runs: "3", contributions: "1", fills: constrained ? "2" : "5", journals: constrained ? "3" : "6" });
+    const restarted = new StandingPaperPolicyRepository(testUrl!);
+    repositories.push(restarted);
+    await expect(restarted.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, initialCapitalMinor)).resolves.toMatchObject({ ownerId: f.ownerId });
+    await expect(restarted.getNextPolicyWorkerRound(f.policy.policyId)).resolves.toBe(3);
+    for (const [index, args] of run.mock.calls.entries()) {
+      await expect(restarted.run(...args)).resolves.toEqual(rounds[index]);
+    }
+    expect(await counts(f.policy.financialAccountId)).toEqual(beforeReplay);
+    if (constrained) return;
+
+    const secondSale = final.persistentState.disposals![1]!;
+    const firstBuy = final.persistentState.acquisitions[0]!;
+    await sql.begin(async tx => {
+      await tx`set local session_replication_role = replica`;
+      await tx`update public.standing_paper_fills set disposal_json=jsonb_set(disposal_json, '{lotConsumptions,0,fillId}', to_jsonb(${firstBuy.fillId}::text)) where policy_id=${f.policy.policyId} and fill_id=${secondSale.fillId}`;
+      await tx`update public.standing_paper_policies set state_json=jsonb_set(state_json, '{disposals,1,lotConsumptions,0,fillId}', to_jsonb(${firstBuy.fillId}::text)) where policy_id=${f.policy.policyId}`;
+    });
+    await expect(restarted.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, initialCapitalMinor)).rejects.toThrow("PAPER_FIFO_CHECKPOINT_MISMATCH");
   });
 
   it("serializes concurrent hosted processes to one policy-scoped initial contribution", async () => {

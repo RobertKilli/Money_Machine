@@ -41,6 +41,12 @@ For v2, the policy's `capitalBudgetMinor` caps cumulative net virtual
 contributions. A sale does not increase that budget or reset the loss margin.
 New BUY orders still require settled available cash after fees and must satisfy
 `maxOrderMinor`, `maxPositionMinor`, `maxGrossExposureMinor`, and `maxLossMinor`.
+The BUY loss check evaluates both current drawdown and projected drawdown
+immediately after the fill. Projected NAV subtracts the rounded BUY debit,
+including fee, spread, and slippage, and adds the change in the aggregate
+holding's rounded value at the eligible mid price. Either drawdown exceeding
+`maxLossMinor` rejects the BUY. Equality is allowed. Exits remain eligible
+under their own rules. BUY-only v1 policies retain their existing loss check.
 Open position exposure is valued at the latest eligible synthetic fixture mark.
 No order can create a short position; a SELL quantity is bounded by the
 currently held quantity and the policy's per-order limit.

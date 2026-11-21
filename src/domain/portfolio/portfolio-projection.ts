@@ -73,7 +73,8 @@ const signed = (e: PortfolioLedgerEvidence) => e.direction === "DEBIT" ? e.amoun
 const unique = (values: readonly string[]) => [...new Set(values)].sort();
 const eligible = (effective: Date, recorded: Date, asOf: Date) => effective <= asOf && recorded <= asOf;
 
-function expectedFifoConsumptions(lots: { fillId: string; remainingQuantityAtoms: bigint; openCostBasisMinor: bigint }[], quantityAtoms: bigint): FifoLotConsumption[] {
+/** Consume ordered FIFO lots in place, preserving exact residual basis. */
+export function consumeFifoLots(lots: readonly { fillId: string; remainingQuantityAtoms: bigint; openCostBasisMinor: bigint }[], quantityAtoms: bigint): FifoLotConsumption[] {
   if (quantityAtoms <= 0n) throw new Error("INVALID_FIFO_DISPOSAL_QUANTITY");
   let remaining = quantityAtoms;
   const consumed: FifoLotConsumption[] = [];
@@ -94,7 +95,7 @@ function expectedFifoConsumptions(lots: { fillId: string; remainingQuantityAtoms
 /** Allocate a sale across the currently open FIFO lots. Integer FLOOR is used
  * for partial-lot basis; the final unit of a lot consumes its exact remainder. */
 export function planFifoLotConsumption(lots: readonly OpenCostBasisLot[], quantityAtoms: bigint): FifoLotConsumption[] {
-  return expectedFifoConsumptions(lots.map(lot => ({ fillId: lot.fillId, remainingQuantityAtoms: BigInt(lot.remainingQuantityAtoms), openCostBasisMinor: BigInt(lot.openCostBasisMinor) })), quantityAtoms);
+  return consumeFifoLots(lots.map(lot => ({ fillId: lot.fillId, remainingQuantityAtoms: BigInt(lot.remainingQuantityAtoms), openCostBasisMinor: BigInt(lot.openCostBasisMinor) })), quantityAtoms);
 }
 
 /** Pure, reconstructable read model. No state, clock reads, randomness, writes or lot consumption. */
@@ -154,7 +155,7 @@ export function projectPortfolio(source: PortfolioEvidence, asOf: Date): Portfol
       executedNotionalMinor: f.grossMinor, allocatedBuyFeeMinor: f.feeMinor, openCostBasisMinor: f.grossMinor + f.feeMinor,
     }));
     for (const disposal of assetDisposals) {
-      const planned = expectedFifoConsumptions(mutableLots, disposal.quantityAtoms);
+      const planned = consumeFifoLots(mutableLots, disposal.quantityAtoms);
       if (planned.length !== disposal.lotConsumptions.length || planned.some((item, index) => item.fillId !== disposal.lotConsumptions[index]?.fillId || item.quantityAtoms !== disposal.lotConsumptions[index]?.quantityAtoms || item.costBasisMinor !== disposal.lotConsumptions[index]?.costBasisMinor)) {
         violations.push("SETTLEMENT_EVIDENCE_MISMATCH");
       }
