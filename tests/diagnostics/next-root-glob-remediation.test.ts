@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -37,13 +37,21 @@ describe("Next lint glob security remediation", () => {
     try {
       for (const path of ["apps/web/src/app/dashboard", "apps/admin/pages", "apps/mobile", "apps/.hidden", "packages/lib", "docs"]) mkdirSync(join(base, path), { recursive: true });
       writeFileSync(join(base, "apps/file.txt"), "not a directory");
-      symlinkSync(join(base, "apps/web"), join(base, "apps/linked"), process.platform === "win32" ? "junction" : "dir");
+      const web = join(base, "apps/web");
+      const linked = join(base, "apps/linked");
+      symlinkSync(web, linked, process.platform === "win32" ? "junction" : "dir");
+      expect(lstatSync(web).isDirectory()).toBe(true);
+      expect(lstatSync(linked).isSymbolicLink()).toBe(true);
+      expect(realpathSync(linked)).toBe(realpathSync(web));
       for (const test of globBefore) {
         const negative = test.pattern.startsWith("!");
         const pattern = (negative ? "!" : "") + base.replaceAll("\\", "/") + "/" + test.pattern.replace(/^!/, "");
         const found = getRootDirs({ cwd: base, settings: { next: { rootDir: pattern } } });
-        expect(found.map(path => relative(base, path).replaceAll("\\", "/")).sort(), test.pattern).toEqual(test.expected.map(path => path.replace(/^\.\//, "").replace(/\/$/, "")).sort());
+        expect(found.map(path => relative(base, path).replaceAll("\\", "/")).sort(), pattern).toEqual(test.expected.map(path => path.replace(/^\.\//, "").replace(/\/$/, "")).sort());
       }
+      const linkedRoot = linked.replaceAll("\\", "/");
+      expect(getRootDirs({ cwd: base, settings: { next: { rootDir: linked } } })).toEqual([linkedRoot]);
+      expect(getRootDirs({ cwd: base, settings: { next: { rootDir: `${linkedRoot}/src/*` } } })).toEqual([`${linkedRoot}/src/app`]);
       const roots = getRootDirs({ cwd: base, settings: { next: { rootDir: [join(base, "apps/web"), join(base, "apps/admin")] } } });
       // Next normalizes rootDir input to POSIX separators before fast-glob;
       // fast-glob therefore returns slash-normalized absolute paths on Windows too.

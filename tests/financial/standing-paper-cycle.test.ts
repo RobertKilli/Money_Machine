@@ -5,7 +5,7 @@ import { executeSimulationSell } from "@/domain/execution/simulation-execution";
 import { price } from "@/domain/financial/price";
 import { basisPoints } from "@/domain/financial/basis-points";
 import { sellExecutionPrice } from "@/domain/financial/rounding";
-import { planFifoLotConsumption, type OpenCostBasisLot } from "@/domain/portfolio/portfolio-projection";
+import { consumeFifoLots, planFifoLotConsumption, type OpenCostBasisLot } from "@/domain/portfolio/portfolio-projection";
 import { evaluateStandingPaperExit, PAPER_CYCLE_CONTRACT_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
 import { transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
@@ -89,6 +89,26 @@ describe("standing paper cycle v2", () => {
     const executionPrice = sellExecutionPrice(price("NOK", 2n, 0), basisPoints(0n), basisPoints(0n));
     expect(quantityWithinSellOrderLimit({ assetId: asset.assetId, availableAtoms: 100n, quantityScale: 0, incrementAtoms: 1n, executionPrice, maxOrderMinor: 260n })).toBe(80n);
     expect(quantityWithinSellOrderLimit({ assetId: asset.assetId, availableAtoms: 100n, quantityScale: 0, incrementAtoms: 1n, executionPrice, maxOrderMinor: 200n })).toBe(0n);
+  });
+
+  it("preserves the rounding remainder across partial sales until a lot is closed", () => {
+    const lot = { fillId: "oldest", remainingQuantityAtoms: 6n, openCostBasisMinor: 101n };
+    for (const [quantityAtoms, costBasisMinor] of [[1n, 16n], [2n, 34n], [3n, 51n]]) {
+      expect(consumeFifoLots([lot], quantityAtoms!)).toEqual([{ fillId: lot.fillId, quantityAtoms, costBasisMinor }]);
+    }
+    expect(lot).toMatchObject({ remainingQuantityAtoms: 0n, openCostBasisMinor: 0n });
+    expect(() => consumeFifoLots([lot], 1n)).toThrow("FIFO_DISPOSAL_EXCEEDS_AVAILABLE_POSITION");
+  });
+
+  it("consumes the oldest remainder and part of the next lot in one sale", () => {
+    const oldest = { fillId: "oldest", remainingQuantityAtoms: 3n, openCostBasisMinor: 51n };
+    const newer = { fillId: "newer", remainingQuantityAtoms: 7n, openCostBasisMinor: 100n };
+    expect(consumeFifoLots([oldest, newer], 5n)).toEqual([
+      { fillId: "oldest", quantityAtoms: 3n, costBasisMinor: 51n },
+      { fillId: "newer", quantityAtoms: 2n, costBasisMinor: 28n },
+    ]);
+    expect(oldest).toMatchObject({ remainingQuantityAtoms: 0n, openCostBasisMinor: 0n });
+    expect(newer).toMatchObject({ remainingQuantityAtoms: 5n, openCostBasisMinor: 72n });
   });
 
   it("fails closed on missing or stale cycle prices and requires a one-time seed for workers", () => {

@@ -46,6 +46,7 @@ export interface PaperPolicyEvidence {
   readonly reservedOpenOrdersMinor: string;
   readonly resultingExposureMinor: string;
   readonly currentLossMinor: string;
+  readonly projectedLossMinor?: string;
   readonly maxLossMinor: string;
   readonly reasonCode: PaperDecisionCode;
   readonly disposition: "APPROVE" | "REJECT";
@@ -64,6 +65,7 @@ export interface PaperPolicyContext {
   readonly currentPositionMinor: bigint;
   readonly currentGrossExposureMinor: bigint;
   readonly currentLossMinor: bigint;
+  readonly projectedLossMinor?: bigint;
   readonly prospectiveOrderDebitMinor: bigint;
 }
 
@@ -131,7 +133,8 @@ export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: Pr
   assertValidPaperPolicy(policy);
   if (!Number.isFinite(context.now.getTime()) || context.openOrderReservationsMinor.some((value) => value < 0n) || context.committedCapitalMinor < 0n ||
     (context.capitalBudgetUsageMinor !== undefined && context.capitalBudgetUsageMinor < 0n) || (context.capitalBudgetProspectiveDebitMinor !== undefined && context.capitalBudgetProspectiveDebitMinor < 0n) ||
-    context.currentCashMinor < 0n || context.currentPositionMinor < 0n || context.currentGrossExposureMinor < 0n || context.currentLossMinor < 0n || context.prospectiveOrderDebitMinor <= 0n) throw new Error("PAPER_POLICY_CONTEXT_INVALID");
+    context.currentCashMinor < 0n || context.currentPositionMinor < 0n || context.currentGrossExposureMinor < 0n || context.currentLossMinor < 0n ||
+    (context.projectedLossMinor !== undefined && context.projectedLossMinor < 0n) || context.prospectiveOrderDebitMinor <= 0n) throw new Error("PAPER_POLICY_CONTEXT_INVALID");
   const price = context.prices.find((item) => item.recordId === order.referencePriceRecordId && item.assetId === order.assetId);
   const reserved = context.openOrderReservationsMinor.reduce((sum, value) => sum + value, 0n);
   const exposure = context.currentGrossExposureMinor + reserved + context.prospectiveOrderDebitMinor;
@@ -162,6 +165,7 @@ export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: Pr
     now: context.now.toISOString(), committed: context.committedCapitalMinor.toString(),
     ...(context.capitalBudgetUsageMinor === undefined ? {} : { capitalBudgetUsage: context.capitalBudgetUsageMinor.toString() }),
     ...(context.capitalBudgetProspectiveDebitMinor === undefined ? {} : { capitalBudgetProspectiveDebit: context.capitalBudgetProspectiveDebitMinor.toString() }),
+    ...(context.projectedLossMinor === undefined ? {} : { projectedLoss: context.projectedLossMinor.toString() }),
     cash: context.currentCashMinor.toString(), position: context.currentPositionMinor.toString(), exposure: context.currentGrossExposureMinor.toString(),
     reservations: context.openOrderReservationsMinor.map(String), loss: context.currentLossMinor.toString(), debit: context.prospectiveOrderDebitMinor.toString(),
   }, (_, value) => typeof value === "bigint" ? value.toString() : value)).digest("hex");
@@ -174,13 +178,14 @@ export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: Pr
   else if (context.currentPositionMinor + context.prospectiveOrderDebitMinor > policy.maxPositionMinor) reasonCode = "POSITION_LIMIT_EXCEEDED";
   else if (exposure > policy.maxGrossExposureMinor) reasonCode = "EXPOSURE_LIMIT_EXCEEDED";
   else if ((context.capitalBudgetUsageMinor ?? context.committedCapitalMinor) + reserved + (context.capitalBudgetProspectiveDebitMinor ?? context.prospectiveOrderDebitMinor) > policy.capitalBudgetMinor || context.currentCashMinor < reserved + context.prospectiveOrderDebitMinor) reasonCode = "CAPITAL_BUDGET_EXCEEDED";
-  else if (context.currentLossMinor > policy.maxLossMinor) reasonCode = "LOSS_LIMIT_EXCEEDED";
+  else if (context.currentLossMinor > policy.maxLossMinor || (context.projectedLossMinor ?? 0n) > policy.maxLossMinor) reasonCode = "LOSS_LIMIT_EXCEEDED";
   return Object.freeze({ policyId: policy.policyId, policyVersion: policy.version, inputHash: digest,
     priceRecordId: price?.recordId ?? null, priceAvailableAt: price?.availableAt.toISOString() ?? null,
     referencePriceAtoms: price?.price.priceAtoms.toString() ?? null, referencePriceScale: price?.price.priceScale ?? null,
     datasetVersion: price?.datasetVersion ?? null, strategyVersion: order.strategyVersion, assetRegistryVersion: order.registryVersion,
     executionPolicyVersions: Object.freeze({ execution: SIMULATION_EXECUTION_POLICY_VERSION, spreadSlippage: SPREAD_SLIPPAGE_POLICY_VERSION, fee: FEE_POLICY_VERSION, rounding: M1_ROUNDING_POLICY_VERSION, fillAssumption: "SIMULATED_FULL_OR_NONE" }),
     reservedOpenOrdersMinor: reserved.toString(), resultingExposureMinor: exposure.toString(),
+    ...(context.projectedLossMinor === undefined ? {} : { projectedLossMinor: context.projectedLossMinor.toString() }),
     currentLossMinor: context.currentLossMinor.toString(), maxLossMinor: policy.maxLossMinor.toString(), reasonCode,
     disposition: reasonCode === "APPROVED" ? "APPROVE" : "REJECT" });
 }
