@@ -70,13 +70,23 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
   if (analytics !== null && (!isRecord(analytics) || !isNonnegativeAmount(analytics.cashMinor) ||
     !isNonnegativeAmount(analytics.feesMinor) || !isAmount(analytics.realizedPnlMinor) ||
     !(analytics.openCostBasisMinor === null || isNonnegativeAmount(analytics.openCostBasisMinor)) ||
-    (value.status === "AVAILABLE" ? !isNonnegativeAmount(analytics.exposureMinor) || !isAmount(analytics.unrealizedPnlMinor) :
-      analytics.exposureMinor !== null || analytics.unrealizedPnlMinor !== null))) return false;
-  if ((value.status === "AVAILABLE" && analytics === null) || (value.status === "NO_ROUNDS" && analytics !== null)) return false;
+    (value.status !== "AVAILABLE" && (analytics.exposureMinor !== null || analytics.unrealizedPnlMinor !== null)))) return false;
+  if (value.status === "NO_ROUNDS" && analytics !== null) return false;
   if (value.status === "NO_ROUNDS") return value.lastRound === null && noSavedValuation && value.decisions.length === 0 && value.fills.length === 0 && value.issueCode === null;
   if (value.lastRound === null) return false;
-  if (value.status === "AVAILABLE" && (!isNonnegativeAmount(value.portfolioValueMinor) || !isDate(value.portfolioValueAsOf) || value.portfolioValueAsOf !== value.lastRound.asOf ||
-    !isNonnegativeAmount(value.currentLossMinor) || !isNonnegativeAmount(value.remainingLossMarginMinor) || value.issueCode !== null)) return false;
+  if (value.status === "AVAILABLE") {
+    if (!isNonnegativeAmount(value.portfolioValueMinor) || !isDate(value.portfolioValueAsOf) || value.portfolioValueAsOf !== value.lastRound.asOf ||
+      !isNonnegativeAmount(value.currentLossMinor) || !isNonnegativeAmount(value.remainingLossMarginMinor) || value.issueCode !== null ||
+      !isRecord(analytics) || !isNonnegativeAmount(analytics.cashMinor) || !isNonnegativeAmount(analytics.exposureMinor) ||
+      !isNonnegativeAmount(analytics.openCostBasisMinor) || !isAmount(analytics.unrealizedPnlMinor) || !isAmount(analytics.realizedPnlMinor)) return false;
+    const exposure = BigInt(analytics.exposureMinor);
+    if (BigInt(analytics.cashMinor) + exposure !== BigInt(value.portfolioValueMinor) ||
+      exposure - BigInt(analytics.openCostBasisMinor) !== BigInt(analytics.unrealizedPnlMinor)) return false;
+    // v1 checkpoints are BUY-only and omit the top-level realized result.
+    if (value.cycleConfiguration === null
+      ? value.realizedPnlMinor !== null || BigInt(analytics.realizedPnlMinor) !== 0n
+      : !isAmount(value.realizedPnlMinor) || BigInt(analytics.realizedPnlMinor) !== BigInt(value.realizedPnlMinor)) return false;
+  }
   if (value.status === "INCOMPLETE" && (!noValuationAmounts || !isDate(value.portfolioValueAsOf) || value.portfolioValueAsOf !== value.lastRound.asOf || value.issueCode !== "PAPER_VALUATION_INCOMPLETE")) return false;
   const decisionCodes = ["POLICY_NOT_ACTIVE", "PRICE_MISSING", "PRICE_STALE", "INSTRUMENT_NOT_ALLOWED", "ORDER_LIMIT_EXCEEDED", "POSITION_LIMIT_EXCEEDED", "EXPOSURE_LIMIT_EXCEEDED", "CAPITAL_BUDGET_EXCEEDED", "LOSS_LIMIT_EXCEEDED", "M1_RISK_REJECTED", "APPROVED", "BUY_FILLED", "BUY_RISK_REJECTED", "SELL_STOP_LOSS", "SELL_TAKE_PROFIT", "SELL_MAX_HOLD", "SELL_ORDER_LIMIT_REJECTED", "HOLD_NO_EXIT_TRIGGER"];
   const decisionsValid = value.decisions.every(item => isRecord(item) && isText(item.orderId) && isText(item.decisionId) &&

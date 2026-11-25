@@ -65,6 +65,26 @@ const incompleteModel = projectStandingPaperStatusReadModel([incompleteCard]);
 const response = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("standing paper status view", () => {
+  it.each([
+    ["v1", model], ["v2", cycleModel],
+  ] as const)("rejects contradictory analytics in an otherwise valid %s response", async (_version, projected) => {
+    const card = projected.policies[0]!;
+    const analytics = card.analytics!;
+    expect(await loadStandingPaperStatus(async () => response(200, projected))).toEqual({ kind: "DATA", model: projected });
+    for (const field of ["cashMinor", "exposureMinor", "openCostBasisMinor", "unrealizedPnlMinor", "realizedPnlMinor"] as const) {
+      for (const invalid of [(BigInt(analytics[field]!) + 1n).toString(), null, undefined]) {
+        const payload = { ...projected, policies: [{ ...card, analytics: { ...analytics, [field]: invalid } }] };
+        expect(await loadStandingPaperStatus(async () => response(200, payload)), field).toEqual({ kind: "READ_ERROR" });
+      }
+    }
+  });
+
+  it("rejects a v2 response whose top-level realized result differs from analytics", async () => {
+    const card = cycleModel.policies[0]!;
+    const payload = { ...cycleModel, policies: [{ ...card, realizedPnlMinor: (BigInt(card.realizedPnlMinor!) + 1n).toString() }] };
+    expect(await loadStandingPaperStatus(async () => response(200, payload))).toEqual({ kind: "READ_ERROR" });
+  });
+
   it("projects v1 cash and fees and withholds incomplete market values", () => {
     expect(projectedCard.analytics).toEqual({
       cashMinor: testResult.endingState.cash,
