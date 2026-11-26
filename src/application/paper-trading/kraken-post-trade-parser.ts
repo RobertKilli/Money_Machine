@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 export const KRAKEN_POST_TRADE_PARSER_VERSION = "kraken-post-trade-parser/v1" as const;
-const MAX_RESPONSE_CHARS = 1_048_576;
+export const KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS = 1_048_576;
 const MAX_TRADES = 1_000;
 const NANOSECONDS_PER_SECOND = 1_000_000_000n;
 const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
@@ -177,7 +177,7 @@ export function parseKrakenPostTradeResponse(input: {
     return invalid("INPUT_INVALID");
   }
   const rawResponse = input.rawResponse;
-  if (rawResponse.length > MAX_RESPONSE_CHARS) return invalid("PAYLOAD_TOO_LARGE");
+  if (rawResponse.length > KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS) return invalid("PAYLOAD_TOO_LARGE");
   let payload: unknown;
   try { payload = JSON.parse(rawResponse); } catch { return invalid("JSON_INVALID", rawResponse); }
   const retrievalTime = parseTimestamp(input.retrievedAt);

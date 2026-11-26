@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { canonicalSha256 } from "@/domain/intelligence/ingestion-provenance";
-import { parseKrakenPostTradeResponse } from "@/application/paper-trading/kraken-post-trade-parser";
+import { KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS, parseKrakenPostTradeResponse } from "@/application/paper-trading/kraken-post-trade-parser";
 import {
   createKrakenPostTradeEvidencePackage,
   readKrakenPostTradeEvidencePackage,
@@ -60,6 +60,37 @@ describe("offline external PAPER price evidence package", () => {
     expect(serializeKrakenPostTradeEvidencePackage(replay.evidence)).toBe(serialized);
   });
 
+  it("returns a reconstructed frozen package from direct verification with no caller-input references", () => {
+    const created = make();
+    if (created.status !== "VALID") throw new Error(created.reason);
+    const callerInput = structuredClone(created.evidence) as unknown as {
+      instrument: { venueProductId: string };
+      source: { providerId: string };
+      selectedTrade: { price: { original: string }; timestamps: { availableAtOriginal: string } };
+    } & Record<string, unknown>;
+    const verified = verifyKrakenPostTradeEvidencePackage(callerInput, created.evidence.fingerprint);
+    expect(verified.status).toBe("VALID");
+    if (verified.status !== "VALID") throw new Error(verified.reason);
+    expect(verified.evidence).not.toBe(callerInput);
+    expect(Object.isFrozen(verified.evidence)).toBe(true);
+    expect(Object.isFrozen(verified.evidence.instrument)).toBe(true);
+    expect(Object.isFrozen(verified.evidence.source)).toBe(true);
+    expect(Object.isFrozen(verified.evidence.parser)).toBe(true);
+    expect(Object.isFrozen(verified.evidence.selectedTrade)).toBe(true);
+    expect(Object.isFrozen(verified.evidence.selectedTrade.price)).toBe(true);
+    expect(Object.isFrozen(verified.evidence.selectedTrade.quantity)).toBe(true);
+    expect(Object.isFrozen(verified.evidence.selectedTrade.timestamps)).toBe(true);
+
+    callerInput.instrument.venueProductId = "ETH/EUR";
+    callerInput.source.providerId = "caller-mutated";
+    callerInput.selectedTrade.price.original = "0";
+    callerInput.selectedTrade.timestamps.availableAtOriginal = "invalid";
+    expect(verified.evidence.instrument.venueProductId).toBe("ETH/USD");
+    expect(verified.evidence.source.providerId).toBe("kraken");
+    expect(verified.evidence.selectedTrade.price.original).toBe("2043.123456789000");
+    expect(verified.evidence.selectedTrade.timestamps.availableAtOriginal).toBe("2026-11-26T12:34:56.123999999Z");
+  });
+
   it.each([
     ["price", (p: KrakenPostTradeEvidencePackage) => ({ ...p, selectedTrade: { ...p.selectedTrade, price: { ...p.selectedTrade.price, original: "2044.00" } } })],
     ["identity", (p: KrakenPostTradeEvidencePackage) => ({ ...p, instrument: { ...p.instrument, venueProductId: "ETH/EUR" } })],
@@ -106,5 +137,32 @@ describe("offline external PAPER price evidence package", () => {
     const empty = parse(response([]));
     expect(createKrakenPostTradeEvidencePackage({ parsed: empty, instrument, source, tradeId: "trade-001" }))
       .toEqual({ status: "INVALID", reason: "TRADE_NOT_FOUND" });
+  });
+
+  it("roundtrips an escape-heavy raw response near the parser limit and rejects oversized material explicitly", () => {
+    const base = response([trade()]);
+    const prefix = `${base.slice(0, -1)},"padding":"`;
+    const suffix = `"}`;
+    const quoteAndBackslash = String.fromCharCode(34, 92);
+    const repeatCount = Math.floor((KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS - prefix.length - suffix.length - 4) / 4);
+    const escapedPadding = JSON.stringify(quoteAndBackslash.repeat(repeatCount)).slice(1, -1);
+    const rawResponse = `${prefix}${escapedPadding}${suffix}`;
+    expect(rawResponse.length).toBeLessThanOrEqual(KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS);
+    expect(KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS - rawResponse.length).toBeLessThan(8);
+
+    const parsed = parse(rawResponse);
+    expect(parsed.status).toBe("VALID");
+    const created = createKrakenPostTradeEvidencePackage({ parsed, instrument, source, tradeId: "trade-001" });
+    expect(created.status).toBe("VALID");
+    if (created.status !== "VALID") throw new Error(created.reason);
+    const serialized = serializeKrakenPostTradeEvidencePackage(created.evidence);
+    expect(readKrakenPostTradeEvidencePackage(serialized, created.evidence.fingerprint)).toMatchObject({
+      status: "VALID", evidence: { rawResponse },
+    });
+
+    expect(verifyKrakenPostTradeEvidencePackage({ ...created.evidence, rawResponse: "x".repeat(KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS + 1) }))
+      .toEqual({ status: "INVALID", reason: "PACKAGE_TOO_LARGE" });
+    expect(readKrakenPostTradeEvidencePackage(" ".repeat(serialized.length + 1_000_000)))
+      .toEqual({ status: "INVALID", reason: "PACKAGE_TOO_LARGE" });
   });
 });

@@ -3,6 +3,7 @@ import { CURRENCY_REGISTRY } from "@/domain/financial/currency";
 import { canonicalSha256 } from "@/domain/intelligence/ingestion-provenance";
 import {
   KRAKEN_POST_TRADE_PARSER_VERSION,
+  KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS,
   parseKrakenPostTradeResponse,
   type KrakenPostTradeExpectedInstrument,
   type KrakenPostTradeParseResult,
@@ -11,7 +12,8 @@ import type { ExternalPaperInstrument, PaperPriceSource } from "@/application/pa
 
 export const EXTERNAL_PAPER_PRICE_EVIDENCE_PACKAGE_VERSION = "external-paper-price-evidence-package/v1" as const;
 const SHA256 = /^[a-f0-9]{64}$/;
-const MAX_PACKAGE_CHARS = 1_100_000;
+// JSON.stringify can double quotes and backslashes in the raw response.
+const MAX_SERIALIZED_PACKAGE_CHARS = KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS * 2 + 8_192;
 
 export type KrakenPostTradeEvidencePackage = Readonly<{
   contractVersion: typeof EXTERNAL_PAPER_PRICE_EVIDENCE_PACKAGE_VERSION;
@@ -47,7 +49,7 @@ export type KrakenPostTradeEvidencePackage = Readonly<{
 
 export type EvidencePackageResult =
   | { readonly status: "VALID"; readonly evidence: KrakenPostTradeEvidencePackage }
-  | { readonly status: "INVALID"; readonly reason: "INPUT_INVALID" | "PARSE_INVALID" | "TRADE_NOT_FOUND" | "IDENTITY_MISMATCH" | "FINGERPRINT_MISMATCH" | "PACKAGE_INVALID" };
+  | { readonly status: "INVALID"; readonly reason: "INPUT_INVALID" | "PARSE_INVALID" | "TRADE_NOT_FOUND" | "IDENTITY_MISMATCH" | "FINGERPRINT_MISMATCH" | "PACKAGE_INVALID" | "PACKAGE_TOO_LARGE" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -163,10 +165,11 @@ export function verifyKrakenPostTradeEvidencePackage(value: unknown, expectedFin
     value.origin !== "CALLER_SUPPLIED_UNVERIFIED" || value.sourceApproval !== "NOT_APPROVED" ||
     value.decisionReadiness !== "BLOCKED_UNCLASSIFIED_PRICE_TYPE" || value.priceType !== "UNCLASSIFIED_POST_TRADE" ||
     !isRecord(value.instrument) || !isRecord(value.source) || !isRecord(value.parser) || !isRecord(value.selectedTrade) ||
-    !isRecord(value.selectedTrade.timestamps) || typeof value.rawResponse !== "string" || value.rawResponse.length > MAX_PACKAGE_CHARS) {
+    !isRecord(value.selectedTrade.timestamps) || typeof value.rawResponse !== "string") {
     return { status: "INVALID", reason: "PACKAGE_INVALID" };
   }
   const evidence = value as unknown as KrakenPostTradeEvidencePackage;
+  if (evidence.rawResponse.length > KRAKEN_POST_TRADE_MAX_RESPONSE_CHARS) return { status: "INVALID", reason: "PACKAGE_TOO_LARGE" };
   if (!validBindings(evidence.instrument, evidence.source) ||
     evidence.parser.contractVersion !== KRAKEN_POST_TRADE_PARSER_VERSION || !SHA256.test(evidence.parser.payloadFingerprint)) {
     return { status: "INVALID", reason: "PACKAGE_INVALID" };
@@ -182,18 +185,21 @@ export function verifyKrakenPostTradeEvidencePackage(value: unknown, expectedFin
   if (reconstructed.status !== "VALID" || canonicalSha256(materialOf(reconstructed.evidence)) !== evidence.fingerprint) {
     return { status: "INVALID", reason: reconstructed.status === "INVALID" ? reconstructed.reason : "PACKAGE_INVALID" };
   }
-  return { status: "VALID", evidence };
+  return { status: "VALID", evidence: reconstructed.evidence };
 }
 
 /** Stable JSON representation; all exact numeric/time values remain decimal/text fields. */
 export function serializeKrakenPostTradeEvidencePackage(evidence: KrakenPostTradeEvidencePackage): string {
   const verified = verifyKrakenPostTradeEvidencePackage(evidence);
   if (verified.status !== "VALID") throw new Error(`PAPER_PRICE_EVIDENCE_${verified.reason}`);
-  return JSON.stringify(evidence);
+  const serialized = JSON.stringify(verified.evidence);
+  if (serialized.length > MAX_SERIALIZED_PACKAGE_CHARS) throw new Error("PAPER_PRICE_EVIDENCE_PACKAGE_TOO_LARGE");
+  return serialized;
 }
 
 export function readKrakenPostTradeEvidencePackage(serialized: string, expectedFingerprint?: string): EvidencePackageResult {
-  if (typeof serialized !== "string" || serialized.length > MAX_PACKAGE_CHARS) return { status: "INVALID", reason: "PACKAGE_INVALID" };
+  if (typeof serialized !== "string") return { status: "INVALID", reason: "PACKAGE_INVALID" };
+  if (serialized.length > MAX_SERIALIZED_PACKAGE_CHARS) return { status: "INVALID", reason: "PACKAGE_TOO_LARGE" };
   try {
     return verifyKrakenPostTradeEvidencePackage(JSON.parse(serialized), expectedFingerprint);
   } catch {
