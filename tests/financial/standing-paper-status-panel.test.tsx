@@ -65,6 +65,59 @@ const incompleteModel = projectStandingPaperStatusReadModel([incompleteCard]);
 const response = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("standing paper status view", () => {
+  it.each([
+    ["v1", model], ["v2", cycleModel],
+  ] as const)("rejects contradictory analytics in an otherwise valid %s response", async (_version, projected) => {
+    const card = projected.policies[0]!;
+    const analytics = card.analytics!;
+    expect(await loadStandingPaperStatus(async () => response(200, projected))).toEqual({ kind: "DATA", model: projected });
+    for (const field of ["cashMinor", "exposureMinor", "openCostBasisMinor", "unrealizedPnlMinor", "realizedPnlMinor"] as const) {
+      for (const invalid of [(BigInt(analytics[field]!) + 1n).toString(), null, undefined]) {
+        const payload = { ...projected, policies: [{ ...card, analytics: { ...analytics, [field]: invalid } }] };
+        expect(await loadStandingPaperStatus(async () => response(200, payload)), field).toEqual({ kind: "READ_ERROR" });
+      }
+    }
+  });
+
+  it("rejects a v2 response whose top-level realized result differs from analytics", async () => {
+    const card = cycleModel.policies[0]!;
+    const payload = { ...cycleModel, policies: [{ ...card, realizedPnlMinor: (BigInt(card.realizedPnlMinor!) + 1n).toString() }] };
+    expect(await loadStandingPaperStatus(async () => response(200, payload))).toEqual({ kind: "READ_ERROR" });
+  });
+
+  it("projects v1 cash and fees and withholds incomplete market values", () => {
+    expect(projectedCard.analytics).toEqual({
+      cashMinor: testResult.endingState.cash,
+      feesMinor: testResult.executions.reduce((sum, fill) => sum + fill.fee.minorUnits, 0n).toString(),
+      realizedPnlMinor: "0",
+      exposureMinor: testResult.endingState.investedMarketValue,
+      openCostBasisMinor: testResult.endingState.totalOpenCostBasis,
+      unrealizedPnlMinor: testResult.endingState.unrealizedPnl,
+    });
+    expect(incompleteCard.analytics).toMatchObject({ cashMinor: testResult.endingState.cash, exposureMinor: null, unrealizedPnlMinor: null });
+    expect(incompleteCard.currentLossMinor).toBeNull();
+    expect(projectStandingPaperStatusCard({ policy: testPolicy, state: testResult.persistentState, run: null }).analytics).toBeNull();
+  });
+
+  it("reports partial-sale FIFO results and counts every fee once", () => {
+    const result = runDeterministicBacktest(cycleResult.config, FIXTURE_ASSETS.flatMap((asset, index) => [
+      { recordId: `partial-before-${index}`, assetId: asset.assetId, price: price("NOK", BigInt((index + 1) * 1_000_000), 4), observedAt: new Date(testAt), availableAt: new Date(testAt), ingestedAt: new Date(testAt), datasetVersion: FIXTURE_DATASET_VERSION },
+      { recordId: `partial-after-${index}`, assetId: asset.assetId, price: price("NOK", BigInt((index + 1) * 3_000_000), 4), observedAt: new Date(cycleAt), availableAt: new Date(cycleAt), ingestedAt: new Date(cycleAt), datasetVersion: FIXTURE_DATASET_VERSION },
+    ]));
+    const state = result.persistentState;
+    const sale = state.disposals![0]!;
+    const soldLot = state.acquisitions.find(fill => fill.fillId === sale.lotConsumptions[0]!.fillId)!;
+    expect(sale.quantityAtoms).toBeLessThan(soldLot.quantityAtoms);
+    const card = projectStandingPaperStatusCard({ policy: cyclePolicy, state,
+      run: { id: "partial", createdAt: cycleAt, result, valuation: { navMinor: result.endingState.nav, asOf: cycleAt, complete: true } } });
+    expect(card.analytics).toMatchObject({
+      realizedPnlMinor: state.realizedPnlMinor!.toString(),
+      feesMinor: result.executions.reduce((sum, fill) => sum + fill.fee.minorUnits, 0n).toString(),
+      unrealizedPnlMinor: (BigInt(result.endingState.investedMarketValue!) - BigInt(result.endingState.totalOpenCostBasis!)).toString(),
+    });
+    expect(BigInt(card.analytics!.realizedPnlMinor) + BigInt(card.analytics!.unrealizedPnlMinor!))
+      .toBe(BigInt(result.endingState.nav!) - state.netContributionsMinor);
+  });
   it("validates and renders backend-projected v2 BUY, SELL, turnover, and realized result", () => {
     expect(parseStandingPaperStatus(cycleModel)).toEqual(cycleModel);
     const html = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: cycleModel }} />);
@@ -219,7 +272,7 @@ describe("standing paper status view", () => {
     expect(html).toContain("Worker-status");
     expect(html).toContain("ingen heartbeat-evidens");
     expect(html).toContain("2000.00 NOK");
-    expect(html).toContain("PRICE_STALE");
+    expect(html).toContain("Prisen var for gammel");
     expect(html).toContain("Simulert");
     expect(html).toContain(">Pause</button>");
     expect(html).toContain(">Stopp</button>");

@@ -819,6 +819,15 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     }
     const beforeReplay = await counts(f.policy.financialAccountId);
     expect(beforeReplay).toMatchObject({ runs: "3", contributions: "1", fills: constrained ? "2" : "5", journals: constrained ? "3" : "6" });
+    const status = await f.repository.loadOwnedStatus(f.ownerId);
+    expect(status.policies[0]?.analytics).toMatchObject({ cashMinor: cash, realizedPnlMinor: realized.toString() });
+    if (constrained) {
+      expect(status.policies[0]?.analytics).toMatchObject({ exposureMinor: "0", openCostBasisMinor: "0", unrealizedPnlMinor: "0", feesMinor: "200" });
+      expect(status.policies[0]?.decisions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ outcome: "SIMULATED_FILLED", reasonCode: "SELL_STOP_LOSS" }),
+        expect.objectContaining({ outcome: "REJECTED", reasonCode: "LOSS_LIMIT_EXCEEDED" }),
+      ]));
+    }
     const restarted = new StandingPaperPolicyRepository(testUrl!);
     repositories.push(restarted);
     await expect(restarted.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, initialCapitalMinor)).resolves.toMatchObject({ ownerId: f.ownerId });
@@ -1178,11 +1187,13 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(one.policies[0]!.lastRound).toMatchObject({ asOf: stamp(10) });
     expect(one.policies[0]!.netContributionsMinor).toBe("100000");
     expect(one.policies[0]!.portfolioValueMinor).not.toBeNull();
+    expect(one.policies[0]!.analytics).toMatchObject({ realizedPnlMinor: "0", cashMinor: expect.any(String), exposureMinor: expect.any(String) });
     expect(one.policies[0]!.decisions.length).toBeGreaterThan(0);
 
     const two = await secondRepository.loadOwnedStatus(ownerTwo);
     expect(two.status).toBe("NO_ROUNDS");
     expect(two.policies.map(policy => policy.policyId)).toEqual([policyTwo.policyId]);
+    expect(two.policies[0]!.analytics).toBeNull();
     const ownerOneViaSecondConnection = await secondRepository.loadOwnedStatus(ownerOne);
     expect(ownerOneViaSecondConnection).toMatchObject({ status: "AVAILABLE", policies: [{ policyId: first.policy.policyId }] });
     expect(ownerOneViaSecondConnection.policies.some(policy => policy.policyId === policyTwo.policyId)).toBe(false);

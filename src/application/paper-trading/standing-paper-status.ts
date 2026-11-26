@@ -75,6 +75,14 @@ export interface StandingPaperPolicyStatusCard {
   readonly portfolioValueAsOf: string | null;
   readonly currentLossMinor: string | null;
   readonly remainingLossMarginMinor: string | null;
+  readonly analytics: null | {
+    readonly cashMinor: string;
+    readonly feesMinor: string;
+    readonly realizedPnlMinor: string;
+    readonly exposureMinor: string | null;
+    readonly openCostBasisMinor: string | null;
+    readonly unrealizedPnlMinor: string | null;
+  };
   readonly decisions: readonly StandingPaperStatusDecision[];
   readonly fills: readonly StandingPaperStatusFill[];
   readonly issueCode: "PAPER_MATERIAL_INVALID" | "PAPER_VALUATION_INCOMPLETE" | null;
@@ -121,11 +129,24 @@ export function projectStandingPaperStatusCard(input: {
           : workers.some(worker => worker.status === "STALE") ? "STALE" : "ENDED");
   const workerInstanceCount = input.workerSummary?.count ?? workers.length;
   const workerInstancesTruncated = input.workerSummary?.truncated ?? false;
-  const loss = run?.valuation.navMinor === null || !run ? null : maxBigInt(0n, state.adjustedEquityHighWaterMinor - (BigInt(run.valuation.navMinor) - state.netContributionsMinor));
+  const ending = run?.result.endingState;
+  const sameCutoff = ending && ending.asOf === run?.valuation.asOf &&
+    (!state.lastProcessedAt || state.lastProcessedAt <= new Date(ending.asOf));
+  const analytics = sameCutoff ? {
+    cashMinor: ending.cash,
+    feesMinor: [...state.acquisitions, ...(state.disposals ?? [])].reduce((sum, fill) => sum + fill.feeMinor, 0n).toString(),
+    // A reconciled v1 checkpoint contains only buys.
+    realizedPnlMinor: (state.realizedPnlMinor ?? 0n).toString(),
+    exposureMinor: run.valuation.complete ? ending.investedMarketValue : null,
+    openCostBasisMinor: ending.totalOpenCostBasis,
+    unrealizedPnlMinor: run.valuation.complete ? ending.unrealizedPnl : null,
+  } : null;
+  const nav = sameCutoff && run.valuation.complete ? run.valuation.navMinor : null;
+  const loss = nav === null ? null : maxBigInt(0n, state.adjustedEquityHighWaterMinor - (BigInt(nav) - state.netContributionsMinor));
   const capitalBudgetUsed = state.disposals === undefined ? state.committedCapitalMinor : state.netContributionsMinor;
   const remainingBudget = maxBigInt(0n, policy.capitalBudgetMinor - capitalBudgetUsed);
   const remainingLoss = loss === null ? null : maxBigInt(0n, policy.maxLossMinor - loss);
-  const status = !run ? "NO_ROUNDS" : run.valuation.complete ? "AVAILABLE" : "INCOMPLETE";
+  const status = !run ? "NO_ROUNDS" : nav !== null ? "AVAILABLE" : "INCOMPLETE";
   return {
     status, policyId: policy.policyId, identity: policy.identity, version: policy.version,
     policyStatus: policy.status, mode: policy.mode, workerStatus, workerInstances: [...workers], workerInstanceCount, workerInstancesTruncated,
@@ -150,10 +171,10 @@ export function projectStandingPaperStatusCard(input: {
     netContributionsMinor: state.netContributionsMinor.toString(), committedCapitalMinor: state.committedCapitalMinor.toString(),
     capitalBudgetUsedMinor: capitalBudgetUsed.toString(), remainingCapitalBudgetMinor: remainingBudget.toString(),
     cumulativeTurnoverMinor: state.cumulativeTurnoverMinor?.toString() ?? null, realizedPnlMinor: state.realizedPnlMinor?.toString() ?? null,
-    portfolioValueMinor: run?.valuation.navMinor ?? null,
+    portfolioValueMinor: nav,
     portfolioValueAsOf: run?.valuation.asOf ?? null, currentLossMinor: loss?.toString() ?? null,
-    remainingLossMarginMinor: remainingLoss?.toString() ?? null, decisions, fills,
-    issueCode: !run || run.valuation.complete ? null : "PAPER_VALUATION_INCOMPLETE",
+    remainingLossMarginMinor: remainingLoss?.toString() ?? null, analytics, decisions, fills,
+    issueCode: status === "INCOMPLETE" ? "PAPER_VALUATION_INCOMPLETE" : null,
   };
 }
 

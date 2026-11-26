@@ -55,7 +55,7 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
     monetaryLimits.every(item => item === null) && limits.maxPriceAgeMs === null && value.allowedInstrumentIds.length === 0 && value.lastRound === null &&
     value.workerInstances.length === 0 && value.workerInstanceCount === 0 && !value.workerInstancesTruncated && value.netContributionsMinor === null && value.committedCapitalMinor === null && value.capitalBudgetUsedMinor === null && value.remainingCapitalBudgetMinor === null && value.cumulativeTurnoverMinor === null && value.realizedPnlMinor === null && value.portfolioValueMinor === null &&
     value.portfolioValueAsOf === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null && value.decisions.length === 0 && value.fills.length === 0 &&
-    value.issueCode === "PAPER_MATERIAL_INVALID";
+    value.analytics === null && value.issueCode === "PAPER_MATERIAL_INVALID";
   if (!isText(value.identity) || value.version !== "standing-paper-policy/v1" || value.mode !== "PAPER_ONLY" || value.policyStatus === "UNKNOWN" ||
     value.allowedInstrumentIds.length === 0 || !monetaryLimits.slice(0, 4).every(isPositiveAmount) || !isNonnegativeAmount(limits.maxLossMinor) ||
     typeof limits.maxPriceAgeMs !== "number" || !Number.isSafeInteger(limits.maxPriceAgeMs) || limits.maxPriceAgeMs <= 0 ||
@@ -66,10 +66,27 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
   if (value.lastRound !== null && (!isRecord(value.lastRound) || !isText(value.lastRound.id) || !isDate(value.lastRound.completedAt) || !isDate(value.lastRound.asOf))) return false;
   const noValuationAmounts = value.portfolioValueMinor === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null;
   const noSavedValuation = noValuationAmounts && value.portfolioValueAsOf === null;
+  const analytics = value.analytics;
+  if (analytics !== null && (!isRecord(analytics) || !isNonnegativeAmount(analytics.cashMinor) ||
+    !isNonnegativeAmount(analytics.feesMinor) || !isAmount(analytics.realizedPnlMinor) ||
+    !(analytics.openCostBasisMinor === null || isNonnegativeAmount(analytics.openCostBasisMinor)) ||
+    (value.status !== "AVAILABLE" && (analytics.exposureMinor !== null || analytics.unrealizedPnlMinor !== null)))) return false;
+  if (value.status === "NO_ROUNDS" && analytics !== null) return false;
   if (value.status === "NO_ROUNDS") return value.lastRound === null && noSavedValuation && value.decisions.length === 0 && value.fills.length === 0 && value.issueCode === null;
   if (value.lastRound === null) return false;
-  if (value.status === "AVAILABLE" && (!isNonnegativeAmount(value.portfolioValueMinor) || !isDate(value.portfolioValueAsOf) || value.portfolioValueAsOf !== value.lastRound.asOf ||
-    !isNonnegativeAmount(value.currentLossMinor) || !isNonnegativeAmount(value.remainingLossMarginMinor) || value.issueCode !== null)) return false;
+  if (value.status === "AVAILABLE") {
+    if (!isNonnegativeAmount(value.portfolioValueMinor) || !isDate(value.portfolioValueAsOf) || value.portfolioValueAsOf !== value.lastRound.asOf ||
+      !isNonnegativeAmount(value.currentLossMinor) || !isNonnegativeAmount(value.remainingLossMarginMinor) || value.issueCode !== null ||
+      !isRecord(analytics) || !isNonnegativeAmount(analytics.cashMinor) || !isNonnegativeAmount(analytics.exposureMinor) ||
+      !isNonnegativeAmount(analytics.openCostBasisMinor) || !isAmount(analytics.unrealizedPnlMinor) || !isAmount(analytics.realizedPnlMinor)) return false;
+    const exposure = BigInt(analytics.exposureMinor);
+    if (BigInt(analytics.cashMinor) + exposure !== BigInt(value.portfolioValueMinor) ||
+      exposure - BigInt(analytics.openCostBasisMinor) !== BigInt(analytics.unrealizedPnlMinor)) return false;
+    // v1 checkpoints are BUY-only and omit the top-level realized result.
+    if (value.cycleConfiguration === null
+      ? value.realizedPnlMinor !== null || BigInt(analytics.realizedPnlMinor) !== 0n
+      : !isAmount(value.realizedPnlMinor) || BigInt(analytics.realizedPnlMinor) !== BigInt(value.realizedPnlMinor)) return false;
+  }
   if (value.status === "INCOMPLETE" && (!noValuationAmounts || !isDate(value.portfolioValueAsOf) || value.portfolioValueAsOf !== value.lastRound.asOf || value.issueCode !== "PAPER_VALUATION_INCOMPLETE")) return false;
   const decisionCodes = ["POLICY_NOT_ACTIVE", "PRICE_MISSING", "PRICE_STALE", "INSTRUMENT_NOT_ALLOWED", "ORDER_LIMIT_EXCEEDED", "POSITION_LIMIT_EXCEEDED", "EXPOSURE_LIMIT_EXCEEDED", "CAPITAL_BUDGET_EXCEEDED", "LOSS_LIMIT_EXCEEDED", "M1_RISK_REJECTED", "APPROVED", "BUY_FILLED", "BUY_RISK_REJECTED", "SELL_STOP_LOSS", "SELL_TAKE_PROFIT", "SELL_MAX_HOLD", "SELL_ORDER_LIMIT_REJECTED", "HOLD_NO_EXIT_TRIGGER"];
   const decisionsValid = value.decisions.every(item => isRecord(item) && isText(item.orderId) && isText(item.decisionId) &&
@@ -124,7 +141,16 @@ const amount = (minor: string | null) => minor === null ? "Ikke tilgjengelig" : 
 const dateLabel = (value: string | null) => value ? new Date(value).toLocaleString("nb-NO", { timeZone: "UTC", year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : "Ikke tilgjengelig";
 const titleCase = (value: string) => value.replaceAll("_", " ").toLocaleLowerCase("nb-NO").replace(/^./, character => character.toLocaleUpperCase("nb-NO"));
 const percentFromBps = (value: string) => { const bps = BigInt(value); return `${bps / 100n},${String(bps % 100n).padStart(2, "0")}%`; };
-const exitReasonLabel = (reason: string) => ({ SELL_STOP_LOSS: "Stop-loss utløst", SELL_TAKE_PROFIT: "Take-profit utløst", SELL_MAX_HOLD: "Maksimal holdetid nådd", SELL_ORDER_LIMIT_REJECTED: "Salg avvist av ordregrense", HOLD_NO_EXIT_TRIGGER: "Ingen exit-regel utløst" } as Record<string, string>)[reason] ?? reason;
+const exitReasonLabel = (reason: string) => ({
+  SELL_STOP_LOSS: "Stop-loss utløst", SELL_TAKE_PROFIT: "Take-profit utløst", SELL_MAX_HOLD: "Maksimal holdetid nådd",
+  SELL_ORDER_LIMIT_REJECTED: "Salg avvist av ordregrense", HOLD_NO_EXIT_TRIGGER: "Ingen exit-regel utløst",
+  POLICY_NOT_ACTIVE: "Policyen var ikke aktiv", PRICE_MISSING: "Syntetisk pris manglet", PRICE_STALE: "Prisen var for gammel",
+  INSTRUMENT_NOT_ALLOWED: "Instrumentet var utenfor mandatet", ORDER_LIMIT_EXCEEDED: "Ordregrensen var overskredet",
+  POSITION_LIMIT_EXCEEDED: "Posisjonsgrensen var overskredet", EXPOSURE_LIMIT_EXCEEDED: "Samlet eksponeringsgrense var overskredet",
+  CAPITAL_BUDGET_EXCEEDED: "Kapitalbudsjettet var overskredet", LOSS_LIMIT_EXCEEDED: "Beregnet eller forventet tap overskred tapsgrensen",
+  BUY_RISK_REJECTED: "Kjøp avvist av risikokontrollen", M1_RISK_REJECTED: "Ordre avvist av risikokontrollen",
+  BUY_FILLED: "Simulert kjøp gjennomført", APPROVED: "Godkjent innenfor mandatet",
+} as Record<string, string>)[reason] ?? reason;
 
 function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; onRefresh?: () => Promise<void> }) {
   const [reviewing, setReviewing] = useState(false);
@@ -235,15 +261,25 @@ function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; 
     </header>
     <p className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-50">Syntetiske priser · simulerte fills · Ingen børsutførelse. Lagrede runder bekrefter ikke at en worker kjører nå.</p>
     {card.status === "NO_ROUNDS" ? <div role="status" className="rounded-xl border border-[var(--border)] p-5"><h3 className="font-semibold">Ingen fullførte runder</h3><p className="mt-2 text-sm text-[var(--muted)]">Kapital og portefølje har ingen lagret paper-runde ennå.</p></div> : card.status === "INCOMPLETE" ? <div role="status" className="rounded-xl border border-amber-400/40 bg-amber-400/5 p-4"><h3 className="font-semibold">Ufullstendig verdsettelse</h3><p className="mt-1 text-sm text-[var(--muted)]">Noen lagrede beregninger mangler. Porteføljeverdi og tapsmargin vises ikke som ferske eller komplette data.</p></div> : null}
+    <section aria-label="Paper-analyse" className="space-y-3">
+    <h3 className="font-semibold">Paper-analyse</h3>
+    <p className="text-sm text-[var(--muted)]">Sist lagrede verdsettelse per policy · {dateLabel(card.portfolioValueAsOf)}</p>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <Metric label="Virtuelle innskudd" value={amount(card.netContributionsMinor)} detail="Netto bokført på paper-kontoen" />
+      <Metric label="Kontanter" value={amount(card.analytics?.cashMinor ?? null)} detail="Bokført saldo ved lagret verdsettelse" />
+      <Metric label="Realisert resultat" value={amount(card.analytics?.realizedPnlMinor ?? null)} detail="Netto salgsproveny etter salgsgebyr minus forbrukt FIFO-kostbasis inkl. kjøpsgebyr" />
+      <Metric label="Urealisert resultat" value={amount(card.analytics?.unrealizedPnlMinor ?? null)} detail={`Syntetisk markedsverdi minus åpen FIFO-kostbasis inkl. kjøpsgebyr (${amount(card.analytics?.openCostBasisMinor ?? null)})`} />
+      <Metric label="Betalte simulerte handelsgebyrer" value={amount(card.analytics?.feesMinor ?? null)} detail="Sum kjøps- og salgsgebyrer. Allerede medregnet i kostbasis eller salgsproveny. Spread og glidning ligger i fillprisen." />
+      <Metric label="Samlet eksponering" value={amount(card.analytics?.exposureMinor ?? null)} detail="Syntetisk markedsverdi av åpne beholdninger" />
       <Metric label="Brukt kapital" value={amount(card.capitalBudgetUsedMinor)} detail={card.cumulativeTurnoverMinor === null ? "Kapital brukt i simulerte kjøp inkl. gebyr" : "Samlede virtuelle innskudd (v2-budsjett)"} />
       <Metric label="Gjenstående budsjett" value={amount(card.remainingCapitalBudgetMinor)} detail={`Budsjett ${amount(risk.capitalBudgetMinor)}`} />
-      {card.cumulativeTurnoverMinor !== null && <Metric label="Kumulativ handelsomsetning" value={amount(card.cumulativeTurnoverMinor)} detail={`Realisert resultat ${amount(card.realizedPnlMinor)}`} />}
+      {card.cumulativeTurnoverMinor !== null && <Metric label="Kumulativ handelsomsetning" value={amount(card.cumulativeTurnoverMinor)} detail="Brutto notional før gebyrer" />}
       <Metric label="Sist lagret porteføljeverdi" value={amount(card.portfolioValueMinor)} detail={`Gjelder ${dateLabel(card.portfolioValueAsOf)}`} />
       <Metric label="Inn­skuddsjustert tap" value={amount(card.currentLossMinor)} detail={`Gjenstående tapsmargin ${amount(card.remainingLossMarginMinor)}`} />
       <Metric label="Siste fullførte runde" value={card.lastRound ? dateLabel(card.lastRound.completedAt) : "Ingen"} detail={card.lastRound ? `Verdier gjelder ${dateLabel(card.lastRound.asOf)}` : "Ingen lagret fullføringstid"} />
     </div>
+    <HistoryList card={card} />
+    </section>
     <PolicyActivationControl card={card} onRefresh={onRefresh} />
     <PolicyControls card={card} onRefresh={onRefresh} />
     {card.cycleConfiguration && <CycleConfigurationView configuration={card.cycleConfiguration} title={card.policyStatus === "DRAFT" ? "Foreslått cycle v2-konfigurasjon (ikke godkjent)" : "Godkjent cycle v2-konfigurasjon"} />}
@@ -251,7 +287,6 @@ function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; 
       <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Risikogrenser</h3><dl className="mt-3 grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2"><Limit label="Maks ordre" value={amount(risk.maxOrderMinor)} /><Limit label="Maks posisjon" value={amount(risk.maxPositionMinor)} /><Limit label="Maks samlet eksponering" value={amount(risk.maxGrossExposureMinor)} /><Limit label="Maks tapsgrense" value={amount(risk.maxLossMinor)} /><Limit label="Maks prisalder" value={risk.maxPriceAgeMs === null ? "Ikke tilgjengelig" : `${risk.maxPriceAgeMs} ms`} /></dl><p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p></section>
       <section className="rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Policy og worker</h3><dl className="mt-3 grid gap-3 text-sm"><Limit label="Policy-status" value={titleCase(card.policyStatus)} /><Limit label="Worker-status" value={workerLabel(card.workerStatus)} /><Limit label="Modus" value="PAPER_ONLY" /><Limit label="Versjon" value={card.version ?? "Ukjent"} /></dl>{card.workerInstancesTruncated && <p className="mt-3 text-xs text-[var(--muted)]">Viser de 20 siste av {card.workerInstanceCount} worker-instanser.</p>}{card.workerInstances.length > 0 && <ul className="mt-3 space-y-2 border-t border-[var(--border)] pt-3 text-xs">{card.workerInstances.map(worker => <li key={worker.processInstanceId} className="flex flex-wrap justify-between gap-2"><span>{worker.workerId} · {workerLabel(worker.status)}</span><span className="text-[var(--muted)]">Heartbeat {dateLabel(worker.lastHeartbeatAt)}</span></li>)}</ul>}</section>
     </div>
-    <HistoryList card={card} />
   </section>;
 }
 

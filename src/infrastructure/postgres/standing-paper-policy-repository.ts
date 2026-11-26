@@ -58,6 +58,7 @@ const invalidCard = (policyId: string): StandingPaperPolicyStatusCard => ({
   lastRound: null, netContributionsMinor: null, committedCapitalMinor: null, remainingCapitalBudgetMinor: null,
   capitalBudgetUsedMinor: null, cumulativeTurnoverMinor: null, realizedPnlMinor: null,
   portfolioValueMinor: null, portfolioValueAsOf: null, currentLossMinor: null, remainingLossMarginMinor: null,
+  analytics: null,
   decisions: [], fills: [], issueCode: "PAPER_MATERIAL_INVALID",
 });
 
@@ -119,6 +120,9 @@ function validateSavedResult(raw: unknown, state: DeterministicBacktestState, ac
   if (eventTimes.length && (!state.lastProcessedAt || state.lastProcessedAt.getTime() !== lastEventTime)) throw new Error("PAPER_MATERIAL_INVALID");
   const complete = ending.valuationStatus === "COMPLETE" && ending.nav !== null;
   if (ending.valuationStatus === "COMPLETE" && !complete) throw new Error("PAPER_MATERIAL_INVALID");
+  if (complete && (!signedInteger(ending.investedMarketValue) || !signedInteger(ending.totalOpenCostBasis) || !signedInteger(ending.unrealizedPnl) ||
+    BigInt(ending.nav as string) !== BigInt(ending.cash) + BigInt(ending.investedMarketValue) ||
+    BigInt(ending.unrealizedPnl) !== BigInt(ending.investedMarketValue) - BigInt(ending.totalOpenCostBasis))) throw new Error("PAPER_MATERIAL_INVALID");
   return { navMinor: complete ? ending.nav as string : null, asOf, complete };
 }
 
@@ -531,7 +535,15 @@ export class StandingPaperPolicyRepository {
           const valuation = run ? validateSavedResult(result, state, row.financial_account_id, policy) : null;
           const legacyDecisions = decisionRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateDecisionRow(item, policy.policyId, row.financial_account_id));
           const cycleDecisions = cycleDecisionRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateCycleDecisionRow(item, policy.policyId, row.financial_account_id));
-          const decisions = cycleDecisions.length ? cycleDecisions : legacyDecisions;
+          // Policy rejections can precede cycle-decision creation, so read both histories.
+          const decisionsByOrder = new Map(cycleDecisions.map(item => [item.orderId, item]));
+          for (const item of legacyDecisions) {
+            const cycleDecision = decisionsByOrder.get(item.orderId);
+            if (!cycleDecision || item.outcome === "REJECTED") decisionsByOrder.set(item.orderId, item);
+          }
+          const decisions = [...decisionsByOrder.values()]
+            .sort((left, right) => right.recordedAt.localeCompare(left.recordedAt) || left.orderId.localeCompare(right.orderId))
+            .slice(0, 20);
           const fills = fillRows.filter(item => item.policy_id === row.policy_id).slice(0, 20).map(item => validateFillRow(item, policy.policyId, row.financial_account_id));
           if (!run && (decisions.length || fills.length)) throw new Error("PAPER_MATERIAL_INVALID");
           const workers: StandingPaperWorkerInstanceStatusRecord[] = heartbeatRows.filter(item => item.policy_id === row.policy_id).map(item => {
