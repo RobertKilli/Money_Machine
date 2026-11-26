@@ -33,7 +33,7 @@ export type StandingPaperWorkerOptions = {
 
 const roundKey = (workerId: string, round: number) => `standing-paper-worker/v1/${workerId}/round/${String(round).padStart(12, "0")}`;
 const roundAt = (round: number) => new Date(Date.UTC(2026, 0, 1, 9, 0, 0) + round * 60_000);
-const pricesForRound = (round: number, cycleMode = false): FixturePriceObservation[] => {
+const fixturePricesForRound = (round: number, cycleMode = false): FixturePriceObservation[] => {
   const at = roundAt(round);
   const availableAt = new Date(at.getTime() - 60 * 60 * 1000);
   const cyclePriceBase = cycleMode ? 1_000_000n : 10_000n;
@@ -204,7 +204,7 @@ export class StandingPaperWorker {
         } : undefined;
         try {
           if (this.options.signal?.aborted) throw abortError();
-          const result = await this.repository.run(this.options.policyId, config, pricesForRound(round, exitPolicy !== undefined), identity, {
+          const result = await this.repository.run(this.options.policyId, config, fixturePricesForRound(round, exitPolicy !== undefined), identity, {
             ...(initialContribution ? { initialContribution } : {}),
             ...(this.options.expectedOwnerId ? { expectedOwnerId: this.options.expectedOwnerId } : {}),
           });
