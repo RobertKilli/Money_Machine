@@ -82,6 +82,8 @@ type Dependencies = Readonly<{
   bindings?: readonly KrakenPostTradeBinding[];
   /** Test injection only; the default calls Node HTTPS after the access and binding gates. */
   requester?: KrakenPostTradeRequester;
+  /** Low-level Node HTTPS injection for deterministic transport tests. */
+  nodeHttpsRequest?: typeof httpsRequest;
   /** Default denies both independently required operational gates. */
   authorize?: KrakenPostTradeAuthorizer;
   /** Receiving-side wall-clock source. The default is captured inside this transport. */
@@ -95,14 +97,29 @@ function failure(reason: KrakenPostTradeTransportFailureCode, status: "BLOCKED" 
   return Object.freeze({ status, reason });
 }
 
+function safeIdentifier(value: unknown): value is string {
+  return typeof value === "string" && SAFE_ID.test(value);
+}
+
+function snapshotInstrument(value: ExternalPaperInstrument): Readonly<ExternalPaperInstrument> {
+  return Object.freeze({
+    instrumentId: value.instrumentId, baseAssetId: value.baseAssetId, quoteCurrency: value.quoteCurrency,
+    venueId: value.venueId, venueProductId: value.venueProductId,
+  });
+}
+
+function snapshotSource(value: PaperPriceSource): Readonly<PaperPriceSource> {
+  return Object.freeze({ providerId: value.providerId, datasetVersion: value.datasetVersion, adapterVersion: value.adapterVersion });
+}
+
 function validBindingShape(instrument: ExternalPaperInstrument, source: PaperPriceSource): boolean {
-  return SAFE_ID.test(instrument.instrumentId) && instrument.instrumentId.startsWith("paper.external.") &&
-    SAFE_ID.test(instrument.baseAssetId) && !instrument.baseAssetId.toLowerCase().startsWith("mm.fixture.") &&
-    SAFE_ID.test(instrument.venueId) && SAFE_ID.test(instrument.venueProductId) &&
-    SAFE_ID.test(instrument.quoteCurrency) && /^[A-Z]{3}$/.test(instrument.quoteCurrency) &&
-    SAFE_ID.test(source.providerId) && source.providerId === "kraken-spot" &&
-    SAFE_ID.test(source.datasetVersion) && source.datasetVersion === "post-trade/v1" &&
-    SAFE_ID.test(source.adapterVersion) && source.adapterVersion === KRAKEN_POST_TRADE_PARSER_VERSION;
+  return safeIdentifier(instrument.instrumentId) && instrument.instrumentId.startsWith("paper.external.") &&
+    safeIdentifier(instrument.baseAssetId) && !instrument.baseAssetId.toLowerCase().startsWith("mm.fixture.") &&
+    safeIdentifier(instrument.venueId) && safeIdentifier(instrument.venueProductId) &&
+    safeIdentifier(instrument.quoteCurrency) && /^[A-Z]{3}$/.test(instrument.quoteCurrency) &&
+    safeIdentifier(source.providerId) && source.providerId === "kraken-spot" &&
+    safeIdentifier(source.datasetVersion) && source.datasetVersion === "post-trade/v1" &&
+    safeIdentifier(source.adapterVersion) && source.adapterVersion === KRAKEN_POST_TRADE_PARSER_VERSION;
 }
 
 function exactBindingMatches(candidate: KrakenPostTradeBinding, instrument: ExternalPaperInstrument, source: PaperPriceSource): boolean {
@@ -134,7 +151,11 @@ function isoMillis(epochMs: number): string | null {
   try { return new Date(epochMs).toISOString(); } catch { return null; }
 }
 
-function nodeHttpsRequester(requestPlan: KrakenPostTradeHttpRequest, signal: AbortSignal): Promise<KrakenPostTradeHttpResponse> {
+function nodeHttpsRequester(
+  requestPlan: KrakenPostTradeHttpRequest,
+  signal: AbortSignal,
+  makeHttpsRequest: typeof httpsRequest = httpsRequest,
+): Promise<KrakenPostTradeHttpResponse> {
   const options: RequestOptions = {
     protocol: "https:", hostname: KRAKEN_HOST, servername: KRAKEN_HOST, port: 443,
     method: "GET", path: requestPlan.path, rejectUnauthorized: true, agent: false,
@@ -153,7 +174,7 @@ function nodeHttpsRequester(requestPlan: KrakenPostTradeHttpRequest, signal: Abo
       clearConnectTimer();
       reject(error);
     };
-    const req = httpsRequest(options, (res) => {
+    const req = makeHttpsRequest(options, (res) => {
       clearConnectTimer();
       const headers: Record<string, string | undefined> = {
         "content-type": typeof res.headers["content-type"] === "string" ? res.headers["content-type"] : undefined,
@@ -221,8 +242,11 @@ const noOperationalAccess: KrakenPostTradeAuthorizer = () => Object.freeze({ sou
  * gate; no worker or product entrypoint constructs an enabled instance.
  */
 export function createKrakenPostTradeTransport(dependencies: Dependencies = {}) {
-  const bindings = dependencies.bindings ?? [];
-  const requester = dependencies.requester ?? nodeHttpsRequester;
+  const bindings = Object.freeze((dependencies.bindings ?? []).map((binding) => Object.freeze({
+    instrument: snapshotInstrument(binding.instrument), source: snapshotSource(binding.source),
+  })));
+  const nodeRequest = dependencies.nodeHttpsRequest ?? httpsRequest;
+  const requester = dependencies.requester ?? ((request: KrakenPostTradeHttpRequest, signal: AbortSignal) => nodeHttpsRequester(request, signal, nodeRequest));
   const authorize = dependencies.authorize ?? noOperationalAccess;
   const now = dependencies.now ?? Date.now;
 
@@ -233,26 +257,35 @@ export function createKrakenPostTradeTransport(dependencies: Dependencies = {}) 
     readonly tradeId: string;
     readonly signal?: AbortSignal;
   }): Promise<KrakenPostTradeTransportResult> {
-    if (!input || !input.instrument || !input.source || !SAFE_ID.test(input.tradeId) ||
-      !validBindingShape(input.instrument, input.source) || (input.signal !== undefined && !(input.signal instanceof AbortSignal))) {
+    // Snapshot all caller-controlled data before the first await.
+    if (!input) return failure("INPUT_INVALID", "INVALID");
+    const instrumentInput = input.instrument;
+    const sourceInput = input.source;
+    const tradeId = input.tradeId;
+    const signal = input.signal;
+    if (!instrumentInput || !sourceInput) return failure("INPUT_INVALID", "INVALID");
+    const instrument = snapshotInstrument(instrumentInput);
+    const source = snapshotSource(sourceInput);
+    if (typeof tradeId !== "string" || !safeIdentifier(tradeId) || !validBindingShape(instrument, source) ||
+      (signal !== undefined && !(signal instanceof AbortSignal))) {
       return failure("INPUT_INVALID", "INVALID");
     }
-    if (input.signal?.aborted) return failure("ABORTED");
-    const symbolParts = input.instrument.venueProductId.split("/");
-    if (symbolParts.length !== 2 || symbolParts[0] !== input.instrument.baseAssetId || symbolParts[1] !== input.instrument.quoteCurrency) return failure("INPUT_INVALID", "INVALID");
+    if (signal?.aborted) return failure("ABORTED");
+    const symbolParts = instrument.venueProductId.split("/");
+    if (symbolParts.length !== 2 || symbolParts[0] !== instrument.baseAssetId || symbolParts[1] !== instrument.quoteCurrency) return failure("INPUT_INVALID", "INVALID");
     const scope: KrakenPostTradeRequestScope = Object.freeze({
       transportVersion: KRAKEN_POST_TRADE_TRANSPORT_VERSION,
-      instrument: Object.freeze({ ...input.instrument }), source: Object.freeze({ ...input.source }),
+      instrument, source,
       method: "GET", hostname: KRAKEN_HOST, path: KRAKEN_PATH,
-      symbol: input.instrument.venueProductId, count: KRAKEN_COUNT,
+      symbol: instrument.venueProductId, count: KRAKEN_COUNT,
     });
     let access: KrakenPostTradeAccess;
     try { access = await authorize(scope); }
     catch { access = Object.freeze({ sourceApproval: "NOT_APPROVED", runtimePermission: "NOT_AUTHORIZED" }); }
     if (access.sourceApproval !== "APPROVED") return failure("SOURCE_NOT_APPROVED");
     if (access.runtimePermission !== "AUTHORIZED") return failure("RUNTIME_NOT_PERMITTED");
-    if (!bindings.some((binding) => exactBindingMatches(binding, input.instrument, input.source))) return failure("INSTRUMENT_NOT_BOUND");
-    if (input.signal?.aborted) return failure("ABORTED");
+    if (!bindings.some((binding) => exactBindingMatches(binding, instrument, source))) return failure("INSTRUMENT_NOT_BOUND");
+    if (signal?.aborted) return failure("ABORTED");
     if (activeRequests.size > 0) return failure("REQUEST_IN_FLIGHT");
     const startedAt = now();
     if (!Number.isFinite(startedAt) || startedAt - lastRequestStartedAt < KRAKEN_POST_TRADE_MIN_INTERVAL_MS) return failure("RATE_LIMITED");
@@ -264,7 +297,7 @@ export function createKrakenPostTradeTransport(dependencies: Dependencies = {}) 
     let didAbort = false;
     let totalTimer: ReturnType<typeof setTimeout> | undefined;
     const abortFromCaller = () => { didAbort = true; controller.abort(); };
-    input.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
     const timeout = new Promise<never>((_, reject) => {
       totalTimer = setTimeout(() => { didTimeout = true; reject(new Error("TOTAL_TIMEOUT")); controller.abort(); }, KRAKEN_POST_TRADE_TOTAL_TIMEOUT_MS);
     });
@@ -297,13 +330,13 @@ export function createKrakenPostTradeTransport(dependencies: Dependencies = {}) 
       const retrievedAt = isoMillis(receivedAtMs + 1);
       if (!receivedAt || !retrievedAt) return failure("NETWORK_ERROR");
       const parsed = parseKrakenPostTradeResponse({ rawResponse, retrievedAt, expected: {
-        symbol: input.instrument.venueProductId, baseAsset: input.instrument.baseAssetId,
-        quoteAsset: input.instrument.quoteCurrency, tradeVenueMic: input.instrument.venueId,
-        publicationVenueMic: input.instrument.venueId,
+        symbol: instrument.venueProductId, baseAsset: instrument.baseAssetId,
+        quoteAsset: instrument.quoteCurrency, tradeVenueMic: instrument.venueId,
+        publicationVenueMic: instrument.venueId,
       } });
       if (parsed.status !== "VALID") return failure(parsed.reason === "JSON_INVALID" ? "JSON_INVALID" : "PROVIDER_RESPONSE_INVALID");
       const packaged: EvidencePackageResult = createKrakenPostTradeEvidencePackage({
-        parsed, instrument: input.instrument, source: input.source, tradeId: input.tradeId,
+        parsed, instrument, source, tradeId,
       });
       if (packaged.status !== "VALID") return failure(packaged.reason === "IDENTITY_MISMATCH" ? "PROVIDER_RESPONSE_INVALID" : "EVIDENCE_INVALID");
       const transport = Object.freeze({
@@ -314,12 +347,12 @@ export function createKrakenPostTradeTransport(dependencies: Dependencies = {}) 
       return Object.freeze({ status: "EVIDENCE", sourceApproval: "NOT_APPROVED", decisionReadiness: "BLOCKED_UNCLASSIFIED_PRICE_TYPE", evidence: packaged.evidence, transport });
     } catch (error) {
       if (didTimeout) return failure("TIMEOUT");
-      if (didAbort || input.signal?.aborted) return failure("ABORTED");
+      if (didAbort || signal?.aborted) return failure("ABORTED");
       return failure(mapNetworkFailure(error, controller.signal));
     } finally {
       if (totalTimer !== undefined) clearTimeout(totalTimer);
       if (abortListener) controller.signal.removeEventListener("abort", abortListener);
-      input.signal?.removeEventListener("abort", abortFromCaller);
+      signal?.removeEventListener("abort", abortFromCaller);
       controller.abort();
       activeRequests.delete(controller);
     }

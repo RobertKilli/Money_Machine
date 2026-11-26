@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import type { ClientRequest, IncomingMessage } from "node:http";
+import type { RequestOptions } from "node:https";
 import { request as nodeHttpsRequest } from "node:https";
 import {
   createKrakenPostTradeTransport,
@@ -10,6 +13,7 @@ import {
   type KrakenPostTradeRequester,
 } from "@/infrastructure/paper-trading/kraken-post-trade-transport";
 import { KRAKEN_POST_TRADE_PARSER_VERSION } from "@/application/paper-trading/kraken-post-trade-parser";
+import type { ExternalPaperInstrument } from "@/application/paper-trading/standing-paper-market-price";
 
 const { nodeHttpsRequestMock } = vi.hoisted(() => ({ nodeHttpsRequestMock: vi.fn() }));
 vi.mock("node:https", () => ({ request: nodeHttpsRequestMock }));
@@ -42,6 +46,77 @@ const advance = (milliseconds = 1_001) => { fakeNow += milliseconds; };
 const allowSynthetic = () => ({ sourceApproval: "APPROVED" as const, runtimePermission: "AUTHORIZED" as const });
 function testTransport(requester: KrakenPostTradeRequester, bindings: readonly KrakenPostTradeBinding[] = [binding]) {
   return createKrakenPostTradeTransport({ bindings, requester, authorize: allowSynthetic, now: () => fakeNow });
+}
+
+type SyntheticRequest = EventEmitter & { end: () => void; destroy: (error?: Error) => SyntheticRequest; cleanup: () => void };
+type SyntheticResponse = EventEmitter & { statusCode: number; headers: Record<string, string>; complete: boolean; destroy: () => void };
+type SyntheticNodeHandler = (options: RequestOptions, callback: (response: IncomingMessage) => void, request: SyntheticRequest) => void;
+
+function nodeTransport(handler: SyntheticNodeHandler) {
+  let requestOptions: RequestOptions | undefined;
+  let requests = 0;
+  let destroys = 0;
+  let activeSignals = 0;
+  const syntheticHttpsRequest = ((options: RequestOptions, callback: (response: IncomingMessage) => void) => {
+    requestOptions = options;
+    requests += 1;
+    const request = new EventEmitter() as SyntheticRequest;
+    let cleaned = false;
+    const signal = options.signal as AbortSignal | undefined;
+    const onAbort = () => { request.destroy(new Error("ABORTED")); };
+    request.cleanup = () => {
+      if (!cleaned) {
+        cleaned = true;
+        signal?.removeEventListener("abort", onAbort);
+        activeSignals -= signal ? 1 : 0;
+      }
+    };
+    if (signal) {
+      activeSignals += 1;
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    request.destroy = (error?: Error) => {
+      destroys += 1;
+      request.cleanup();
+      if (error) queueMicrotask(() => request.emit("error", error));
+      return request;
+    };
+    request.end = () => handler(options, callback, request);
+    return request as unknown as ClientRequest;
+  }) as typeof nodeHttpsRequest;
+  const transport = createKrakenPostTradeTransport({
+    bindings: [binding], authorize: allowSynthetic, now: () => fakeNow, nodeHttpsRequest: syntheticHttpsRequest,
+  });
+  return {
+    transport,
+    get requestOptions() { return requestOptions; },
+    get requests() { return requests; },
+    get destroys() { return destroys; },
+    get activeSignals() { return activeSignals; },
+  };
+}
+
+function emitSocket(request: SyntheticRequest) {
+  const socket = Object.assign(new EventEmitter(), { authorized: true, encrypted: true, connecting: false });
+  request.emit("socket", socket);
+}
+
+function emitResponse(
+  request: SyntheticRequest,
+  callback: (response: IncomingMessage) => void,
+  options: { statusCode?: number; headers?: Record<string, string>; chunks?: readonly Uint8Array[]; complete?: boolean; handshake?: boolean } = {},
+) {
+  const response = Object.assign(new EventEmitter(), {
+    statusCode: options.statusCode ?? 200,
+    headers: options.headers ?? { "content-type": "application/json; charset=utf-8", "content-encoding": "identity" },
+    complete: options.complete ?? true,
+    destroy: () => {},
+  }) as SyntheticResponse;
+  request.cleanup();
+  if (options.handshake !== false) emitSocket(request);
+  callback(response as unknown as IncomingMessage);
+  for (const chunk of options.chunks ?? [Buffer.from(raw(), "utf8")]) response.emit("data", chunk);
+  response.emit("end");
 }
 async function fetchNext(transport: ReturnType<typeof createKrakenPostTradeTransport>) {
   advance();
@@ -81,6 +156,58 @@ describe("server-only Kraken Post-Trade transport boundary", () => {
     expect(result.transport.responseFingerprint).toBe(result.evidence.parser.payloadFingerprint);
     expect(result.transport.retrievedAt).toBe(new Date(Date.parse(result.transport.receivedAt) + 1).toISOString());
     expect(result.evidence.selectedTrade.tradeId).toBe("trade-001");
+  });
+
+  it("uses pre-await input snapshots for authorization, request, parsing, package, signal, and allowlist", async () => {
+    type MutableInstrument = { instrumentId: ExternalPaperInstrument["instrumentId"]; baseAssetId: string;
+      quoteCurrency: ExternalPaperInstrument["quoteCurrency"]; venueId: string; venueProductId: string };
+    type MutableSource = { providerId: string; datasetVersion: string; adapterVersion: string };
+    const mutableInstrument: MutableInstrument = { ...binding.instrument };
+    const mutableSource: MutableSource = { ...binding.source };
+    const configuredBinding = { instrument: mutableInstrument, source: mutableSource };
+    const callerInput: { instrument: MutableInstrument; source: MutableSource; tradeId: string; signal?: AbortSignal } = {
+      instrument: mutableInstrument, source: mutableSource, tradeId: "trade-001",
+    };
+    let releaseAuthorization = () => {};
+    let releaseResponse = () => {};
+    let markAuthorizationStarted = () => {};
+    let markRequestStarted = () => {};
+    const authorizationStarted = new Promise<void>((resolve) => { markAuthorizationStarted = resolve; });
+    const requestStarted = new Promise<void>((resolve) => { markRequestStarted = resolve; });
+    const authorizationGate = new Promise<void>((resolve) => { releaseAuthorization = resolve; });
+    const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
+    let authorizedScope: unknown;
+    let requested: KrakenPostTradeHttpRequest | undefined;
+    let requesterSignal: AbortSignal | undefined;
+    const transport = createKrakenPostTradeTransport({
+      bindings: [configuredBinding],
+      now: () => fakeNow,
+      authorize: async (scope) => { authorizedScope = scope; markAuthorizationStarted(); await authorizationGate; return allowSynthetic(); },
+      requester: async (request, signal) => { requested = request; requesterSignal = signal; markRequestStarted(); await responseGate; return reply(); },
+    });
+
+    advance();
+    const pending = transport.fetchEvidence(callerInput);
+    await authorizationStarted;
+    mutableInstrument.venueProductId = "ETH/EUR";
+    mutableSource.providerId = "changed-source";
+    callerInput.instrument = { ...callerInput.instrument, venueProductId: "ETH/GBP" };
+    callerInput.source = { ...callerInput.source, providerId: "replaced-source" };
+    callerInput.tradeId = "different-trade";
+    const replacementSignal = new AbortController();
+    replacementSignal.abort();
+    callerInput.signal = replacementSignal.signal;
+
+    releaseAuthorization();
+    await requestStarted;
+    expect(requesterSignal?.aborted).toBe(false);
+    releaseResponse();
+    const result = await pending;
+    expect(authorizedScope).toMatchObject({ instrument: binding.instrument, source: binding.source, symbol: "ETH/USD" });
+    expect(requested?.path).toBe("/0/public/PostTrade?symbol=ETH%2FUSD&count=1");
+    expect(result).toMatchObject({ status: "EVIDENCE", evidence: {
+      instrument: binding.instrument, source: binding.source, selectedTrade: { tradeId: "trade-001" },
+    } });
   });
 
   it.each([
@@ -155,5 +282,80 @@ describe("server-only Kraken Post-Trade transport boundary", () => {
     advance(1_000);
     expect((await transport.fetchEvidence(input)).status).toBe("EVIDENCE");
     expect(calls).toBe(2);
+  });
+
+  it("runs a successful synthetic response through the actual nodeHttpsRequester path", async () => {
+    const harness = nodeTransport((_options, callback, request) => emitResponse(request, callback));
+    advance();
+    const result = await harness.transport.fetchEvidence(input);
+    expect(result.status).toBe("EVIDENCE");
+    expect(harness.requests).toBe(1);
+    expect(harness.requestOptions).toMatchObject({ protocol: "https:", hostname: "api.kraken.com", port: 443,
+      path: "/0/public/PostTrade?symbol=ETH%2FUSD&count=1", rejectUnauthorized: true, agent: false });
+    expect(harness.activeSignals).toBe(0);
+  });
+
+  it("cleans the actual Node request after connect timeout", async () => {
+    vi.useFakeTimers();
+    const harness = nodeTransport(() => {});
+    advance();
+    const pending = harness.transport.fetchEvidence(input);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await pending).toEqual({ status: "BLOCKED", reason: "CONNECT_TIMEOUT" });
+    expect(harness.destroys).toBeGreaterThan(0);
+    expect(harness.activeSignals).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cleans the actual Node request after total timeout", async () => {
+    vi.useFakeTimers();
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const harness = nodeTransport((_options, _callback, request) => { emitSocket(request); markStarted(); });
+    advance();
+    const pending = harness.transport.fetchEvidence(input);
+    await started;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await pending).toEqual({ status: "BLOCKED", reason: "TIMEOUT" });
+    expect(harness.destroys).toBeGreaterThan(0);
+    expect(harness.activeSignals).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cleans the actual Node request after caller abort", async () => {
+    const controller = new AbortController();
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const harness = nodeTransport((_options, _callback, request) => { emitSocket(request); markStarted(); });
+    advance();
+    const pending = harness.transport.fetchEvidence({ ...input, signal: controller.signal });
+    await started;
+    controller.abort();
+    expect(await pending).toEqual({ status: "BLOCKED", reason: "ABORTED" });
+    expect(harness.destroys).toBeGreaterThan(0);
+    expect(harness.activeSignals).toBe(0);
+  });
+
+  it("rejects streaming overflow and truncated bodies on the actual Node request path", async () => {
+    const oversized = nodeTransport((_options, callback, request) => emitResponse(request, callback, {
+      chunks: [Buffer.alloc(KRAKEN_POST_TRADE_MAX_BODY_BYTES + 1)],
+    }));
+    advance();
+    expect(await oversized.transport.fetchEvidence(input)).toEqual({ status: "BLOCKED", reason: "RESPONSE_TOO_LARGE" });
+    expect(oversized.destroys).toBeGreaterThan(0);
+    expect(oversized.activeSignals).toBe(0);
+
+    const truncated = nodeTransport((_options, callback, request) => emitResponse(request, callback, { complete: false }));
+    advance();
+    expect(await truncated.transport.fetchEvidence(input)).toEqual({ status: "BLOCKED", reason: "NETWORK_ERROR" });
+    expect(truncated.activeSignals).toBe(0);
+  });
+
+  it("rejects redirects in the actual Node request path without following them", async () => {
+    const harness = nodeTransport((_options, callback, request) => emitResponse(request, callback, { statusCode: 302 }));
+    advance();
+    expect(await harness.transport.fetchEvidence(input)).toEqual({ status: "BLOCKED", reason: "HTTP_REDIRECT" });
+    expect(harness.requests).toBe(1);
+    expect(harness.activeSignals).toBe(0);
   });
 });
