@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { paperDecisionReasonLabel } from "@/components/standing-paper-decision-labels";
 import { formatMoney, money } from "@/domain/financial/money";
 import type { StandingPaperStatus, StandingPaperStatusReadModel, StandingPaperPolicyStatusCard } from "@/application/paper-trading/standing-paper-status";
 import { StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
@@ -141,16 +143,7 @@ const amount = (minor: string | null) => minor === null ? "Ikke tilgjengelig" : 
 const dateLabel = (value: string | null) => value ? new Date(value).toLocaleString("nb-NO", { timeZone: "UTC", year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : "Ikke tilgjengelig";
 const titleCase = (value: string) => value.replaceAll("_", " ").toLocaleLowerCase("nb-NO").replace(/^./, character => character.toLocaleUpperCase("nb-NO"));
 const percentFromBps = (value: string) => { const bps = BigInt(value); return `${bps / 100n},${String(bps % 100n).padStart(2, "0")}%`; };
-const exitReasonLabel = (reason: string) => ({
-  SELL_STOP_LOSS: "Stop-loss utløst", SELL_TAKE_PROFIT: "Take-profit utløst", SELL_MAX_HOLD: "Maksimal holdetid nådd",
-  SELL_ORDER_LIMIT_REJECTED: "Salg avvist av ordregrense", HOLD_NO_EXIT_TRIGGER: "Ingen exit-regel utløst",
-  POLICY_NOT_ACTIVE: "Policyen var ikke aktiv", PRICE_MISSING: "Syntetisk pris manglet", PRICE_STALE: "Prisen var for gammel",
-  INSTRUMENT_NOT_ALLOWED: "Instrumentet var utenfor mandatet", ORDER_LIMIT_EXCEEDED: "Ordregrensen var overskredet",
-  POSITION_LIMIT_EXCEEDED: "Posisjonsgrensen var overskredet", EXPOSURE_LIMIT_EXCEEDED: "Samlet eksponeringsgrense var overskredet",
-  CAPITAL_BUDGET_EXCEEDED: "Kapitalbudsjettet var overskredet", LOSS_LIMIT_EXCEEDED: "Beregnet eller forventet tap overskred tapsgrensen",
-  BUY_RISK_REJECTED: "Kjøp avvist av risikokontrollen", M1_RISK_REJECTED: "Ordre avvist av risikokontrollen",
-  BUY_FILLED: "Simulert kjøp gjennomført", APPROVED: "Godkjent innenfor mandatet",
-} as Record<string, string>)[reason] ?? reason;
+
 
 function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; onRefresh?: () => Promise<void> }) {
   const [reviewing, setReviewing] = useState(false);
@@ -304,7 +297,7 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
 function Limit({ label, value }: { label: string; value: string }) { return <div className="flex min-w-0 justify-between gap-3"><dt className="min-w-0 break-words text-[var(--muted)]">{label}</dt><dd className="min-w-0 max-w-[55%] break-words text-right font-medium">{value}</dd></div>; }
 function HistoryList({ card }: { card: StandingPaperPolicyStatusCard }) {
   return <div className="grid gap-5 lg:grid-cols-2">
-    <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Siste beslutninger</h3>{card.decisions.length ? <ol className="mt-3 space-y-3">{card.decisions.map(item => <li key={item.decisionId} className="rounded-lg border border-[var(--border)] p-3 text-sm"><p className="break-all font-mono text-xs">{item.orderId}</p><p className="mt-2">{item.action ?? "BUY"} · {item.outcome === "SIMULATED_FILLED" ? "Simulert fill" : item.outcome === "HOLD" ? "Behold" : "Avvist"}</p><p className="mt-1 text-xs text-[var(--muted)]">Årsak: {exitReasonLabel(item.reasonCode)} · {dateLabel(item.recordedAt)}</p></li>)}</ol> : <p className="mt-3 text-sm text-[var(--muted)]">Ingen lagrede beslutninger.</p>}</section>
+    <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Siste beslutninger</h3>{card.decisions.length ? <ol className="mt-3 space-y-3">{card.decisions.map(item => <li key={item.orderId} className="rounded-lg border border-[var(--border)] p-3 text-sm"><p className="break-all font-mono text-xs">{item.orderId}</p><p className="mt-2">{item.action ?? "BUY"} · {item.outcome === "SIMULATED_FILLED" ? "Simulert fill" : item.outcome === "HOLD" ? "Behold" : "Avvist"}</p><p className="mt-1 text-xs text-[var(--muted)]">Årsak: {paperDecisionReasonLabel(item.reasonCode)} · {dateLabel(item.recordedAt)}</p><Link prefetch={false} href={`/dashboard/paper/decision?policy=${encodeURIComponent(card.policyId)}&order=${encodeURIComponent(item.orderId)}`} className="mt-2 inline-block underline">Åpne beslutningsdetalj</Link></li>)}</ol> : <p className="mt-3 text-sm text-[var(--muted)]">Ingen lagrede beslutninger.</p>}</section>
     <section className="min-w-0 rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Siste simulerte fills</h3>{card.fills.length ? <ol className="mt-3 space-y-3">{card.fills.map(item => <li key={item.fillId} className="rounded-lg border border-[var(--border)] p-3 text-sm"><p className="break-all font-mono text-xs">{item.fillId}</p><p className="mt-2">{item.side ?? "BUY"} · {item.instrumentId} · {item.quantityAtoms} atomiske enheter (skala {item.quantityScale})</p><p className="mt-1">Brutto {amount(item.grossMinor)} · gebyr {amount(item.feeMinor)}{item.realizedPnlMinor === undefined ? "" : ` · realisert resultat ${amount(item.realizedPnlMinor)}`}</p><p className="mt-1 text-xs text-[var(--muted)]">Simulert {dateLabel(item.simulatedAt)} · {item.executionPolicyVersion}</p></li>)}</ol> : <p className="mt-3 text-sm text-[var(--muted)]">Ingen simulerte fills.</p>}</section>
   </div>;
 }

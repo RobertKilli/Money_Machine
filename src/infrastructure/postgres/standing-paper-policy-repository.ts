@@ -2,12 +2,13 @@ import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
 import postgres, { type Sql, type TransactionSql } from "postgres";
-import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
+import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState, type PaperCycleDecision } from "@/application/backtest/run-deterministic-backtest";
 import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, standingPaperActivationConfirmationHash, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { assertValidStandingPaperCycleConfiguration } from "@/domain/risk/standing-paper-exit-policy";
 import { FIXTURE_ASSETS, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import type { ContributionEvent } from "@/application/backtest/run-deterministic-backtest";
-import { consumeFifoLots, type FifoLotConsumption } from "@/domain/portfolio/portfolio-projection";
+import { consumeFifoLots, type DisposalEvidence, type FifoLotConsumption } from "@/domain/portfolio/portfolio-projection";
+import { projectStandingPaperDecisionDetail, type StandingPaperDecisionDetail, type StandingPaperLedgerSettlement } from "@/application/paper-trading/standing-paper-decision-detail";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel, type StandingPaperPolicyStatusCard, type StandingPaperStatusReadModel, type StandingPaperStatusDecision, type StandingPaperStatusFill, type StandingPaperWorkerInstanceStatus, type StandingPaperWorkerInstanceStatusRecord } from "@/application/paper-trading/standing-paper-status";
 
 type StoredPolicy = { policy_json: unknown; status: StandingPaperPolicy["status"]; financial_account_id: string };
@@ -399,6 +400,79 @@ export class StandingPaperPolicyRepository {
   /** Owner-scoped, repeatable-read status projection with database-timed,
    * per-process worker evidence. Missing rows remain UNKNOWN; old full rounds
    * are not treated as heartbeat evidence. */
+  async loadOwnedDecisionDetail(actorId: string, policyId: string, orderId: string): Promise<StandingPaperDecisionDetail | null> {
+    return this.client.begin(async tx => {
+      await tx`set transaction isolation level repeatable read, read only`;
+      await tx`set local role authenticated`;
+      await tx`select set_config('request.jwt.claim.sub', ${actorId}, true)`;
+      const [owned] = await tx<{ financial_account_id: string }[]>`
+        select p.financial_account_id from public.standing_paper_policies p
+        join public.financial_accounts a on a.id=p.financial_account_id
+        where p.policy_id=${policyId} and a.owner_id=${actorId} and a.mode='PAPER' and a.base_currency_code='NOK'`;
+      if (!owned) return null;
+
+      const accountId = owned.financial_account_id;
+      const scope = tx`policy_id=${policyId} and financial_account_id=${accountId} and order_id=${orderId}`;
+      const cycleSchema = await this.hasCycleV2Schema(tx);
+      type DecisionRow = Parameters<typeof validateDecisionRow>[0] & { run_id: string };
+      type CycleRow = Parameters<typeof validateCycleDecisionRow>[0] & { run_id: string };
+      const [legacy] = await tx<DecisionRow[]>`select * from public.standing_paper_decisions where ${scope}`;
+      const [cycle, extraCycle] = cycleSchema ? await tx<CycleRow[]>`select * from public.standing_paper_cycle_decisions where ${scope} limit 2` : [];
+      if (extraCycle || (legacy && cycle && legacy.run_id !== cycle.run_id)) throw new Error("PAPER_MATERIAL_INVALID");
+      const runId = (cycle ?? legacy)?.run_id;
+      if (!runId) return null;
+
+      const policyStatus = legacy ? validateDecisionRow(legacy, policyId, accountId) : undefined;
+      const cycleStatus = cycle ? validateCycleDecisionRow(cycle, policyId, accountId) : undefined;
+      const decision = policyStatus?.outcome === "REJECTED" ? policyStatus : (cycleStatus ?? policyStatus)!;
+      const policyDecision = legacy ? decode(legacy.decision_json) as BacktestResult["paperPolicyDecisions"][number] : undefined;
+      const cycleDecision = cycle ? decode(cycle.decision_json) as PaperCycleDecision : undefined;
+      const [run] = await tx<{ material: unknown; created_at: Date }[]>`
+        select jsonb_build_object('config', result_json->'config', 'decisions', result_json->'decisions') as material, created_at
+        from public.standing_paper_runs where id=${runId} and policy_id=${policyId} and financial_account_id=${accountId}`;
+      if (!run) throw new Error("PAPER_MATERIAL_INVALID");
+
+      type FillRow = Parameters<typeof validateFillRow>[0] & { ledger_transaction_id: string };
+      const [savedFill] = decision.outcome !== "SIMULATED_FILLED" ? [] : cycleSchema
+        ? await tx<FillRow[]>`select * from public.standing_paper_fills where ${scope} and run_id=${runId}`
+        : await tx<FillRow[]>`select *, 'BUY' as side, null as disposal_json from public.standing_paper_fills where ${scope} and run_id=${runId}`;
+      const fill = savedFill ? validateFillRow(savedFill, policyId, accountId) : null;
+      const execution = savedFill ? decode(savedFill.execution_json) as BacktestResult["executions"][number] : undefined;
+      let cashChangeMinor: string | null = null;
+      let disposal: DisposalEvidence | undefined;
+      let settlement: StandingPaperLedgerSettlement | null = null;
+      if (savedFill && execution) {
+        const sell = "side" in execution && execution.side === "SELL";
+        const cash = ("netCashCredit" in execution ? execution.netCashCredit : execution.totalCashDebit).minorUnits;
+        cashChangeMinor = (sell ? cash : -cash).toString();
+        disposal = sell ? decode(savedFill.disposal_json) as DisposalEvidence : undefined;
+        const fillEvidence = record(disposal ?? decode(savedFill.acquisition_json));
+        if (fillEvidence.ledgerTransactionId !== savedFill.ledger_transaction_id) throw new Error("PAPER_MATERIAL_INVALID");
+        const [journal] = await tx<{ id: string; transaction_type: string; occurred_at: Date }[]>`
+          select id, transaction_type, occurred_at from public.ledger_transactions
+          where id=${savedFill.ledger_transaction_id} and financial_account_id=${accountId}
+          and transaction_type=${sell ? "SIMULATED_SELL_SETTLEMENT" : "SIMULATED_BUY_SETTLEMENT"}`;
+        if (journal) {
+          const entries = await tx<{ id: string; code: string; direction: string; amount_atoms: string; commodity: string; created_at: Date }[]>`
+            select e.id, a.code, e.direction, e.amount_atoms::text,
+              coalesce(a.commodity_currency_code, a.commodity_asset_id) as commodity, e.created_at
+            from public.ledger_entries e join public.ledger_accounts a on a.id=e.ledger_account_id
+            where e.ledger_transaction_id=${journal.id} and a.financial_account_id=${accountId} order by a.code, e.id`;
+          settlement = {
+            id: journal.id, type: journal.transaction_type, occurredAt: validDate(journal.occurred_at).toISOString(),
+            entries: entries.map(entry => ({ id: entry.id, code: entry.code, direction: entry.direction, amountAtoms: entry.amount_atoms,
+              commodity: entry.commodity, recordedAt: validDate(entry.created_at).toISOString() })),
+          };
+        }
+      }
+      return projectStandingPaperDecisionDetail({
+        policyId, accountId, decision, policyDecision, cycleDecision,
+        run: decode(run.material) as Partial<Pick<BacktestResult, "config" | "decisions">>,
+        roundRecordedAt: validDate(run.created_at).toISOString(), fill, cashChangeMinor, execution, disposal, settlement,
+      });
+    });
+  }
+
   async loadOwnedStatus(actorId: string): Promise<StandingPaperStatusReadModel> {
     return this.client.begin(async tx => {
       await tx`set transaction isolation level repeatable read, read only`;
