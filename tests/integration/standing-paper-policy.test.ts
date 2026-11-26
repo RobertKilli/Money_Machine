@@ -162,6 +162,13 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(status.policies).toHaveLength(1);
     expect(status.policies[0]!.status).toBe("AVAILABLE");
     expect(status.policies[0]!.workerStatus).toBe("ENDED");
+    const order = status.policies[0]!.decisions.find(item => item.outcome === "SIMULATED_FILLED")!;
+    await expect(f.repository.loadOwnedDecisionDetail(f.ownerId, f.policy.policyId, order.orderId)).resolves.toMatchObject({
+      fill: { side: "BUY", cashChangeMinor: expect.stringMatching(/^-/) },
+      settlement: { type: "SIMULATED_BUY_SETTLEMENT", entries: expect.arrayContaining([expect.objectContaining({ code: "CASH" })]) },
+      versions: { fifo: "fifo-cost-basis/v1" },
+      risk: { maxOrderMinor: f.policy.maxOrderMinor.toString() },
+    });
   });
 
   it.skipIf(!preCycleMode)("rejects cycle-v2 before heartbeat or writes when its migration is absent", async () => {
@@ -827,6 +834,18 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
         expect.objectContaining({ outcome: "SIMULATED_FILLED", reasonCode: "SELL_STOP_LOSS" }),
         expect.objectContaining({ outcome: "REJECTED", reasonCode: "LOSS_LIMIT_EXCEEDED" }),
       ]));
+      const sell = status.policies[0]!.decisions.find(item => item.reasonCode === "SELL_STOP_LOSS")!;
+      await expect(f.repository.loadOwnedDecisionDetail(f.ownerId, f.policy.policyId, sell.orderId)).resolves.toMatchObject({
+        decision: { action: "SELL", reasonCode: "SELL_STOP_LOSS" },
+        fill: { cashChangeMinor: "1692", realizedPnlMinor: "-2000" },
+        settlement: { type: "SIMULATED_SELL_SETTLEMENT" },
+        fifo: [expect.objectContaining({ costBasisMinor: "3692" })],
+      });
+      const rejected = status.policies[0]!.decisions.find(item => item.reasonCode === "LOSS_LIMIT_EXCEEDED")!;
+      await expect(f.repository.loadOwnedDecisionDetail(f.ownerId, f.policy.policyId, rejected.orderId)).resolves.toMatchObject({
+        instrumentId: global, fill: null, settlement: null,
+        risk: { currentLossMinor: "2000", projectedLossMinor: "2103", maxLossMinor: "2000" },
+      });
     }
     const restarted = new StandingPaperPolicyRepository(testUrl!);
     repositories.push(restarted);
@@ -1194,6 +1213,9 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(two.status).toBe("NO_ROUNDS");
     expect(two.policies.map(policy => policy.policyId)).toEqual([policyTwo.policyId]);
     expect(two.policies[0]!.analytics).toBeNull();
+    const firstOrder = one.policies[0]!.decisions[0]!.orderId;
+    await expect(secondRepository.loadOwnedDecisionDetail(ownerTwo, first.policy.policyId, firstOrder)).resolves.toBeNull();
+    await expect(secondRepository.loadOwnedDecisionDetail(ownerOne, first.policy.policyId, firstOrder)).resolves.toMatchObject({ policyId: first.policy.policyId });
     const ownerOneViaSecondConnection = await secondRepository.loadOwnedStatus(ownerOne);
     expect(ownerOneViaSecondConnection).toMatchObject({ status: "AVAILABLE", policies: [{ policyId: first.policy.policyId }] });
     expect(ownerOneViaSecondConnection.policies.some(policy => policy.policyId === policyTwo.policyId)).toBe(false);

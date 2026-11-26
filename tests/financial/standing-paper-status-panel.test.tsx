@@ -1,4 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { projectStandingPaperDecisionDetail } from "@/application/paper-trading/standing-paper-decision-detail";
+import { StandingPaperDecisionDetailView } from "@/components/standing-paper-decision-detail";
 import { describe, expect, it, vi } from "vitest";
 import { runDeterministicBacktest } from "@/application/backtest/run-deterministic-backtest";
 import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel } from "@/application/paper-trading/standing-paper-status";
@@ -117,6 +119,33 @@ describe("standing paper status view", () => {
     });
     expect(BigInt(card.analytics!.realizedPnlMinor) + BigInt(card.analytics!.unrealizedPnlMinor!))
       .toBe(BigInt(result.endingState.nav!) - state.netContributionsMinor);
+    const cycleDecision = result.paperCycleDecisions!.find(item => item.orderId === sale.fillId)!;
+    const fill = card.fills.find(item => item.fillId === sale.fillId)!;
+    const detail = projectStandingPaperDecisionDetail({
+      policyId: cyclePolicy.policyId, accountId: cyclePolicy.financialAccountId,
+      decision: card.decisions.find(item => item.orderId === sale.fillId)!,
+      cycleDecision, run: result, roundRecordedAt: cycleAt, fill, disposal: sale,
+      cashChangeMinor: (sale.grossMinor - sale.feeMinor).toString(), settlement: null,
+    });
+    expect(detail.fifo).toEqual(sale.lotConsumptions.map(lot => ({
+      fillId: lot.fillId, quantityAtoms: lot.quantityAtoms.toString(), costBasisMinor: lot.costBasisMinor.toString(),
+    })));
+    expect(detail.fill?.realizedPnlMinor).toBe(sale.realizedPnlMinor.toString());
+    expect(detail.risk.stopLossBps).toBe("2000");
+    const html = renderToStaticMarkup(<StandingPaperDecisionDetailView detail={detail} />);
+    expect(html).toContain("Take-profit utløst");
+    expect(html).toContain("Forbrukte FIFO-lotter");
+    expect(html).toContain("Realisert resultat");
+  });
+
+  it("shows only saved evidence for a legacy rejection with no linked strategy or fill", () => {
+    const decision = projectedCard.decisions.find(item => item.reasonCode === "PRICE_STALE")!;
+    const detail = projectStandingPaperDecisionDetail({ policyId: testPolicy.policyId, accountId: testPolicy.financialAccountId,
+      decision, roundRecordedAt: testAt, fill: null, cashChangeMinor: null, settlement: null });
+    expect(detail.instrumentId).toBeNull();
+    expect(detail.price).toMatchObject({ atoms: null, availableAt: null });
+    expect(detail.risk).toMatchObject({ maxLossMinor: null, maxOrderMinor: null, projectedLossMinor: null });
+    expect(renderToStaticMarkup(<StandingPaperDecisionDetailView detail={detail} />)).toContain("Ingen fill for denne beslutningen");
   });
   it("validates and renders backend-projected v2 BUY, SELL, turnover, and realized result", () => {
     expect(parseStandingPaperStatus(cycleModel)).toEqual(cycleModel);
