@@ -219,6 +219,8 @@ The adapter receipt carries a source record ID, a decimal price string in quote 
 
 The normalized evidence records `EXTERNAL_MARKET`, the original and normalized price, timestamps, identity and source. The decision evidence binds the price fingerprint to the decision ID, cutoff, account currency and age limit for a future caller to persist. `AVAILABLE` describes conformance of that receipt at that cutoff. It conveys no approval to use a source or execute a round. The existing worker continues to use `mm-fixture-market-data/v1` and `SYNTHETIC_FIXTURE` throughout its current execution path.
 
+An offline caller-supplied evidence package prototype, including replay and later decision/fill linkage boundaries, is documented in [Standing PAPER external price evidence package](STANDING_PAPER_PRICE_EVIDENCE_PACKAGE.md). It does not confer source-origin verification, source approval, or decision readiness.
+
 ### Reuse and remaining requirements
 
 This boundary reuses the financial `Price` and currency contracts and the ingestion timestamp and canonical fingerprint helpers. The M5 adapter and transport contracts offer patterns for scoped identity, receipt provenance and bounded transport. Their existing candidates and daily metric products do not authorize or establish a last-trade or bid/ask feed for PAPER. Coinbase remains blocked. The separate [standing PAPER source review](STANDING_PAPER_MARKET_SOURCE_REVIEW.md) names Kraken Spot Post-Trade `LAST_TRADE` as a conditional technical candidate only; latest-trade selection, pair identity, timestamp normalization, rights and retention/display permission remain blockers. Permission blocks external acquisition and use; offline synthetic implementation may continue. No source is approved.
