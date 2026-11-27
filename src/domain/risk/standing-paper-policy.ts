@@ -12,9 +12,15 @@ export interface PaperProfitRecordingConfiguration {
   readonly reinvestmentBps: bigint;
 }
 
+export interface PaperReserveProtectionConfiguration {
+  readonly version: "paper-reserve-protection/v1";
+  readonly mode: "PAPER_ONLY";
+  readonly enabled: true;
+}
+
 export const STANDING_PAPER_POLICY_VERSION = "standing-paper-policy/v1";
 export type PaperPolicyStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "STOPPED";
-export type PaperDecisionCode = "POLICY_NOT_ACTIVE" | "PRICE_MISSING" | "PRICE_STALE" | "INSTRUMENT_NOT_ALLOWED" | "ORDER_LIMIT_EXCEEDED" | "POSITION_LIMIT_EXCEEDED" | "EXPOSURE_LIMIT_EXCEEDED" | "CAPITAL_BUDGET_EXCEEDED" | "LOSS_LIMIT_EXCEEDED" | "M1_RISK_REJECTED" | "APPROVED";
+export type PaperDecisionCode = "POLICY_NOT_ACTIVE" | "PRICE_MISSING" | "PRICE_STALE" | "INSTRUMENT_NOT_ALLOWED" | "ORDER_LIMIT_EXCEEDED" | "POSITION_LIMIT_EXCEEDED" | "EXPOSURE_LIMIT_EXCEEDED" | "CAPITAL_BUDGET_EXCEEDED" | "LOSS_LIMIT_EXCEEDED" | "RESERVE_PROTECTION_BLOCKED" | "M1_RISK_REJECTED" | "APPROVED";
 
 export interface StandingPaperPolicy {
   readonly policyId: string;
@@ -33,6 +39,7 @@ export interface StandingPaperPolicy {
   readonly cycleConfiguration?: StandingPaperCycleConfiguration;
   /** Records entitlements only; it does not constrain worker spending yet. */
   readonly profitAllocationConfiguration?: PaperProfitRecordingConfiguration;
+  readonly reserveProtectionConfiguration?: PaperReserveProtectionConfiguration;
 }
 
 export interface PaperPolicyEvidence {
@@ -54,6 +61,14 @@ export interface PaperPolicyEvidence {
     readonly fillAssumption: "SIMULATED_FULL_OR_NONE";
   };
   readonly reservedOpenOrdersMinor: string;
+  readonly reserveProtection?: {
+    readonly version: PaperReserveProtectionConfiguration["version"];
+    readonly ledgerCashMinor: string;
+    readonly protectedReserveMinor: string | null;
+    readonly openOrderReservationsMinor: string;
+    readonly buyingPowerMinor: string;
+    readonly orderDebitMinor: string;
+  };
   readonly resultingExposureMinor: string;
   readonly currentLossMinor: string;
   readonly projectedLossMinor?: string;
@@ -72,6 +87,7 @@ export interface PaperPolicyContext {
   readonly capitalBudgetUsageMinor?: bigint;
   readonly capitalBudgetProspectiveDebitMinor?: bigint;
   readonly currentCashMinor: bigint;
+  readonly protectedReserveMinor?: bigint;
   readonly currentPositionMinor: bigint;
   readonly currentGrossExposureMinor: bigint;
   readonly currentLossMinor: bigint;
@@ -115,7 +131,14 @@ export function assertValidPaperPolicy(policy: StandingPaperPolicy): void {
       throw new Error("PAPER_PROFIT_CONFIGURATION_INVALID");
     }
   }
+  if (policy.reserveProtectionConfiguration !== undefined && (!policy.profitAllocationConfiguration?.enabled ||
+    !policy.reserveProtectionConfiguration || policy.reserveProtectionConfiguration.version !== "paper-reserve-protection/v1" || policy.reserveProtectionConfiguration.mode !== "PAPER_ONLY" ||
+    policy.reserveProtectionConfiguration.enabled !== true || Object.keys(policy.reserveProtectionConfiguration).length !== 3)) {
+    throw new Error("PAPER_RESERVE_PROTECTION_CONFIGURATION_INVALID");
+  }
 }
+
+const reserveConfirmationMaterial = ({ version, mode, enabled }: PaperReserveProtectionConfiguration) => ({ version, mode, enabled });
 
 /** Hashes the exact DRAFT terms the owner sees before first activation. */
 export function standingPaperActivationConfirmationHash(policy: StandingPaperPolicy): string {
@@ -150,6 +173,7 @@ export function standingPaperActivationConfirmationHash(policy: StandingPaperPol
       enabled: policy.profitAllocationConfiguration.enabled,
       reinvestmentBps: policy.profitAllocationConfiguration.reinvestmentBps.toString(),
     } } : {}),
+    ...(policy.reserveProtectionConfiguration ? { reserveProtectionConfiguration: reserveConfirmationMaterial(policy.reserveProtectionConfiguration) } : {}),
   })).digest("hex");
 }
 
@@ -164,7 +188,8 @@ export function paperProfitAllocationPolicy(policy: StandingPaperPolicy, ownerId
 /** Separate consent to RECORD_ONLY terms; generic dashboard activation cannot supply it. */
 export function paperProfitAllocationConfirmationHash(policy: StandingPaperPolicy, ownerId: string): string {
   const model = projectPaperProfitAllocation({ policy: paperProfitAllocationPolicy(policy, ownerId), settlements: [] });
-  return createHash("sha256").update(JSON.stringify({ recordingMode: "RECORD_ONLY", policyHash: model.policyHash })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ recordingMode: "RECORD_ONLY", policyHash: model.policyHash,
+    ...(policy.reserveProtectionConfiguration ? { reserveProtection: reserveConfirmationMaterial(policy.reserveProtectionConfiguration) } : {}) })).digest("hex");
 }
 
 export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: ProposedOrder, context: PaperPolicyContext): PaperPolicyEvidence {
@@ -175,6 +200,16 @@ export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: Pr
     (context.projectedLossMinor !== undefined && context.projectedLossMinor < 0n) || context.prospectiveOrderDebitMinor <= 0n) throw new Error("PAPER_POLICY_CONTEXT_INVALID");
   const price = context.prices.find((item) => item.recordId === order.referencePriceRecordId && item.assetId === order.assetId);
   const reserved = context.openOrderReservationsMinor.reduce((sum, value) => sum + value, 0n);
+  const reserveMinor = context.protectedReserveMinor;
+  const availableAfterReserve = reserveMinor !== undefined && reserveMinor >= 0n
+    ? context.currentCashMinor - reserved - reserveMinor : 0n;
+  const buyingPowerMinor = availableAfterReserve > 0n ? availableAfterReserve : 0n;
+  const reserveProtection = policy.reserveProtectionConfiguration && order.side === "BUY" ? Object.freeze({
+    version: policy.reserveProtectionConfiguration.version, ledgerCashMinor: context.currentCashMinor.toString(),
+    protectedReserveMinor: reserveMinor !== undefined && reserveMinor >= 0n ? reserveMinor.toString() : null,
+    openOrderReservationsMinor: reserved.toString(), buyingPowerMinor: buyingPowerMinor.toString(),
+    orderDebitMinor: context.prospectiveOrderDebitMinor.toString(),
+  }) : undefined;
   const exposure = context.currentGrossExposureMinor + reserved + context.prospectiveOrderDebitMinor;
   const selectedAsset = context.assets.find((asset) => asset.assetId === order.assetId);
   const digest = createHash("sha256").update(JSON.stringify({
@@ -200,6 +235,7 @@ export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: Pr
     selectedAsset: selectedAsset ? { ...selectedAsset, minimumQuantityIncrementAtoms: selectedAsset.minimumQuantityIncrementAtoms.toString(), targetWeightBps: selectedAsset.targetWeightBps.toString() } : null,
     priceRecord: price ? { recordId: price.recordId, assetId: price.assetId, priceAtoms: price.price.priceAtoms.toString(), priceScale: price.price.priceScale, currencyCode: price.price.currencyCode, datasetVersion: price.datasetVersion, observedAt: price.observedAt.toISOString(), availableAt: price.availableAt.toISOString(), ingestedAt: price.ingestedAt.toISOString() } : null,
     strategyVersion: order.strategyVersion, assetRegistryVersion: order.registryVersion,
+    ...(reserveProtection ? { reserveProtection } : {}),
     now: context.now.toISOString(), committed: context.committedCapitalMinor.toString(),
     ...(context.capitalBudgetUsageMinor === undefined ? {} : { capitalBudgetUsage: context.capitalBudgetUsageMinor.toString() }),
     ...(context.capitalBudgetProspectiveDebitMinor === undefined ? {} : { capitalBudgetProspectiveDebit: context.capitalBudgetProspectiveDebitMinor.toString() }),
@@ -215,6 +251,7 @@ export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: Pr
   else if (context.prospectiveOrderDebitMinor > policy.maxOrderMinor) reasonCode = "ORDER_LIMIT_EXCEEDED";
   else if (context.currentPositionMinor + context.prospectiveOrderDebitMinor > policy.maxPositionMinor) reasonCode = "POSITION_LIMIT_EXCEEDED";
   else if (exposure > policy.maxGrossExposureMinor) reasonCode = "EXPOSURE_LIMIT_EXCEEDED";
+  else if (reserveProtection && (reserveProtection.protectedReserveMinor === null || context.prospectiveOrderDebitMinor > buyingPowerMinor)) reasonCode = "RESERVE_PROTECTION_BLOCKED";
   else if ((context.capitalBudgetUsageMinor ?? context.committedCapitalMinor) + reserved + (context.capitalBudgetProspectiveDebitMinor ?? context.prospectiveOrderDebitMinor) > policy.capitalBudgetMinor || context.currentCashMinor < reserved + context.prospectiveOrderDebitMinor) reasonCode = "CAPITAL_BUDGET_EXCEEDED";
   else if (context.currentLossMinor > policy.maxLossMinor || (context.projectedLossMinor ?? 0n) > policy.maxLossMinor) reasonCode = "LOSS_LIMIT_EXCEEDED";
   return Object.freeze({ policyId: policy.policyId, policyVersion: policy.version, inputHash: digest,
@@ -222,6 +259,7 @@ export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: Pr
     referencePriceAtoms: price?.price.priceAtoms.toString() ?? null, referencePriceScale: price?.price.priceScale ?? null,
     datasetVersion: price?.datasetVersion ?? null, strategyVersion: order.strategyVersion, assetRegistryVersion: order.registryVersion,
     executionPolicyVersions: Object.freeze({ execution: SIMULATION_EXECUTION_POLICY_VERSION, spreadSlippage: SPREAD_SLIPPAGE_POLICY_VERSION, fee: FEE_POLICY_VERSION, rounding: M1_ROUNDING_POLICY_VERSION, fillAssumption: "SIMULATED_FULL_OR_NONE" }),
+    ...(reserveProtection ? { reserveProtection } : {}),
     reservedOpenOrdersMinor: reserved.toString(), resultingExposureMinor: exposure.toString(),
     ...(context.projectedLossMinor === undefined ? {} : { projectedLossMinor: context.projectedLossMinor.toString() }),
     currentLossMinor: context.currentLossMinor.toString(), maxLossMinor: policy.maxLossMinor.toString(), reasonCode,

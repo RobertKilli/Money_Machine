@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { executeSimulationBuy, executeSimulationSell, type SimulationFill, type SimulationSellFill } from "@/domain/execution/simulation-execution";
+import { projectPaperProfitAllocation, type PaperProfitAllocationPolicy, type PaperProfitAllocationProjection, type PaperProfitSettlement } from "@/domain/financial/paper-profit-allocation";
 import { money } from "@/domain/financial/money";
 import { createLedgerTransaction, createVirtualDepositTransaction, ledgerEntry, type LedgerAccount, type LedgerTransaction } from "@/domain/ledger/ledger";
 import { planFifoLotConsumption, projectPortfolio, type AcquisitionEvidence, type DisposalEvidence, type PortfolioEvidence, type PortfolioProjection, type PortfolioLedgerEvidence } from "@/domain/portfolio/portfolio-projection";
 import { assessProposal } from "@/domain/risk/m1-risk";
-import { assessStandingPaperPolicy, type PaperPolicyEvidence, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { assessStandingPaperPolicy, paperProfitAllocationPolicy, type PaperPolicyEvidence, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { basisPoints } from "@/domain/financial/basis-points";
 import { feeCeiling, floorDivision, buyExecutionPrice, buySettlementNotional } from "@/domain/financial/rounding";
 import { CONTRIBUTION_REBALANCING_VERSION, FIXTURE_ASSETS, FIXTURE_ASSET_REGISTRY_VERSION, FIXTURE_DATASET_VERSION, latestAvailablePrice, contributionRebalancing, type FixturePriceObservation, type DecisionPortfolioState, type StrategyDecision } from "@/domain/strategy/fixture-assets";
@@ -37,6 +38,7 @@ export interface BacktestResult {
   readonly paperPolicyDecisions: readonly { readonly decisionId: string; readonly orderId: string; readonly outcome: "SIMULATED_FILLED" | "REJECTED"; readonly riskCodes: readonly string[]; readonly evidence: PaperPolicyEvidence }[];
   readonly persistentState: DeterministicBacktestState;
   readonly paperCycleDecisions?: readonly PaperCycleDecision[];
+  readonly reserveProjectionFingerprint?: string;
 }
 
 /** Ledger-derived continuation material; serializable at database boundaries. */
@@ -109,7 +111,29 @@ export function quantityWithinSellOrderLimit(input: { assetId: string; available
   return gross.minorUnits > fee.minorUnits ? quantityAtoms : 0n;
 }
 
-export function runDeterministicBacktest(config: BacktestRunConfig, prices: readonly FixturePriceObservation[], initialState?: DeterministicBacktestState): BacktestResult {
+export function paperProfitSettlementsFromDisposals(disposals: readonly DisposalEvidence[], policy: PaperProfitAllocationPolicy): PaperProfitSettlement[] {
+  return [...disposals].sort((a, b) => a.executedAt.getTime() - b.executedAt.getTime() || a.fillId.localeCompare(b.fillId))
+    .map((disposal, index) => ({
+      type: "SIMULATED_SELL_SETTLEMENT",
+      settlementId: disposal.ledgerTransactionId,
+      fillId: disposal.fillId,
+      financialAccountId: policy.financialAccountId,
+      ownerId: policy.ownerId,
+      currency: disposal.currency,
+      sequence: BigInt(index + 1),
+      settledAt: disposal.executedAt.toISOString(),
+      grossProceedsMinor: disposal.grossMinor,
+      sellFeeMinor: disposal.feeMinor,
+      fifoCostBasisMinor: disposal.lotConsumptions.reduce((total, item) => total + item.costBasisMinor, 0n),
+    }));
+}
+
+export function runDeterministicBacktest(
+  config: BacktestRunConfig,
+  prices: readonly FixturePriceObservation[],
+  initialState?: DeterministicBacktestState,
+  reconciledProfit?: PaperProfitAllocationProjection,
+): BacktestResult {
   validate(config);
   const canonicalConfig = canonical({ ...config, contributionEvents: [...config.contributionEvents].sort((a,b) => date(a.availableAt).getTime()-date(b.availableAt).getTime() || a.eventId.localeCompare(b.eventId)), valuationTimestamps: [...config.valuationTimestamps].sort() });
   const configHash = hash(canonicalConfig); const runId = hash(`${configHash}:${config.marketDatasetVersion}`);
@@ -121,6 +145,14 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
   const cycleMode = config.paperCycleContractVersion === PAPER_CYCLE_CONTRACT_VERSION;
   const ledger: PortfolioLedgerEvidence[] = [...(initialState?.ledger ?? [])]; const journals: LedgerTransaction[] = []; const acquisitions: AcquisitionEvidence[] = [...(initialState?.acquisitions ?? [])];
   const disposals: DisposalEvidence[] = [...(initialState?.disposals ?? [])];
+  const protectedPolicy = config.standingPaperPolicy?.reserveProtectionConfiguration ? config.standingPaperPolicy : undefined;
+  let reserveProjection: PaperProfitAllocationProjection | undefined;
+  if (protectedPolicy) {
+    if (!cycleMode || !reconciledProfit) throw new Error("PAPER_RESERVE_RECONCILIATION_REQUIRED");
+    const policy = paperProfitAllocationPolicy(protectedPolicy, reconciledProfit.policy.ownerId);
+    reserveProjection = projectPaperProfitAllocation({ policy, settlements: paperProfitSettlementsFromDisposals(disposals, policy) });
+    if (reserveProjection.fingerprint !== reconciledProfit.fingerprint) throw new Error("PAPER_RESERVE_RECONCILIATION_MISMATCH");
+  }
   const decisions: StrategyDecision[] = []; const risks: ReturnType<typeof assessProposal>[] = []; const executions: (SimulationFill | SimulationSellFill)[] = []; const snapshots: PortfolioProjection[] = [];
   const paperPolicyDecisions: { decisionId: string; orderId: string; outcome: "SIMULATED_FILLED" | "REJECTED"; riskCodes: readonly string[]; evidence: PaperPolicyEvidence }[] = [];
   const paperCycleDecisions: PaperCycleDecision[] = [];
@@ -234,6 +266,10 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
           executionMatchesFill: true, lotConsumptions, realizedPnlMinor: realized,
         };
         disposals.push(disposal);
+        if (reserveProjection) {
+          const { policy } = reserveProjection;
+          reserveProjection = projectPaperProfitAllocation({ policy, settlements: paperProfitSettlementsFromDisposals(disposals, policy) });
+        }
         executions.push(fill);
         realizedPnlMinor += realized;
         cumulativeTurnoverMinor += fill.grossNotional.minorUnits;
@@ -280,6 +316,7 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
               capitalBudgetUsageMinor: netContributionsMinor, capitalBudgetProspectiveDebitMinor: 0n,
               projectedLossMinor: lossAt(adjustedEquity - debit + projectedMark - holdingValue),
             } : {}),
+            protectedReserveMinor: reserveProjection?.protectedReserveMinor,
             currentCashMinor: live.state.cashMinor, currentPositionMinor: holdingValue,
             currentGrossExposureMinor: grossExposure,
             currentLossMinor: lossAt(adjustedEquity), prospectiveOrderDebitMinor: debit,
@@ -292,13 +329,13 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
           priceRecordId: reference.recordId, price: reference.price, priceAvailableAt: reference.availableAt,
           decisionAt: event.at, quantityAtoms: order.quantity.atomicUnits, quantityScale: order.quantity.quantityScale,
         })) : policyEvidence?.inputHash;
-        if (risk.disposition !== "APPROVE") {
+        if (risk.disposition !== "APPROVE" && policyEvidence?.reasonCode !== "RESERVE_PROTECTION_BLOCKED") {
           if (config.standingPaperPolicy && policyEvidence) paperPolicyDecisions.push({ decisionId: decision.decisionId, orderId: order.proposalId, outcome: "REJECTED", riskCodes: risk.violations.map(item => item.code), evidence: { ...policyEvidence, disposition: "REJECT", reasonCode: "M1_RISK_REJECTED" } });
           if (cycleMode && policyEvidence) paperCycleDecisions.push({ decisionId: id(runId, `cycle-buy-decision:${event.eventId}:${order.assetId}`), orderId: order.proposalId, action: "BUY", reasonCode: "BUY_RISK_REJECTED", evidence: { policyId: config.standingPaperPolicy!.policyId, policyVersion: config.standingPaperPolicy!.version, exitPolicyVersion: config.standingPaperExitPolicy!.version, strategyVersion: decision.strategyVersion, inputHash: cycleBuyInputHash!, assetId: order.assetId, priceRecordId: reference.recordId, priceAvailableAt: reference.availableAt.toISOString(), decisionAt: event.at.toISOString(), priceAtoms: reference.price.priceAtoms.toString(), priceScale: reference.price.priceScale, quantityAtoms: order.quantity.atomicUnits.toString(), quantityScale: order.quantity.quantityScale, disposition: "REJECTED", triggerReason: null } });
           continue;
         }
         if (policyEvidence?.disposition === "REJECT") {
-          paperPolicyDecisions.push({ decisionId: decision.decisionId, orderId: order.proposalId, outcome: "REJECTED", riskCodes: [], evidence: policyEvidence });
+          paperPolicyDecisions.push({ decisionId: decision.decisionId, orderId: order.proposalId, outcome: "REJECTED", riskCodes: risk.violations.map(item => item.code), evidence: policyEvidence });
           if (cycleMode) paperCycleDecisions.push({ decisionId: id(runId, `cycle-buy-decision:${event.eventId}:${order.assetId}`), orderId: order.proposalId, action: "BUY", reasonCode: "BUY_RISK_REJECTED", evidence: { policyId: config.standingPaperPolicy!.policyId, policyVersion: config.standingPaperPolicy!.version, exitPolicyVersion: config.standingPaperExitPolicy!.version, strategyVersion: decision.strategyVersion, inputHash: cycleBuyInputHash!, assetId: order.assetId, priceRecordId: reference.recordId, priceAvailableAt: reference.availableAt.toISOString(), decisionAt: event.at.toISOString(), priceAtoms: reference.price.priceAtoms.toString(), priceScale: reference.price.priceScale, quantityAtoms: order.quantity.atomicUnits.toString(), quantityScale: order.quantity.quantityScale, disposition: "REJECTED", triggerReason: null } });
           continue;
         }
@@ -330,5 +367,5 @@ export function runDeterministicBacktest(config: BacktestRunConfig, prices: read
   }
   const endingState = snapshots.at(-1) ?? projectPortfolio(source(), date(config.endAt));
   const persistentState: DeterministicBacktestState = { ledger: [...ledger], acquisitions: [...acquisitions], netContributionsMinor, adjustedEquityHighWaterMinor, committedCapitalMinor, lastProcessedAt, ...(cycleMode ? { disposals: [...disposals], realizedPnlMinor, cumulativeTurnoverMinor } : {}) };
-  return Object.freeze({ runId, configHash, config, decisions: Object.freeze(decisions), riskAssessments: Object.freeze(risks), executions: Object.freeze(executions), journals: Object.freeze(journals), portfolioSnapshots: Object.freeze(snapshots), endingState, integrityStatus: "CONSISTENT" as const, paperPolicyDecisions: Object.freeze(paperPolicyDecisions), persistentState, ...(cycleMode ? { paperCycleDecisions: Object.freeze(paperCycleDecisions) } : {}) });
+  return Object.freeze({ runId, configHash, config, decisions: Object.freeze(decisions), riskAssessments: Object.freeze(risks), executions: Object.freeze(executions), journals: Object.freeze(journals), portfolioSnapshots: Object.freeze(snapshots), endingState, integrityStatus: "CONSISTENT" as const, paperPolicyDecisions: Object.freeze(paperPolicyDecisions), persistentState, ...(reserveProjection ? { reserveProjectionFingerprint: reserveProjection.fingerprint } : {}), ...(cycleMode ? { paperCycleDecisions: Object.freeze(paperCycleDecisions) } : {}) });
 }

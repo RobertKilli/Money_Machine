@@ -56,6 +56,30 @@ describe("standing PAPER_ONLY risk policy", () => {
     expect(result.disposition).toBe("REJECT");
   });
 
+  it("protects reserve and open orders at the exact fee-inclusive buying limit", () => {
+    const protectedPolicy: StandingPaperPolicy = {
+      ...policy,
+      cycleConfiguration: { contractVersion: "standing-paper-cycle/v2", fifoCostBasisVersion: "fifo-cost-basis/v2",
+        exitPolicy: { version: "standing-paper-exit-policy/v1", stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 3_600_000 } },
+      profitAllocationConfiguration: { version: "paper-profit-allocation/v1", recordingMode: "RECORD_ONLY", enabled: true, reinvestmentBps: 0n },
+      reserveProtectionConfiguration: { version: "paper-reserve-protection/v1", mode: "PAPER_ONLY", enabled: true },
+    };
+    const inputs = { currentCashMinor: 4_000n, protectedReserveMinor: 2_000n, openOrderReservationsMinor: [200n, 300n] };
+    const atLimit = assessStandingPaperPolicy(protectedPolicy, order, context({ ...inputs, prospectiveOrderDebitMinor: 1_400n + 100n }));
+    expect(atLimit).toMatchObject({ disposition: "APPROVE", reserveProtection: {
+      protectedReserveMinor: "2000", buyingPowerMinor: "1500", openOrderReservationsMinor: "500", orderDebitMinor: "1500",
+    } });
+    for (const override of [
+      { prospectiveOrderDebitMinor: 1_401n + 100n },
+      { protectedReserveMinor: 4_001n },
+      { protectedReserveMinor: undefined },
+    ]) {
+      const rejected = assessStandingPaperPolicy(protectedPolicy, order, context({ ...inputs, ...override }));
+      expect(rejected.reasonCode).toBe("RESERVE_PROTECTION_BLOCKED");
+      expect(rejected.inputHash).not.toBe(atLimit.inputHash);
+    }
+  });
+
   it("rejects stale and missing price evidence", () => {
     const stale = prices.map((item) => ({ ...item, availableAt: new Date("2026-01-01T09:00:00.000Z") }));
     expect(assessStandingPaperPolicy({ ...policy, maxPriceAgeMs: 60_000 }, order, context({ prices: stale })).reasonCode).toBe("PRICE_STALE");

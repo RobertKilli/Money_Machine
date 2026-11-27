@@ -135,6 +135,7 @@ try {
   const cases = [
     "binds profit recording terms to separate owner confirmation before first activation",
     "persists profit recording from reconciled sales across restart replay and concurrent recorders",
+    "protects profit from a sale before a later buy in the same round",
     "rolls back profit terms and policy activation together after an injected transition failure",
     "rolls back sale ledger checkpoint and profit recording together after an allocation failure",
     "rejects tampered durable profit allocation on record replay and hosted preflight",

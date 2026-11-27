@@ -20,6 +20,24 @@ describe("approved PAPER profit recording terms", () => {
     expect(() => assertValidPaperPolicy(base)).not.toThrow();
   });
 
+  it("preserves both RECORD_ONLY confirmation hashes and canonicalizes opted-in reserve terms", () => {
+    const recordOnly = configured();
+    expect(standingPaperActivationConfirmationHash(recordOnly)).toBe("656209f9722ac34cb45138f4e4c9d6b41d78731d00bdc3f84cbfb6c9828d2198");
+    expect(paperProfitAllocationConfirmationHash(recordOnly, "owner-1")).toBe("4692395ef7019ab3fb01f2f6f65f6d22649d35b276eb63e708001740ce7cf81f");
+    const protectedPolicy: StandingPaperPolicy = { ...recordOnly, reserveProtectionConfiguration: {
+      enabled: true, mode: "PAPER_ONLY", version: "paper-reserve-protection/v1",
+    } };
+    const reordered: StandingPaperPolicy = { ...protectedPolicy, reserveProtectionConfiguration: {
+      version: "paper-reserve-protection/v1", mode: "PAPER_ONLY", enabled: true,
+    } };
+    expect(standingPaperActivationConfirmationHash(reordered)).toBe(standingPaperActivationConfirmationHash(protectedPolicy));
+    expect(paperProfitAllocationConfirmationHash(reordered, "owner-1")).toBe(paperProfitAllocationConfirmationHash(protectedPolicy, "owner-1"));
+    expect(standingPaperActivationConfirmationHash(protectedPolicy)).not.toBe(standingPaperActivationConfirmationHash(recordOnly));
+    expect(paperProfitAllocationConfirmationHash(protectedPolicy, "owner-1")).not.toBe(paperProfitAllocationConfirmationHash(recordOnly, "owner-1"));
+    expect(() => assertValidPaperPolicy({ ...protectedPolicy, profitAllocationConfiguration: undefined }))
+      .toThrow("PAPER_RESERVE_PROTECTION_CONFIGURATION_INVALID");
+  });
+
   it("binds every allocation term into both consent hashes and binds the separate owner identity", () => {
     const policy = configured();
     expect(() => assertValidPaperPolicy(policy)).not.toThrow();

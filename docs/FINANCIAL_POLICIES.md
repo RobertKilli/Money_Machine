@@ -268,9 +268,25 @@ epoch or policy merely to erase losses. Configuration changes, corrections,
 withdrawals and reserve releases require an explicit later contract that carries
 the previous state forward; none is supported by this model.
 
-Reserve is an allocation entitlement in this slice, not a cash transfer or
-already enforced balance. Later worker/risk integration must exclude a
-cash-backed protected reserve and open-order reservations from tradable cash,
-while retaining the reserve in total owned NAV. Insufficient cash backing must
-block spending; do not fabricate cash or spend protected funds. Integration must
-not lower existing exposure/loss checks or treat profit as a new contribution.
+The allocation model records a reserve entitlement. The separate opt-in
+`paper-reserve-protection/v1` policy below constrains simulated spending.
+
+## 11. PAPER reserve protection
+
+New cycle-v2 PAPER/NOK policies with enabled profit allocation can opt in to
+`paper-reserve-protection/v1` using both owner-bound activation confirmations.
+Legacy confirmation hashes and RECORD_ONLY spending behavior are stable.
+
+The repository reconciles the approved terms and the complete recorded reserve
+history under the policy and account locks. Each settled SELL updates the
+reserve used by later BUY decisions in the same round. BUY buying power is
+`max(0, ledger cash - protected reserve - open-order reservations)`. The
+fee-inclusive debit must fit within this limit and the existing risk limits.
+Insufficient backing blocks BUY. The full ledger cash remains part of NAV,
+and SELL follows the cycle's existing exit controls.
+
+The decision evidence binds the reserve contract, cash, reserve, reservations,
+buying power and fee-inclusive debit. Absent or inconsistent stored history
+fails reconciliation. Reconciliation after settlement must reproduce the reserve
+projection used by the runner, or the transaction rolls back. The reserve is
+a restriction on simulated spending and remains in the ledger cash balance.
