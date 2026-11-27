@@ -2,6 +2,10 @@
 
 Baseline: `9c763d8b1114cbdc18bab1abcc3b25db2f15dbb5` (PR #100).
 
+Run the [combined offline acceptance demo](STANDING_PAPER_KRAKEN_PRE_TRADE_OFFLINE_ACCEPTANCE.md)
+with `npm run paper:kraken:pre-trade:offline-acceptance` for a synthetic end-to-end
+report. It performs no acquisition and grants no source or decision authority.
+
 `kraken-pre-trade-evidence-package/v1` bundles one caller-supplied book response
 with explicit instrument and source assertions. This is an offline content
 commitment, not an authenticated quote or a source qualification.
