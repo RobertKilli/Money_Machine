@@ -200,3 +200,73 @@ No monetary implementation is complete without invariant tests covering:
 | Precision | rejected unsupported precision, increment alignment, every named rounding mode, no float path |
 | Portfolio valuation | exact/fractional minor-unit boundaries; aggregate quantity before one FLOOR per holding; equivalent one/many-fill holdings; NAV sums rounded holdings; rounded-value unrealized P&L; fee-inclusive BUY basis; FLOOR asset/cash bps with explicit undistributed residue; future-price exclusion; INCOMPLETE missing-price totals; temporal replay and account isolation under `portfolio-valuation/v1` |
 | Audit/state | evidence completeness, transition rejection, rejected/cancelled order cannot fill |
+
+## 10. Opt-in PAPER profit allocation: `paper-profit-allocation/v1`
+
+This separate, pure model does not change M1, standing-paper execution, FIFO,
+existing risk limits, ledger balances or any active policy. It proposes no
+orders and grants no authority. Integration with persistence, policy activation,
+reserve-backed spending and UI is a later change. The projection is explicitly
+`MODEL_ONLY` and uses caller-supplied PAPER settlement evidence.
+
+One fixed allocation policy binds owner, FinancialAccount, currency and policy
+identity. Its `enabled` flag is explicit; `reinvestmentBps` is an integer from
+0 through 10,000. Disabled allocation treats all newly distributable profit as
+retained for trading and creates no reserve. The model must not be used to
+retroactively change historical allocation terms.
+
+Only settled simulated SELL results enter this model. For each sale:
+
+`netRealizedPnl = grossSaleProceeds - sellFee - consumedFifoCostBasis`
+
+Consumed FIFO basis already includes allocated BUY fees, as required by the
+existing FIFO contract. Never subtract those fees again. Deposits, returned
+principal, gross proceeds by themselves, unrealized valuations and BUY events
+are not distributable profit. No platform/customer performance fee is applied.
+
+Replay starts at zero with the complete ordered sale history. Let `R` be
+cumulative net realized P&L, `H` its previous nonnegative high-water mark,
+and `b` the fixed reinvestment bps (10,000 when allocation is disabled):
+
+- `nextR = R + netRealizedPnl`
+- `nextH = max(H, nextR)`
+- `newDistributableProfit = nextH - H`
+- `lossCarryForward = nextH - nextR`
+- `cumulativeReinvestmentTarget = FLOOR(nextH * b / 10000)`
+- `cumulativeReserveTarget = nextH - cumulativeReinvestmentTarget`
+
+Each sale allocates only the difference between new and prior cumulative
+targets. Cumulative rounding, rather than independent rounding per sale, keeps
+the final split invariant to fragmentation of otherwise equivalent gains.
+Rounding residue belongs to reserve; no previously allocated reserve is released
+by a later gain. Losses and recovery below the previous high-water mark allocate
+nothing. The high-water mark and accumulated reserve do not fall with losses.
+
+Example: fee-inclusive FIFO basis 500 NOK, gross proceeds 551 NOK, SELL fee
+1 NOK → net profit 50 NOK → 25 NOK reinvestment allocation and 25 NOK reserve
+at 50%. If later net losses are 20 NOK, the next 20 NOK of gains recover the
+loss only. New allocation begins above the old realized-profit peak. This
+realized-P&L high-water mark is distinct from the existing deposit-adjusted NAV
+drawdown risk limit; neither replaces or resets the other.
+
+All authoritative amounts use integer minor units and BigInt. Input amounts,
+cumulative P&L and carry-forward must fit numeric(38,0). Sale history has a
+contiguous positive sequence from 1 and nondecreasing canonical UTC timestamps;
+equal times use the explicit sequence. Exact settlement replay is ignored;
+changed material for the same settlement or reuse of one fill under another
+settlement is rejected. Scope and policy/settlement material are fingerprinted.
+
+The future application boundary must prove ownership, authentic ledger/FIFO
+bindings, full history and original policy terms, then persist allocations
+atomically and idempotently. A hash or a contiguous caller-supplied sequence
+does not prove those facts. An existing account must never start a new history
+epoch or policy merely to erase losses. Configuration changes, corrections,
+withdrawals and reserve releases require an explicit later contract that carries
+the previous state forward; none is supported by this model.
+
+Reserve is an allocation entitlement in this slice, not a cash transfer or
+already enforced balance. Later worker/risk integration must exclude a
+cash-backed protected reserve and open-order reservations from tradable cash,
+while retaining the reserve in total owned NAV. Insufficient cash backing must
+block spending; do not fabricate cash or spend protected funds. Integration must
+not lower existing exposure/loss checks or treat profit as a new contribution.
