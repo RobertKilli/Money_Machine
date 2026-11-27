@@ -62,9 +62,12 @@ Old timestamps can be valid historical evidence. Price age, a decision cutoff,
 clock tolerance and quote selection belong to a later, explicitly versioned
 qualification/projection. The parser does not impose or claim those guarantees.
 
-No Pre-Trade transport, evidence-package extension, database storage, account,
-policy, worker hookup, source qualification or runtime authorization is added.
+The parser itself adds no Pre-Trade transport, database storage, account,
+policy, worker hookup, source qualification or runtime authorization.
 Existing Post-Trade output contracts and fixture-worker behavior are unchanged.
+The subsequent [offline evidence-package layer](STANDING_PAPER_KRAKEN_PRE_TRADE_EVIDENCE.md)
+adds content commitments and verified replay without changing parser semantics
+or enabling decision use.
 See [the clarification and unsent email draft](STANDING_PAPER_KRAKEN_DATA_CLARIFICATION.md)
 for outstanding permissions, level selection and snapshot/time semantics.
 
