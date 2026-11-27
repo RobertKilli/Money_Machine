@@ -1,7 +1,6 @@
 # Kraken market data for standing PAPER: source clarification
 
-**Review date:** 2026-11-27  
-**Code baseline:** `51658f3e6a4532966cc25c14e827c906a5f03670`  
+**Review date:** 2026-11-27 | **Code baseline:** `51658f3e6a4532966cc25c14e827c906a5f03670`
 **Status:** official-documentation review only; no market-data endpoint was called, no source is approved, and no external use is authorized.
 
 This note supersedes the earlier recommendation in [the market source review](STANDING_PAPER_MARKET_SOURCE_REVIEW.md) that treated Post-Trade `count=1` as a possible first `LAST_TRADE` route. It records the documentation boundary and proposes a conditional alternative. It does not enable external acquisition.
@@ -57,7 +56,8 @@ Official references consulted:
 
 ## 3. Email draft to Kraken (not sent)
 
-**To:** marketdata@kraken.com  
+**To:** marketdata@kraken.com
+
 **Subject:** Permission and product terms for automated Kraken market data in PAPER algorithm testing
 
 Dear Kraken Market Data Team,
