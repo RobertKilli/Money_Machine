@@ -46,7 +46,7 @@ export interface StandingPaperPolicyStatusCard {
   readonly policyStatus: "DRAFT" | "ACTIVE" | "PAUSED" | "STOPPED" | "UNKNOWN";
   readonly activationConfirmationHash: string | null;
   readonly profitTermsConfirmationHash: string | null;
-  readonly profitSummary: null | { readonly status: "AVAILABLE" | "UNAVAILABLE"; readonly mode: "RECORD_ONLY" | "RESERVE_PROTECTED"; readonly netRealizedPnlMinor: string | null; readonly reinvestmentMinor: string | null; readonly reserveMinor: string | null; readonly lossRecoveryMinor: string | null; readonly ledgerCashMinor: string | null; readonly cashCoverageMinor: string | null; readonly reserveShortfallMinor: string | null };
+  readonly profitSummary: null | { readonly status: "AVAILABLE" | "UNAVAILABLE"; readonly mode: "RECORD_ONLY" | "RESERVE_PROTECTED"; readonly netRealizedPnlMinor: string | null; readonly reinvestmentMinor: string | null; readonly reserveMinor: string | null; readonly recoveredLossMinor: string | null; readonly lossRecoveryMinor: string | null; readonly ledgerCashMinor: string | null; readonly cashCoverageMinor: string | null; readonly reserveShortfallMinor: string | null };
   readonly cycleConfiguration: null | {
     readonly contractVersion: string;
     readonly fifoCostBasisVersion: string;
@@ -166,7 +166,20 @@ export function projectStandingPaperStatusCard(input: {
     profitSummary: policy.profitAllocationConfiguration ? (() => {
       const projection = input.profitProjection;
       const cash = analytics?.cashMinor ?? null;
-      const available = projection !== null && projection !== undefined && cash !== null;
+      const recoveredLoss = projection ? (() => {
+        let remainingBeforeSale = 0n;
+        let recovered = 0n;
+        for (const allocation of projection.allocations) {
+          const netRealized = allocation.netRealizedPnlMinor;
+          if (netRealized > 0n && remainingBeforeSale > 0n) {
+            recovered += netRealized < remainingBeforeSale ? netRealized : remainingBeforeSale;
+            if (recovered > 10n ** 38n - 1n) return null;
+          }
+          remainingBeforeSale = allocation.lossCarryForwardMinor;
+        }
+        return recovered;
+      })() : null;
+      const available = projection !== null && projection !== undefined && cash !== null && recoveredLoss !== null;
       const reserve = projection?.protectedReserveMinor ?? null;
       const coverage = cash === null || reserve === null ? null : BigInt(cash) < reserve ? BigInt(cash) : reserve;
       const shortfall = cash === null || reserve === null || BigInt(cash) >= reserve ? 0n : reserve - BigInt(cash);
@@ -175,6 +188,7 @@ export function projectStandingPaperStatusCard(input: {
         netRealizedPnlMinor: available ? projection.cumulativeRealizedPnlMinor.toString() : null,
         reinvestmentMinor: available ? projection.totalReinvestmentAllocatedMinor.toString() : null,
         reserveMinor: available ? reserve?.toString() ?? null : null,
+        recoveredLossMinor: available ? recoveredLoss.toString() : null,
         lossRecoveryMinor: available ? projection.lossCarryForwardMinor.toString() : null,
         ledgerCashMinor: available && policy.reserveProtectionConfiguration ? cash : null,
         cashCoverageMinor: available ? coverage?.toString() ?? null : null,

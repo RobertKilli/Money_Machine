@@ -139,6 +139,7 @@ try {
     "rolls back profit terms and policy activation together after an injected transition failure",
     "rolls back sale ledger checkpoint and profit recording together after an allocation failure",
     "rejects tampered durable profit allocation on record replay and hosted preflight",
+    "status reports corrupt and incomplete profit history unavailable without repairing allocations",
     "grants only owner scoped reads of immutable record only profit material",
     "creates one owned empty PAPER/NOK account under concurrent requests without deposits or policy writes",
     "preflights the exact hosted target and rejects wrong account, policy, status, or capital without writes",

@@ -186,9 +186,12 @@ describe("standing paper status view", () => {
     };
     const projection = projectPaperProfitAllocation({
       policy: paperProfitAllocationPolicy(configuredPolicy, "owner-1"),
-      settlements: [{ type: "SIMULATED_SELL_SETTLEMENT", settlementId: "settlement-1", fillId: "sell-1",
-        financialAccountId: configuredPolicy.financialAccountId, ownerId: "owner-1", currency: "NOK", sequence: 1n,
-        settledAt: cycleAt, grossProceedsMinor: 10_000n, sellFeeMinor: 0n, fifoCostBasisMinor: 0n }],
+      settlements: [
+        { type: "SIMULATED_SELL_SETTLEMENT", settlementId: "settlement-1", fillId: "sell-1", financialAccountId: configuredPolicy.financialAccountId, ownerId: "owner-1", currency: "NOK", sequence: 1n, settledAt: cycleAt, grossProceedsMinor: 1_000n, sellFeeMinor: 0n, fifoCostBasisMinor: 11_000n },
+        { type: "SIMULATED_SELL_SETTLEMENT", settlementId: "settlement-2", fillId: "sell-2", financialAccountId: configuredPolicy.financialAccountId, ownerId: "owner-1", currency: "NOK", sequence: 2n, settledAt: cycleAt, grossProceedsMinor: 5_000n, sellFeeMinor: 0n, fifoCostBasisMinor: 1_000n },
+        { type: "SIMULATED_SELL_SETTLEMENT", settlementId: "settlement-3", fillId: "sell-3", financialAccountId: configuredPolicy.financialAccountId, ownerId: "owner-1", currency: "NOK", sequence: 3n, settledAt: cycleAt, grossProceedsMinor: 10_000n, sellFeeMinor: 0n, fifoCostBasisMinor: 2_000n },
+        { type: "SIMULATED_SELL_SETTLEMENT", settlementId: "settlement-4", fillId: "sell-4", financialAccountId: configuredPolicy.financialAccountId, ownerId: "owner-1", currency: "NOK", sequence: 4n, settledAt: cycleAt, grossProceedsMinor: 1_000n, sellFeeMinor: 0n, fifoCostBasisMinor: 4_000n },
+      ],
     });
     const reviewed = projectStandingPaperStatusCard({ policy: configuredPolicy, state: cycleResult.persistentState, run: null, ownerId: "owner-1" });
     expect(reviewed.profitTermsConfirmationHash).toBe(paperProfitAllocationConfirmationHash(configuredPolicy, "owner-1"));
@@ -204,17 +207,20 @@ describe("standing paper status view", () => {
     const protectedCard = projectStandingPaperStatusCard({ policy: { ...configuredPolicy, status: "ACTIVE" }, state: cycleResult.persistentState,
       run: { id: "status-run", createdAt: cycleAt, result: lowCashResult, valuation: { navMinor: lowCashResult.endingState.nav, asOf: cycleAt, complete: true } },
       ownerId: "owner-1", profitProjection: projection });
-    expect(protectedCard.profitSummary).toMatchObject({ status: "AVAILABLE", mode: "RESERVE_PROTECTED", netRealizedPnlMinor: "10000",
-      reinvestmentMinor: "5000", reserveMinor: "5000", ledgerCashMinor: "100", cashCoverageMinor: "100", reserveShortfallMinor: "4900" });
+    expect(protectedCard.profitSummary).toMatchObject({ status: "AVAILABLE", mode: "RESERVE_PROTECTED", netRealizedPnlMinor: "-1000",
+      reinvestmentMinor: "1000", reserveMinor: "1000", recoveredLossMinor: "10000", lossRecoveryMinor: "3000",
+      ledgerCashMinor: "100", cashCoverageMinor: "100", reserveShortfallMinor: "900" });
     const protectedHtml = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: projectStandingPaperStatusReadModel([protectedCard]) }} />);
     expect(protectedHtml).toContain("Reservekrav");
     expect(protectedHtml).toContain("Kontantdekning");
     expect(protectedHtml).toContain("Reserveunderdekning");
+    expect(protectedHtml).toContain("Gjenvunnet tap");
+    expect(protectedHtml).toContain("Gjenstående tap til gjenvinning");
 
     const recordOnly = projectStandingPaperStatusCard({ policy: { ...configuredPolicy, status: "ACTIVE", reserveProtectionConfiguration: undefined },
       state: cycleResult.persistentState, run: { id: "status-run", createdAt: cycleAt, result: lowCashResult,
         valuation: { navMinor: lowCashResult.endingState.nav, asOf: cycleAt, complete: true } }, ownerId: "owner-1", profitProjection: projection });
-    expect(recordOnly.profitSummary).toMatchObject({ mode: "RECORD_ONLY", reserveMinor: "5000", ledgerCashMinor: null });
+    expect(recordOnly.profitSummary).toMatchObject({ mode: "RECORD_ONLY", reserveMinor: "1000", recoveredLossMinor: "10000", lossRecoveryMinor: "3000", ledgerCashMinor: null });
     const legacyDraft = projectStandingPaperStatusCard({ policy: { ...testPolicy, status: "DRAFT" }, state: testResult.persistentState, run: null });
     expect(standingPaperActivationRequestBody(legacyDraft)).toEqual({ action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true,
       activationConfirmationHash: legacyDraft.activationConfirmationHash });
