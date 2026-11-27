@@ -5,7 +5,7 @@ import postgres, { type Sql, type TransactionSql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { BacktestResult, BacktestRunConfig } from "@/application/backtest/run-deterministic-backtest";
 import { price } from "@/domain/financial/price";
-import { standingPaperActivationConfirmationHash, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { standingPaperActivationConfirmationHash, paperProfitAllocationConfirmationHash, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
 import { StandingPaperPolicyRepository } from "@/infrastructure/postgres/standing-paper-policy-repository";
 import { PostgresFinancialRepository } from "@/infrastructure/postgres/postgres-financial-repository";
@@ -14,6 +14,7 @@ import { PAPER_CYCLE_CONTRACT_VERSION, PAPER_CYCLE_FIFO_COST_BASIS_VERSION, STAN
 
 const enabled = process.env.MONEY_MACHINE_INTEGRATION_TEST === "1";
 const preCycleMode = process.env.MONEY_MACHINE_PRE_CYCLE_TEST === "1";
+const preProfitMode = process.env.MONEY_MACHINE_PRE_PROFIT_TEST === "1";
 const testUrl = process.env.MM_STANDING_PAPER_TEST_DATABASE_URL;
 function assertTaskOwnedLocalDatabase(url: string | undefined): asserts url is string {
   if (!url) throw new Error("STANDING_PAPER_TEST_DATABASE_URL_REQUIRED");
@@ -99,6 +100,158 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
       (select count(*)::text from public.audit_events where financial_account_id=${accountId}) audits`;
     return rows[0]!;
   }
+
+  async function profitDraft() {
+    const { ownerId, financialAccountId } = await ownedAccount();
+    const policy: StandingPaperPolicy = {
+      ...ownedDraft(financialAccountId, "profit-recording"), capitalBudgetMinor: 20_000n, maxOrderMinor: 10_000n,
+      maxPositionMinor: 20_000n, maxGrossExposureMinor: 20_000n, maxLossMinor: 20_000n,
+      allowedInstrumentIds: [FIXTURE_ASSETS[0]!.assetId],
+      cycleConfiguration: { contractVersion: PAPER_CYCLE_CONTRACT_VERSION, fifoCostBasisVersion: PAPER_CYCLE_FIFO_COST_BASIS_VERSION,
+        exitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1000 } },
+      profitAllocationConfiguration: { version: "paper-profit-allocation/v1", recordingMode: "RECORD_ONLY", enabled: true, reinvestmentBps: 5_000n },
+    };
+    const repository = new StandingPaperPolicyRepository(testUrl!); repositories.push(repository);
+    await repository.createOwnedDraft(ownerId, policy);
+    return { repository, ownerId, policy };
+  }
+  async function approveProfit(f: Awaited<ReturnType<typeof profitDraft>>) {
+    return f.repository.activateOwnedDraft(f.ownerId, f.policy.policyId, standingPaperActivationConfirmationHash(f.policy), paperProfitAllocationConfirmationHash(f.policy, f.ownerId));
+  }
+  async function profitRows(accountId: string) {
+    return sql`select settlement_id, fill_id, run_id, sequence::text, input_hash, allocation_hash,
+      realized_pnl_minor::text, profit_high_water_minor::text, protected_reserve_minor::text
+      from public.standing_paper_profit_allocations where financial_account_id=${accountId} order by sequence`;
+  }
+  async function profitWorker(f: Awaited<ReturnType<typeof profitDraft>>, maxRounds: number) {
+    return new StandingPaperWorker(f.repository, {
+      policyId: f.policy.policyId, workerId: `profit-${randomUUID().slice(0, 8)}`, expectedAccountId: f.policy.financialAccountId,
+      expectedOwnerId: f.ownerId, policyScopedRoundOrdinal: true, initialCapitalMinor: 6_646n, maxRounds,
+      waitForRoundInterval: async () => undefined,
+    }).run();
+  }
+
+  it.skipIf(!preProfitMode)("keeps legacy rounds working without profit schema and rejects opted in drafts before writes", async () => {
+    const legacy = await setup("without-profit-schema");
+    await expect(legacy.repository.run(legacy.policy.policyId, config("legacy-no-profit", stamp(10)), pricesAt(stamp(9)), "legacy-no-profit")).resolves.toMatchObject({ integrityStatus: "CONSISTENT" });
+    await expect(profitDraft()).rejects.toThrow("PAPER_PROFIT_SCHEMA_REQUIRED");
+    const rows = await sql`select count(*)::text as count from public.standing_paper_policies where policy_json ? 'profitAllocationConfiguration'`;
+    expect(rows[0]!.count).toBe("0");
+  });
+
+  it.skipIf(preCycleMode || preProfitMode)("binds profit recording terms to separate owner confirmation before first activation", async () => {
+    const f = await profitDraft();
+    const before = await counts(f.policy.financialAccountId);
+    await expect(f.repository.transition(f.policy.policyId, "ACTIVATE")).rejects.toThrow("PAPER_PROFIT_TERMS_CONFIRMATION_REQUIRED");
+    await expect(f.repository.activateOwnedDraft(f.ownerId, f.policy.policyId, standingPaperActivationConfirmationHash(f.policy))).rejects.toThrow("PAPER_PROFIT_TERMS_CONFIRMATION_REQUIRED");
+    await expect(f.repository.activateOwnedDraft(f.ownerId, f.policy.policyId, standingPaperActivationConfirmationHash(f.policy), "0".repeat(64))).rejects.toThrow("PAPER_PROFIT_TERMS_CONFIRMATION_REQUIRED");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+    expect(await sql`select * from public.standing_paper_profit_terms where policy_id=${f.policy.policyId}`).toHaveLength(0);
+    await approveProfit(f);
+    const terms = await sql`select terms_hash, policy_confirmation_hash, recording_mode from public.standing_paper_profit_terms where policy_id=${f.policy.policyId}`;
+    expect(terms).toEqual([{ terms_hash: paperProfitAllocationConfirmationHash(f.policy, f.ownerId), policy_confirmation_hash: standingPaperActivationConfirmationHash(f.policy), recording_mode: "RECORD_ONLY" }]);
+    await expect(sql`update public.standing_paper_profit_terms set recording_mode='RECORD_ONLY' where policy_id=${f.policy.policyId}`).rejects.toThrow("append-only");
+    await expect(sql`update public.standing_paper_policies set policy_json=policy_json-'profitAllocationConfiguration' where policy_id=${f.policy.policyId}`).rejects.toThrow("PAPER_PROFIT_TERMS_IMMUTABLE");
+    expect(await f.repository.recordProfitAllocationOwned(f.ownerId, f.policy.policyId)).toMatchObject({ operationalStatus: "MODEL_ONLY", allocations: [] });
+  });
+
+  it.skipIf(preCycleMode || preProfitMode)("persists profit recording from reconciled sales across restart replay and concurrent recorders", async () => {
+    const f = await profitDraft(); await approveProfit(f);
+    const calls = vi.spyOn(f.repository, "run");
+    await expect(profitWorker(f, 3)).resolves.toMatchObject({ status: "COMPLETED", roundsCompleted: 3 });
+    const rows = await profitRows(f.policy.financialAccountId);
+    expect(rows).toHaveLength(2);
+    await expect(sql`insert into public.standing_paper_profit_allocations
+      (policy_id, financial_account_id, terms_hash, settlement_id, fill_id, run_id, sequence, input_hash, allocation_hash,
+       allocation_json, realized_pnl_minor, profit_high_water_minor, protected_reserve_minor)
+      select p.policy_id, p.financial_account_id, p.terms_hash,
+        (select ledger_transaction_id from public.standing_paper_fills where policy_id=${f.policy.policyId} and side='BUY' limit 1),
+        p.fill_id, p.run_id, 3, p.input_hash, p.allocation_hash, p.allocation_json, p.realized_pnl_minor, p.profit_high_water_minor, p.protected_reserve_minor
+      from public.standing_paper_profit_allocations p where p.policy_id=${f.policy.policyId} and p.sequence=1`)
+      .rejects.toThrow("PAPER_PROFIT_SETTLEMENT_BINDING_INVALID");
+    expect(rows.map(row => [row.sequence, row.realized_pnl_minor, row.profit_high_water_minor, row.protected_reserve_minor])).toEqual([
+      ["1", "-2000", "0", "0"], ["2", "299", "299", "150"],
+    ]);
+    const before = await counts(f.policy.financialAccountId);
+    const restarted = new StandingPaperPolicyRepository(testUrl!); repositories.push(restarted);
+    const [left, right] = await Promise.all([
+      f.repository.recordProfitAllocationOwned(f.ownerId, f.policy.policyId), restarted.recordProfitAllocationOwned(f.ownerId, f.policy.policyId),
+    ]);
+    expect(left).toEqual(right);
+    expect(left).toMatchObject({ cumulativeRealizedPnlMinor: 299n, protectedReserveMinor: 150n, totalReinvestmentAllocatedMinor: 149n });
+    for (const args of calls.mock.calls) await restarted.run(...args);
+    expect(await profitRows(f.policy.financialAccountId)).toEqual(rows);
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+    await expect(restarted.recordProfitAllocationOwned(randomUUID(), f.policy.policyId)).rejects.toThrow("PAPER_POLICY_NOT_FOUND");
+  });
+
+  it.skipIf(preCycleMode || preProfitMode)("rolls back profit terms and policy activation together after an injected transition failure", async () => {
+    const f = await profitDraft();
+    await sql.unsafe(`create function public.reject_profit_activation_test() returns trigger language plpgsql as $$ begin
+      if new.policy_id = '${f.policy.policyId}' and new.action='ACTIVATE' then raise exception 'PROFIT_ACTIVATION_ROLLBACK'; end if; return new; end $$`);
+    await sql`create trigger reject_profit_activation_test before insert on public.standing_paper_policy_transitions for each row execute function public.reject_profit_activation_test()`;
+    try { await expect(approveProfit(f)).rejects.toThrow("PROFIT_ACTIVATION_ROLLBACK"); }
+    finally { await sql`drop trigger reject_profit_activation_test on public.standing_paper_policy_transitions`; await sql`drop function public.reject_profit_activation_test()`; }
+    expect((await f.repository.getPolicy(f.policy.policyId))?.status).toBe("DRAFT");
+    expect(await sql`select * from public.standing_paper_profit_terms where policy_id=${f.policy.policyId}`).toHaveLength(0);
+    expect(await sql`select * from public.standing_paper_policy_transitions where policy_id=${f.policy.policyId}`).toHaveLength(1);
+    await approveProfit(f);
+  });
+
+  it.skipIf(preCycleMode || preProfitMode)("rolls back sale ledger checkpoint and profit recording together after an allocation failure", async () => {
+    const f = await profitDraft(); await approveProfit(f);
+    await expect(profitWorker(f, 1)).resolves.toMatchObject({ status: "COMPLETED" });
+    const before = await counts(f.policy.financialAccountId);
+    const checkpoint = await sql`select state_json, last_run_id from public.standing_paper_policies where policy_id=${f.policy.policyId}`;
+    await sql.unsafe(`create function public.reject_profit_allocation_test() returns trigger language plpgsql as $$ begin
+      if new.policy_id='${f.policy.policyId}' then raise exception 'PROFIT_ALLOCATION_ROLLBACK'; end if; return new; end $$`);
+    await sql`create trigger reject_profit_allocation_test before insert on public.standing_paper_profit_allocations for each row execute function public.reject_profit_allocation_test()`;
+    try { await expect(profitWorker(f, 1)).rejects.toThrow("PAPER_WORKER_FAILED:PROFIT_ALLOCATION_ROLLBACK"); }
+    finally { await sql`drop trigger reject_profit_allocation_test on public.standing_paper_profit_allocations`; await sql`drop function public.reject_profit_allocation_test()`; }
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+    expect(await profitRows(f.policy.financialAccountId)).toHaveLength(0);
+    expect(await sql`select state_json, last_run_id from public.standing_paper_policies where policy_id=${f.policy.policyId}`).toEqual(checkpoint);
+    await expect(profitWorker(f, 2)).resolves.toMatchObject({ status: "COMPLETED" });
+    expect(await profitRows(f.policy.financialAccountId)).toHaveLength(2);
+  });
+
+  it.skipIf(preCycleMode || preProfitMode)("rejects tampered durable profit allocation on record replay and hosted preflight", async () => {
+    const f = await profitDraft(); await approveProfit(f);
+    await expect(profitWorker(f, 3)).resolves.toMatchObject({ status: "COMPLETED" });
+    const original = await sql`select allocation_json from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId} and sequence=2`;
+    await sql.begin(async tx => {
+      await tx`set local session_replication_role=replica`;
+      await tx`update public.standing_paper_profit_allocations set allocation_json='{}'::jsonb where policy_id=${f.policy.policyId} and sequence=2`;
+    });
+    const before = await counts(f.policy.financialAccountId);
+    await expect(f.repository.recordProfitAllocationOwned(f.ownerId, f.policy.policyId)).rejects.toThrow("PAPER_PROFIT_ALLOCATION_HISTORY_MISMATCH");
+    await expect(f.repository.validateWorkerTarget(f.policy.policyId, f.policy.financialAccountId, 6_646n)).rejects.toThrow("PAPER_PROFIT_ALLOCATION_HISTORY_MISMATCH");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+    await sql.begin(async tx => { await tx`set local session_replication_role=replica`; await tx`update public.standing_paper_profit_allocations set allocation_json=${tx.json(original[0]!.allocation_json as never)} where policy_id=${f.policy.policyId} and sequence=2`; });
+    expect((await f.repository.recordProfitAllocationOwned(f.ownerId, f.policy.policyId)).protectedReserveMinor).toBe(150n);
+    await sql.begin(async tx => { await tx`set local session_replication_role=replica`; await tx`delete from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId} and sequence=1`; });
+    await expect(f.repository.recordProfitAllocationOwned(f.ownerId, f.policy.policyId)).rejects.toThrow("PAPER_PROFIT_ALLOCATION_HISTORY_MISMATCH");
+    expect(await profitRows(f.policy.financialAccountId)).toHaveLength(1);
+  });
+
+  it.skipIf(preCycleMode || preProfitMode)("grants only owner scoped reads of immutable record only profit material", async () => {
+    const f = await profitDraft(); await approveProfit(f);
+    await expect(profitWorker(f, 3)).resolves.toMatchObject({ status: "COMPLETED" });
+    for (const [actor, expected] of [[f.ownerId, "2"], [randomUUID(), "0"]]) {
+      await sql.begin(async tx => {
+        await tx`set local role authenticated`;
+        await tx`select set_config('request.jwt.claim.sub', ${actor!}, true)`;
+        const rows = await tx`select count(*)::text as count from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId}`;
+        expect(rows[0]!.count).toBe(expected);
+        const terms = await tx`select count(*)::text as count from public.standing_paper_profit_terms where policy_id=${f.policy.policyId}`;
+        expect(terms[0]!.count).toBe(expected === "2" ? "1" : "0");
+      });
+    }
+    await expect(sql`delete from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId}`).rejects.toThrow("append-only");
+    const privileges = await sql`select has_table_privilege('authenticated','public.standing_paper_profit_allocations','INSERT') as can_insert,
+      has_table_privilege('anon','public.standing_paper_profit_allocations','SELECT') as anon_select`;
+    expect(privileges).toEqual([{ can_insert: false, anon_select: false }]);
+  });
 
   it("creates one owned empty PAPER/NOK account under concurrent requests without deposits or policy writes", async () => {
     const ownerId = randomUUID();

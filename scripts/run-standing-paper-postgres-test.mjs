@@ -13,7 +13,7 @@ const label = `money-machine.standing-paper-test=${token}`;
 const container = `mm-standing-paper-test-${token}`;
 const volume = `mm-standing-paper-test-${token}`;
 const database = `mm_paper_${token}`;
-const probeMode = process.argv.includes("--pre-cycle-v1") ? "pre-cycle-v1" : process.argv.find(value => value.startsWith("--probe="))?.slice("--probe=".length);
+const probeMode = process.argv.includes("--pre-profit-v1") ? "pre-profit-v1" : process.argv.includes("--pre-cycle-v1") ? "pre-cycle-v1" : process.argv.find(value => value.startsWith("--probe="))?.slice("--probe=".length);
 const workerDemo = process.argv.includes("--worker-demo");
 const password = "postgres";
 const temporary = await mkdtemp(join(tmpdir(), "mm-standing-paper-test-"));
@@ -104,6 +104,7 @@ try {
   await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input: bootstrap, capture: true });
   const migrations = (await readdir(join(root, "supabase", "migrations"))).filter(name => name.endsWith(".sql"))
     .filter(name => probeMode !== "pre-cycle-v1" || !name.includes("standing_paper_cycle_execution"))
+    .filter(name => probeMode !== "pre-profit-v1" || !name.includes("standing_paper_profit_recording"))
     .sort();
   for (const migration of migrations) {
     ensureWorkNotInterrupted();
@@ -113,12 +114,13 @@ try {
     ensureWorkNotInterrupted();
   }
   if (probeMode === "failure") await run("docker", ["exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database], { input: "drop table public.standing_paper_policies cascade;", capture: true });
-  console.log(`Applied ${migrations.length} migrations to the task-owned local PostgreSQL database${probeMode === "pre-cycle-v1" ? " (cycle-v2 migration intentionally omitted)" : ""}.`);
-  const env = { ...process.env, MONEY_MACHINE_INTEGRATION_TEST: "1", ...(probeMode === "pre-cycle-v1" ? { MONEY_MACHINE_PRE_CYCLE_TEST: "1" } : {}), MM_STANDING_PAPER_TEST_DATABASE_URL: `postgresql://postgres:${password}@127.0.0.1:${port}/${database}` };
+  console.log(`Applied ${migrations.length} migrations to the task-owned local PostgreSQL database${probeMode === "pre-cycle-v1" ? " (cycle-v2 migration intentionally omitted)" : probeMode === "pre-profit-v1" ? " (profit-recording migration intentionally omitted)" : ""}.`);
+  const env = { ...process.env, MONEY_MACHINE_INTEGRATION_TEST: "1", ...(probeMode === "pre-cycle-v1" ? { MONEY_MACHINE_PRE_CYCLE_TEST: "1" } : {}), ...(probeMode === "pre-profit-v1" ? { MONEY_MACHINE_PRE_PROFIT_TEST: "1" } : {}), MM_STANDING_PAPER_TEST_DATABASE_URL: `postgresql://postgres:${password}@127.0.0.1:${port}/${database}` };
   let suiteError;
   ensureWorkNotInterrupted();
   if (probeMode === "interrupt-tests") setTimeout(() => onSignal("SIGINT"), 250).unref();
   const testArgs = [resolve(root, "node_modules", "vitest", "vitest.mjs"), "run", "--config", "vitest.integration.config.ts", "tests/integration/standing-paper-policy.test.ts"];
+  if (probeMode === "pre-profit-v1") testArgs.push("--testNamePattern=keeps legacy rounds working without profit schema and rejects opted in drafts before writes");
   if (probeMode === "pre-cycle-v1") testArgs.push("--testNamePattern=keeps v1 status reads and worker rounds working without the cycle-v2 schema|rejects cycle-v2 before heartbeat or writes when its migration is absent|uses the snapshotted cycle version for a run waiting on the policy lock|rejects stored cycle v2 before heartbeat when its schema is absent");
   testArgs.push("--reporter=json", `--outputFile=${report}`);
   try { await run(process.execPath, testArgs, { env }); }
@@ -131,6 +133,12 @@ try {
   const assertions = output.testResults?.flatMap(file => file.assertionResults ?? []) ?? [];
   console.log(assertions.map(item => `${item.status}: ${item.title}${item.failureMessages?.length ? `\n${item.failureMessages.join("\n")}` : ""}`).join("\n"));
   const cases = [
+    "binds profit recording terms to separate owner confirmation before first activation",
+    "persists profit recording from reconciled sales across restart replay and concurrent recorders",
+    "rolls back profit terms and policy activation together after an injected transition failure",
+    "rolls back sale ledger checkpoint and profit recording together after an allocation failure",
+    "rejects tampered durable profit allocation on record replay and hosted preflight",
+    "grants only owner scoped reads of immutable record only profit material",
     "creates one owned empty PAPER/NOK account under concurrent requests without deposits or policy writes",
     "preflights the exact hosted target and rejects wrong account, policy, status, or capital without writes",
     "posts one policy-scoped 200 NOK initial contribution across hosted worker rounds and restart",
@@ -174,7 +182,7 @@ try {
     "uses the snapshotted cycle version for a run waiting on the policy lock",
     "rejects stored cycle v2 before heartbeat when its schema is absent",
   ];
-  const expectedCases = probeMode === "pre-cycle-v1" ? preCycleCases : cases;
+  const expectedCases = probeMode === "pre-profit-v1" ? ["keeps legacy rounds working without profit schema and rejects opted in drafts before writes"] : probeMode === "pre-cycle-v1" ? preCycleCases : cases;
   if (probeMode === "failure") {
     if (!suiteError || !assertions.some(item => item.status === "failed")) throw new Error("STANDING_PAPER_FAILURE_PROBE_DID_NOT_FAIL");
     console.log("Confirmed deliberate PostgreSQL suite failure; later work stopped and cleanup completed.");
@@ -187,6 +195,7 @@ try {
   ensureWorkNotInterrupted();
   if (suiteError) throw suiteError;
   if (probeMode === "pre-cycle-v1") console.log("Confirmed all targeted pre-cycle compatibility checks passed; cycle-v2 migration was not applied.");
+  else if (probeMode === "pre-profit-v1") console.log("Confirmed targeted legacy compatibility passed; profit-recording migration was not applied.");
   else if (probeMode !== "failure") console.log("Confirmed all standing paper PostgreSQL cases passed (not skipped).");
   if (workerDemo) {
     ensureWorkNotInterrupted();

@@ -3,6 +3,14 @@ import { FEE_POLICY_VERSION, SIMULATION_EXECUTION_POLICY_VERSION, SPREAD_SLIPPAG
 import { M1_ROUNDING_POLICY_VERSION } from "@/domain/financial/rounding";
 import type { FixtureAsset, FixturePriceObservation, ProposedOrder } from "@/domain/strategy/fixture-assets";
 import { assertValidStandingPaperCycleConfiguration, type StandingPaperCycleConfiguration } from "@/domain/risk/standing-paper-exit-policy";
+import { PAPER_PROFIT_ALLOCATION_VERSION, projectPaperProfitAllocation, type PaperProfitAllocationPolicy } from "@/domain/financial/paper-profit-allocation";
+
+export interface PaperProfitRecordingConfiguration {
+  readonly version: typeof PAPER_PROFIT_ALLOCATION_VERSION;
+  readonly recordingMode: "RECORD_ONLY";
+  readonly enabled: boolean;
+  readonly reinvestmentBps: bigint;
+}
 
 export const STANDING_PAPER_POLICY_VERSION = "standing-paper-policy/v1";
 export type PaperPolicyStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "STOPPED";
@@ -23,6 +31,8 @@ export interface StandingPaperPolicy {
   readonly maxLossMinor: bigint;
   readonly maxPriceAgeMs: number;
   readonly cycleConfiguration?: StandingPaperCycleConfiguration;
+  /** Records entitlements only; it does not constrain worker spending yet. */
+  readonly profitAllocationConfiguration?: PaperProfitRecordingConfiguration;
 }
 
 export interface PaperPolicyEvidence {
@@ -97,6 +107,14 @@ export function assertValidPaperPolicy(policy: StandingPaperPolicy): void {
     policy.capitalBudgetMinor <= 0n || policy.maxOrderMinor <= 0n || policy.maxPositionMinor <= 0n || policy.maxGrossExposureMinor <= 0n || policy.maxLossMinor < 0n ||
     !Number.isSafeInteger(policy.maxPriceAgeMs) || policy.maxPriceAgeMs <= 0) throw new Error("PAPER_POLICY_INVALID");
   if (policy.cycleConfiguration !== undefined) assertValidStandingPaperCycleConfiguration(policy.cycleConfiguration);
+  if (policy.profitAllocationConfiguration !== undefined) {
+    const terms = policy.profitAllocationConfiguration;
+    if (!terms || !policy.cycleConfiguration || Object.keys(terms).length !== 4 ||
+      terms.version !== PAPER_PROFIT_ALLOCATION_VERSION || terms.recordingMode !== "RECORD_ONLY" || typeof terms.enabled !== "boolean" ||
+      typeof terms.reinvestmentBps !== "bigint" || terms.reinvestmentBps < 0n || terms.reinvestmentBps > 10_000n) {
+      throw new Error("PAPER_PROFIT_CONFIGURATION_INVALID");
+    }
+  }
 }
 
 /** Hashes the exact DRAFT terms the owner sees before first activation. */
@@ -126,7 +144,27 @@ export function standingPaperActivationConfirmationHash(policy: StandingPaperPol
         maxHoldingMs: policy.cycleConfiguration.exitPolicy.maxHoldingMs,
       },
     } : null,
+    ...(policy.profitAllocationConfiguration ? { profitAllocationConfiguration: {
+      version: policy.profitAllocationConfiguration.version,
+      recordingMode: policy.profitAllocationConfiguration.recordingMode,
+      enabled: policy.profitAllocationConfiguration.enabled,
+      reinvestmentBps: policy.profitAllocationConfiguration.reinvestmentBps.toString(),
+    } } : {}),
   })).digest("hex");
+}
+
+export function paperProfitAllocationPolicy(policy: StandingPaperPolicy, ownerId: string): PaperProfitAllocationPolicy {
+  assertValidPaperPolicy(policy);
+  if (!policy.profitAllocationConfiguration) throw new Error("PAPER_PROFIT_CONFIGURATION_MISSING");
+  return Object.freeze({ version: policy.profitAllocationConfiguration.version, policyId: policy.policyId,
+    financialAccountId: policy.financialAccountId, ownerId, currency: "NOK", mode: "PAPER_ONLY",
+    enabled: policy.profitAllocationConfiguration.enabled, reinvestmentBps: policy.profitAllocationConfiguration.reinvestmentBps });
+}
+
+/** Separate consent to RECORD_ONLY terms; generic dashboard activation cannot supply it. */
+export function paperProfitAllocationConfirmationHash(policy: StandingPaperPolicy, ownerId: string): string {
+  const model = projectPaperProfitAllocation({ policy: paperProfitAllocationPolicy(policy, ownerId), settlements: [] });
+  return createHash("sha256").update(JSON.stringify({ recordingMode: "RECORD_ONLY", policyHash: model.policyHash })).digest("hex");
 }
 
 export function assessStandingPaperPolicy(policy: StandingPaperPolicy, order: ProposedOrder, context: PaperPolicyContext): PaperPolicyEvidence {
