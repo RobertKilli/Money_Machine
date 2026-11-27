@@ -1,5 +1,5 @@
 import type { BacktestResult, DeterministicBacktestState } from "@/application/backtest/run-deterministic-backtest";
-import { standingPaperActivationConfirmationHash, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { paperProfitAllocationConfirmationHash, standingPaperActivationConfirmationHash, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 
 const maxBigInt = (left: bigint, right: bigint) => left > right ? left : right;
 
@@ -45,10 +45,19 @@ export interface StandingPaperPolicyStatusCard {
   readonly version: string | null;
   readonly policyStatus: "DRAFT" | "ACTIVE" | "PAUSED" | "STOPPED" | "UNKNOWN";
   readonly activationConfirmationHash: string | null;
+  readonly profitTermsConfirmationHash: string | null;
+  readonly profitSummary: null | { readonly status: "AVAILABLE" | "UNAVAILABLE"; readonly mode: "RECORD_ONLY" | "RESERVE_PROTECTED"; readonly netRealizedPnlMinor: string | null; readonly reinvestmentMinor: string | null; readonly reserveMinor: string | null; readonly lossRecoveryMinor: string | null; readonly ledgerCashMinor: string | null; readonly cashCoverageMinor: string | null; readonly reserveShortfallMinor: string | null };
   readonly cycleConfiguration: null | {
     readonly contractVersion: string;
     readonly fifoCostBasisVersion: string;
     readonly exitPolicy: { readonly version: string; readonly stopLossBps: string; readonly takeProfitBps: string; readonly maxHoldingMs: number };
+  };
+  readonly profitAllocationConfiguration: null | {
+    readonly version: string;
+    readonly recordingMode: "RECORD_ONLY";
+    readonly enabled: boolean;
+    readonly reinvestmentBps: string;
+    readonly reserveProtection: null | { readonly version: string; readonly mode: "PAPER_ONLY"; readonly enabled: true };
   };
   readonly mode: "PAPER_ONLY" | "UNKNOWN";
   readonly workerStatus: StandingPaperWorkerInstanceStatus | "UNKNOWN";
@@ -103,6 +112,8 @@ export function projectStandingPaperStatusCard(input: {
   readonly fills?: readonly StandingPaperStatusFill[];
   readonly workers?: readonly StandingPaperWorkerInstanceStatusRecord[];
   readonly workerSummary?: { readonly status: StandingPaperWorkerInstanceStatus | "UNKNOWN"; readonly count: number; readonly truncated: boolean };
+  readonly ownerId?: string;
+  readonly profitProjection?: import("@/domain/financial/paper-profit-allocation").PaperProfitAllocationProjection | null;
 }): StandingPaperPolicyStatusCard {
   const { policy, state, run } = input;
   const decisions = input.decisions ?? (run?.result.paperCycleDecisions?.map(item => ({
@@ -151,6 +162,31 @@ export function projectStandingPaperStatusCard(input: {
     status, policyId: policy.policyId, identity: policy.identity, version: policy.version,
     policyStatus: policy.status, mode: policy.mode, workerStatus, workerInstances: [...workers], workerInstanceCount, workerInstancesTruncated,
     activationConfirmationHash: policy.status === "DRAFT" ? standingPaperActivationConfirmationHash(policy) : null,
+    profitTermsConfirmationHash: policy.status === "DRAFT" && policy.profitAllocationConfiguration && input.ownerId ? paperProfitAllocationConfirmationHash(policy, input.ownerId) : null,
+    profitSummary: policy.profitAllocationConfiguration ? (() => {
+      const projection = input.profitProjection;
+      const cash = analytics?.cashMinor ?? null;
+      const available = projection !== null && projection !== undefined && cash !== null;
+      const reserve = projection?.protectedReserveMinor ?? null;
+      const coverage = cash === null || reserve === null ? null : BigInt(cash) < reserve ? BigInt(cash) : reserve;
+      const shortfall = cash === null || reserve === null || BigInt(cash) >= reserve ? 0n : reserve - BigInt(cash);
+      return { status: available ? "AVAILABLE" as const : "UNAVAILABLE" as const,
+        mode: policy.reserveProtectionConfiguration ? "RESERVE_PROTECTED" as const : "RECORD_ONLY" as const,
+        netRealizedPnlMinor: available ? projection.cumulativeRealizedPnlMinor.toString() : null,
+        reinvestmentMinor: available ? projection.totalReinvestmentAllocatedMinor.toString() : null,
+        reserveMinor: available ? reserve?.toString() ?? null : null,
+        lossRecoveryMinor: available ? projection.lossCarryForwardMinor.toString() : null,
+        ledgerCashMinor: available && policy.reserveProtectionConfiguration ? cash : null,
+        cashCoverageMinor: available ? coverage?.toString() ?? null : null,
+        reserveShortfallMinor: available ? shortfall.toString() : null };
+    })() : null,
+    profitAllocationConfiguration: policy.profitAllocationConfiguration ? {
+      version: policy.profitAllocationConfiguration.version,
+      recordingMode: policy.profitAllocationConfiguration.recordingMode,
+      enabled: policy.profitAllocationConfiguration.enabled,
+      reinvestmentBps: policy.profitAllocationConfiguration.reinvestmentBps.toString(),
+      reserveProtection: policy.reserveProtectionConfiguration ?? null,
+    } : null,
     cycleConfiguration: policy.cycleConfiguration ? {
       contractVersion: policy.cycleConfiguration.contractVersion,
       fifoCostBasisVersion: policy.cycleConfiguration.fifoCostBasisVersion,

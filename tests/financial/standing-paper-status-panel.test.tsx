@@ -7,8 +7,10 @@ import { projectStandingPaperStatusCard, projectStandingPaperStatusReadModel } f
 import type { StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { PAPER_CYCLE_CONTRACT_VERSION, PAPER_CYCLE_FIFO_COST_BASIS_VERSION, STANDING_PAPER_EXIT_POLICY_VERSION } from "@/domain/risk/standing-paper-exit-policy";
 import { price } from "@/domain/financial/price";
+import { projectPaperProfitAllocation } from "@/domain/financial/paper-profit-allocation";
+import { paperProfitAllocationConfirmationHash, paperProfitAllocationPolicy } from "@/domain/risk/standing-paper-policy";
 import { FIXTURE_ASSETS, FIXTURE_DATASET_VERSION } from "@/domain/strategy/fixture-assets";
-import { CycleConfigurationView, isStandingPaperActivationConfirmed, loadStandingPaperStatus, parseStandingPaperStatus, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
+import { CycleConfigurationView, ProfitAllocationTermsView, isStandingPaperActivationConfirmed, loadStandingPaperStatus, parseStandingPaperStatus, standingPaperActivationRequestBody, StandingPaperStatusPanelView, type PaperStatusPanelState } from "@/components/standing-paper-status-panel";
 import { CycleField, PaperAccountEmptyState, STANDING_PAPER_STOP_LOSS_PATTERN, STANDING_PAPER_TAKE_PROFIT_PATTERN, StandingPaperPolicySetupPanel } from "@/components/standing-paper-policy-setup-panel";
 
 const testPolicy: StandingPaperPolicy = {
@@ -174,6 +176,58 @@ describe("standing paper status view", () => {
     expect(draftHtml).toContain("Gjennomgå og aktiver");
     expect(draftHtml).toContain("Policy: Draft");
     expect(draftHtml).toContain("Syntetiske priser");
+  });
+
+  it("reviews stored profit terms with owner-bound hashes and projects protected cash under-coverage", () => {
+    const configuredPolicy: StandingPaperPolicy = {
+      ...cyclePolicy, status: "DRAFT",
+      profitAllocationConfiguration: { version: "paper-profit-allocation/v1", recordingMode: "RECORD_ONLY", enabled: true, reinvestmentBps: 5_000n },
+      reserveProtectionConfiguration: { version: "paper-reserve-protection/v1", mode: "PAPER_ONLY", enabled: true },
+    };
+    const projection = projectPaperProfitAllocation({
+      policy: paperProfitAllocationPolicy(configuredPolicy, "owner-1"),
+      settlements: [{ type: "SIMULATED_SELL_SETTLEMENT", settlementId: "settlement-1", fillId: "sell-1",
+        financialAccountId: configuredPolicy.financialAccountId, ownerId: "owner-1", currency: "NOK", sequence: 1n,
+        settledAt: cycleAt, grossProceedsMinor: 10_000n, sellFeeMinor: 0n, fifoCostBasisMinor: 0n }],
+    });
+    const reviewed = projectStandingPaperStatusCard({ policy: configuredPolicy, state: cycleResult.persistentState, run: null, ownerId: "owner-1" });
+    expect(reviewed.profitTermsConfirmationHash).toBe(paperProfitAllocationConfirmationHash(configuredPolicy, "owner-1"));
+    expect(reviewed.profitTermsConfirmationHash).not.toBe(paperProfitAllocationConfirmationHash(configuredPolicy, "owner-2"));
+    expect(standingPaperActivationRequestBody(reviewed)).toEqual({ action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true,
+      activationConfirmationHash: reviewed.activationConfirmationHash, profitTermsConfirmationHash: reviewed.profitTermsConfirmationHash });
+    const reviewHtml = renderToStaticMarkup(<ProfitAllocationTermsView configuration={reviewed.profitAllocationConfiguration!} />);
+    expect(reviewHtml).toContain("Gevinstvilkår som godkjennes");
+    expect(reviewHtml).toContain("50,00%");
+    expect(reviewHtml).toContain("Reservevern paper-reserve-protection/v1 begrenser simulerte kjøp.");
+
+    const lowCashResult = { ...cycleResult, endingState: { ...cycleResult.endingState, cash: "100" } };
+    const protectedCard = projectStandingPaperStatusCard({ policy: { ...configuredPolicy, status: "ACTIVE" }, state: cycleResult.persistentState,
+      run: { id: "status-run", createdAt: cycleAt, result: lowCashResult, valuation: { navMinor: lowCashResult.endingState.nav, asOf: cycleAt, complete: true } },
+      ownerId: "owner-1", profitProjection: projection });
+    expect(protectedCard.profitSummary).toMatchObject({ status: "AVAILABLE", mode: "RESERVE_PROTECTED", netRealizedPnlMinor: "10000",
+      reinvestmentMinor: "5000", reserveMinor: "5000", ledgerCashMinor: "100", cashCoverageMinor: "100", reserveShortfallMinor: "4900" });
+    const protectedHtml = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: projectStandingPaperStatusReadModel([protectedCard]) }} />);
+    expect(protectedHtml).toContain("Reservekrav");
+    expect(protectedHtml).toContain("Kontantdekning");
+    expect(protectedHtml).toContain("Reserveunderdekning");
+
+    const recordOnly = projectStandingPaperStatusCard({ policy: { ...configuredPolicy, status: "ACTIVE", reserveProtectionConfiguration: undefined },
+      state: cycleResult.persistentState, run: { id: "status-run", createdAt: cycleAt, result: lowCashResult,
+        valuation: { navMinor: lowCashResult.endingState.nav, asOf: cycleAt, complete: true } }, ownerId: "owner-1", profitProjection: projection });
+    expect(recordOnly.profitSummary).toMatchObject({ mode: "RECORD_ONLY", reserveMinor: "5000", ledgerCashMinor: null });
+    const legacyDraft = projectStandingPaperStatusCard({ policy: { ...testPolicy, status: "DRAFT" }, state: testResult.persistentState, run: null });
+    expect(standingPaperActivationRequestBody(legacyDraft)).toEqual({ action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true,
+      activationConfirmationHash: legacyDraft.activationConfirmationHash });
+    const recordHtml = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: projectStandingPaperStatusReadModel([recordOnly]) }} />);
+    expect(recordHtml).toContain("Beregnet reserve");
+    expect(recordHtml).not.toContain("Reserveunderdekning");
+
+    const unavailable = projectStandingPaperStatusCard({ policy: { ...configuredPolicy, status: "ACTIVE" }, state: cycleResult.persistentState,
+      run: { id: "status-run", createdAt: cycleAt, result: lowCashResult, valuation: { navMinor: lowCashResult.endingState.nav, asOf: cycleAt, complete: true } },
+      ownerId: "owner-1", profitProjection: null });
+    expect(unavailable.profitSummary).toMatchObject({ status: "UNAVAILABLE", reserveMinor: null, ledgerCashMinor: null });
+    const unavailableHtml = renderToStaticMarkup(<StandingPaperStatusPanelView state={{ kind: "DATA", model: projectStandingPaperStatusReadModel([unavailable]) }} />);
+    expect(unavailableHtml).toContain("Avstemte gevinst- og reservetall er utilgjengelige.");
   });
 
   it("renders HTML-valid stop-loss and take-profit patterns for integer and decimal percentages", () => {

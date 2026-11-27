@@ -43,6 +43,9 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
   const [maxLossNok, setMaxLossNok] = useState("250");
   const [maxPriceAgeMinutes, setMaxPriceAgeMinutes] = useState(60);
   const [cycleV2Enabled, setCycleV2Enabled] = useState(false);
+  const [profitAllocationEnabled, setProfitAllocationEnabled] = useState(false);
+  const [reinvestmentPercent, setReinvestmentPercent] = useState("50");
+  const [reserveProtectionEnabled, setReserveProtectionEnabled] = useState(false);
   const [stopLossPercent, setStopLossPercent] = useState("");
   const [takeProfitPercent, setTakeProfitPercent] = useState("");
   const [maxHoldingHours, setMaxHoldingHours] = useState("");
@@ -101,7 +104,8 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
         method: "POST", cache: "no-store", credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
         body: JSON.stringify({ financialAccountId: accountId, allowedInstrumentIds: instruments, capitalBudgetNok, maxOrderNok, maxPositionNok, maxGrossExposureNok, maxLossNok, maxPriceAgeMinutes,
-          ...(cycleV2Enabled ? { cycleV2: { stopLossPercent, takeProfitPercent, maxHoldingHours } } : {}) }),
+          ...(cycleV2Enabled ? { cycleV2: { stopLossPercent, takeProfitPercent, maxHoldingHours } } : {}),
+          ...(profitAllocationEnabled ? { profitAllocation: { reinvestmentPercent, reserveProtection: reserveProtectionEnabled } } : {}) }),
       });
       const payload = await response.json().catch(() => ({})) as { policyId?: unknown; status?: unknown; error?: unknown };
       if (!response.ok || typeof payload.policyId !== "string" || payload.status !== "DRAFT") {
@@ -167,6 +171,11 @@ export function StandingPaperPolicySetupPanel({ onCreated }: { onCreated: () => 
                   <CycleField label="Maksimal holdetid (timer)" value={maxHoldingHours} setValue={setMaxHoldingHours} placeholder="f.eks. 120" pattern="[1-9][0-9]{0,3}" />
                 </div>
                 <p className="text-xs text-[var(--muted)]">Cycle v2 og FIFO kostgrunnlag versjoneres og lagres i DRAFT. Grensene du angir må bekreftes separat før aktivering. Tersklene er scenario-regler, ikke investeringsråd.</p>
+                <label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={profitAllocationEnabled} onChange={event => { setProfitAllocationEnabled(event.target.checked); if (!event.target.checked) setReserveProtectionEnabled(false); }} className="mt-1" /><span><strong>Registrer gevinstfordeling</strong><span className="block text-xs text-[var(--muted)]">RECORD_ONLY beregner fordeling, men begrenser ikke kjøp.</span></span></label>
+                {profitAllocationEnabled && <div className="grid gap-3 rounded-lg border border-[var(--border)] p-3">
+                  <label className="grid max-w-xs gap-2 text-sm font-medium">Reinvesteringsandel (%)<input required inputMode="decimal" pattern="(?:0|[1-9][0-9]?|100)(?:[.][0-9]{1,2})?" value={reinvestmentPercent} onChange={event => setReinvestmentPercent(event.target.value)} className="min-h-11 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3" /></label>
+                  <label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={reserveProtectionEnabled} onChange={event => setReserveProtectionEnabled(event.target.checked)} className="mt-1" /><span><strong>Aktiver reservevern</strong><span className="block text-xs text-[var(--muted)]">Reservekravet begrenser simulerte kjøp etter reserverte ordre. Kontanter inngår fortsatt fullt i NAV.</span></span></label>
+                </div>}
               </>}
             </fieldset>
             <p className="text-xs text-[var(--muted)]">NOK med opptil to desimaler. Kapitalbudsjettet må være 100–1 000 000 NOK. Maks ordre ≤ maks posisjon ≤ samlet eksponering ≤ kapitalbudsjett; tapsgrensen kan ikke overstige budsjettet.</p>

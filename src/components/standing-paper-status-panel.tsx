@@ -14,6 +14,12 @@ export function isStandingPaperActivationConfirmed(confirmedHash: string | null,
   return currentHash !== null && confirmedHash === currentHash;
 }
 
+export function standingPaperActivationRequestBody(card: StandingPaperPolicyStatusCard) {
+  return { action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true,
+    activationConfirmationHash: card.activationConfirmationHash,
+    ...(card.profitTermsConfirmationHash ? { profitTermsConfirmationHash: card.profitTermsConfirmationHash } : {}) };
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const isText = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 const isAmount = (value: unknown): value is string => typeof value === "string" && /^-?\d+$/.test(value);
@@ -53,7 +59,7 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
   const limits = value.riskLimits;
   const monetaryLimits = [limits.capitalBudgetMinor, limits.maxOrderMinor, limits.maxPositionMinor, limits.maxGrossExposureMinor, limits.maxLossMinor];
   if (value.status === "INVALID") return value.identity === null && value.version === null && value.policyStatus === "UNKNOWN" && value.mode === "UNKNOWN" &&
-    value.activationConfirmationHash === null && value.cycleConfiguration === null &&
+    value.activationConfirmationHash === null && value.profitTermsConfirmationHash === null && value.profitAllocationConfiguration === null && value.profitSummary === null && value.cycleConfiguration === null &&
     monetaryLimits.every(item => item === null) && limits.maxPriceAgeMs === null && value.allowedInstrumentIds.length === 0 && value.lastRound === null &&
     value.workerInstances.length === 0 && value.workerInstanceCount === 0 && !value.workerInstancesTruncated && value.netContributionsMinor === null && value.committedCapitalMinor === null && value.capitalBudgetUsedMinor === null && value.remainingCapitalBudgetMinor === null && value.cumulativeTurnoverMinor === null && value.realizedPnlMinor === null && value.portfolioValueMinor === null &&
     value.portfolioValueAsOf === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null && value.decisions.length === 0 && value.fills.length === 0 &&
@@ -65,6 +71,9 @@ function validCard(value: unknown): value is StandingPaperPolicyStatusCard {
     !(value.cumulativeTurnoverMinor === null || isNonnegativeAmount(value.cumulativeTurnoverMinor)) || !(value.realizedPnlMinor === null || isAmount(value.realizedPnlMinor)) ||
     ((value.cumulativeTurnoverMinor === null) !== (value.realizedPnlMinor === null))) return false;
   if (value.policyStatus === "DRAFT" ? typeof value.activationConfirmationHash !== "string" || !/^[0-9a-f]{64}$/.test(value.activationConfirmationHash) : value.activationConfirmationHash !== null) return false;
+  if (value.policyStatus === "DRAFT" ? !(value.profitTermsConfirmationHash === null || typeof value.profitTermsConfirmationHash === "string" && /^[0-9a-f]{64}$/.test(value.profitTermsConfirmationHash)) : value.profitTermsConfirmationHash !== null) return false;
+  if (value.profitAllocationConfiguration !== null && (!isRecord(value.profitAllocationConfiguration) || value.profitAllocationConfiguration.version !== "paper-profit-allocation/v1" || value.profitAllocationConfiguration.recordingMode !== "RECORD_ONLY" || typeof value.profitAllocationConfiguration.enabled !== "boolean" || !isNonnegativeAmount(value.profitAllocationConfiguration.reinvestmentBps) || BigInt(value.profitAllocationConfiguration.reinvestmentBps as string) > 10_000n)) return false;
+  if (value.profitSummary !== null && (!isRecord(value.profitSummary) || !["AVAILABLE", "UNAVAILABLE"].includes(String(value.profitSummary.status)) || !["RECORD_ONLY", "RESERVE_PROTECTED"].includes(String(value.profitSummary.mode)) || ![value.profitSummary.netRealizedPnlMinor, value.profitSummary.reinvestmentMinor, value.profitSummary.reserveMinor, value.profitSummary.lossRecoveryMinor, value.profitSummary.ledgerCashMinor, value.profitSummary.cashCoverageMinor, value.profitSummary.reserveShortfallMinor].every(x => x === null || isAmount(x)))) return false;
   if (value.lastRound !== null && (!isRecord(value.lastRound) || !isText(value.lastRound.id) || !isDate(value.lastRound.completedAt) || !isDate(value.lastRound.asOf))) return false;
   const noValuationAmounts = value.portfolioValueMinor === null && value.currentLossMinor === null && value.remainingLossMarginMinor === null;
   const noSavedValuation = noValuationAmounts && value.portfolioValueAsOf === null;
@@ -151,7 +160,8 @@ function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolic
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   if (card.policyStatus !== "DRAFT" || !card.activationConfirmationHash) return null;
-  const confirmed = isStandingPaperActivationConfirmed(confirmedHash, card.activationConfirmationHash);
+  const confirmationKey = `${card.activationConfirmationHash}:${card.profitTermsConfirmationHash ?? "legacy"}`;
+  const confirmed = isStandingPaperActivationConfirmed(confirmedHash, confirmationKey);
   async function activate() {
     if (!confirmed || pending) return;
     setPending(true);
@@ -160,12 +170,15 @@ function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolic
       const response = await fetch(`/api/dashboard/paper-policies/${encodeURIComponent(card.policyId)}/transition`, {
         method: "POST", cache: "no-store", credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
-        body: JSON.stringify({ action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true, activationConfirmationHash: card.activationConfirmationHash }),
+        body: JSON.stringify(standingPaperActivationRequestBody(card)),
       });
       const payload = await response.json().catch(() => ({})) as { policyId?: unknown; status?: unknown; error?: unknown };
       if (!response.ok || payload.policyId !== card.policyId || payload.status !== "ACTIVE") {
         setMessage(payload.error === "STALE_CONFIRMATION" || payload.error === "STALE_STATUS" ? "Grensene eller statusen er endret. Oppdater og kontroller på nytt." : "Aktivering kunne ikke bekreftes. Oppdater status.");
-        if (response.status === 409) await onRefresh?.();
+        if (response.status === 409) {
+          setConfirmedHash(null);
+          await onRefresh?.();
+        }
         return;
       }
       setReviewing(false);
@@ -190,8 +203,9 @@ function PolicyActivationControl({ card, onRefresh }: { card: StandingPaperPolic
       </dl>
       <p className="mt-3 break-all text-xs text-[var(--muted)]">Tillatte instrumenter: {card.allowedInstrumentIds.join(", ")}</p>
       {card.cycleConfiguration && <CycleConfigurationView configuration={card.cycleConfiguration} title="Cycle-konfigurasjon som godkjennes" />}
+      {card.profitAllocationConfiguration && <ProfitAllocationTermsView configuration={card.profitAllocationConfiguration} />}
       <p className="mt-3 rounded-lg bg-amber-400/5 p-3 text-sm">Kun PAPER_ONLY. Prisene er syntetiske, og fills simuleres. Dette er ikke børsutførelse.</p>
-      <label className="mt-4 flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmedHash(event.target.checked ? card.activationConfirmationHash : null)} className="mt-1" /><span>Jeg har gjennomgått og godkjenner grensene ovenfor.</span></label>
+      <label className="mt-4 flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmedHash(event.target.checked ? confirmationKey : null)} className="mt-1" /><span>Jeg har gjennomgått og godkjenner vilkårene ovenfor.</span></label>
       <div className="mt-4 flex flex-wrap gap-2"><button type="button" disabled={!confirmed || pending} onClick={() => void activate()} className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">{pending ? "Aktiverer …" : "Bekreft aktivering"}</button><button type="button" disabled={pending} onClick={() => { setReviewing(false); setConfirmedHash(null); }} className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm">Avbryt</button></div>
     </>}
     {message && <p role="status" className="mt-3 text-sm text-amber-100">{message}</p>}
@@ -261,6 +275,7 @@ function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; 
       <Metric label="Virtuelle innskudd" value={amount(card.netContributionsMinor)} detail="Netto bokført på paper-kontoen" />
       <Metric label="Kontanter" value={amount(card.analytics?.cashMinor ?? null)} detail="Bokført saldo ved lagret verdsettelse" />
       <Metric label="Realisert resultat" value={amount(card.analytics?.realizedPnlMinor ?? null)} detail="Netto salgsproveny etter salgsgebyr minus forbrukt FIFO-kostbasis inkl. kjøpsgebyr" />
+      {card.profitSummary && <section className="rounded-xl border border-[var(--border)] p-4 sm:col-span-2"><h3 className="font-semibold">Gevinstfordeling og reserve</h3>{card.profitSummary.status === "UNAVAILABLE" ? <p className="mt-2 text-sm text-amber-100">Avstemte gevinst- og reservetall er utilgjengelige.</p> : <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2"><Limit label="Netto realisert resultat" value={amount(card.profitSummary.netRealizedPnlMinor)} /><Limit label="Avsatt til reinvestering" value={amount(card.profitSummary.reinvestmentMinor)} /><Limit label={card.profitSummary.mode === "RECORD_ONLY" ? "Beregnet reserve" : "Reservekrav"} value={amount(card.profitSummary.reserveMinor)} /><Limit label="Gjenstående tap til gjenvinning" value={amount(card.profitSummary.lossRecoveryMinor)} />{card.profitSummary.mode === "RESERVE_PROTECTED" && <><Limit label="Kontantdekning" value={amount(card.profitSummary.cashCoverageMinor)} /><Limit label="Reserveunderdekning" value={amount(card.profitSummary.reserveShortfallMinor)} /></>}</dl>}</section>}
       <Metric label="Urealisert resultat" value={amount(card.analytics?.unrealizedPnlMinor ?? null)} detail={`Syntetisk markedsverdi minus åpen FIFO-kostbasis inkl. kjøpsgebyr (${amount(card.analytics?.openCostBasisMinor ?? null)})`} />
       <Metric label="Betalte simulerte handelsgebyrer" value={amount(card.analytics?.feesMinor ?? null)} detail="Sum kjøps- og salgsgebyrer. Allerede medregnet i kostbasis eller salgsproveny. Spread og glidning ligger i fillprisen." />
       <Metric label="Samlet eksponering" value={amount(card.analytics?.exposureMinor ?? null)} detail="Syntetisk markedsverdi av åpne beholdninger" />
@@ -285,6 +300,10 @@ function StatusCard({ card, onRefresh }: { card: StandingPaperPolicyStatusCard; 
 
 export function CycleConfigurationView({ configuration, title }: { configuration: NonNullable<StandingPaperPolicyStatusCard["cycleConfiguration"]>; title: string }) {
   return <section className="min-w-0 rounded-xl border border-[var(--accent)]/30 p-4"><h3 className="font-semibold">{title}</h3><p className="mt-1 text-xs text-[var(--muted)]">{configuration.contractVersion} · {configuration.fifoCostBasisVersion} · {configuration.exitPolicy.version}</p><dl className="mt-3 grid gap-2 text-sm sm:grid-cols-3"><Limit label="Stop-loss" value={percentFromBps(configuration.exitPolicy.stopLossBps)} /><Limit label="Take-profit" value={percentFromBps(configuration.exitPolicy.takeProfitBps)} /><Limit label="Maksimal holdetid" value={`${configuration.exitPolicy.maxHoldingMs / 3_600_000} timer`} /></dl><p className="mt-2 text-xs text-[var(--muted)]">Exit-reglene styrer syntetiske handler mot syntetiske priser. De er testparametere, ikke lønnsomhetsråd.</p></section>;
+}
+
+export function ProfitAllocationTermsView({ configuration }: { configuration: NonNullable<StandingPaperPolicyStatusCard["profitAllocationConfiguration"]> }) {
+  return <section className="mt-3 rounded-lg border border-[var(--border)] p-3"><h4 className="font-semibold">Gevinstvilkår som godkjennes</h4><p className="mt-1 text-sm">RECORD_ONLY, reinvesteringsandel {percentFromBps(configuration.reinvestmentBps)}.</p><p className="mt-1 text-xs text-[var(--muted)]">RECORD_ONLY registrerer fordelingen og begrenser ikke kjøp.</p>{configuration.reserveProtection && <p className="mt-1 text-sm">Reservevern {configuration.reserveProtection.version} begrenser simulerte kjøp.</p>}</section>;
 }
 
 function workerLabel(status: string): string {

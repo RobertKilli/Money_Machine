@@ -83,6 +83,21 @@ describe("owner-bound standing paper transition route", () => {
     expect(await response.json()).toEqual({ policyId, status: "ACTIVE" });
   });
 
+  it("forwards both reviewed hashes for configured terms and asks for a fresh review when either is stale", async () => {
+    const activationHash = "a".repeat(64);
+    const profitHash = "b".repeat(64);
+    const response = await POST(request({ action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true,
+      activationConfirmationHash: activationHash, profitTermsConfirmationHash: profitHash }), context);
+    expect(response.status).toBe(200);
+    expect(mocks.activateOwnedDraft).toHaveBeenCalledWith("owner-1", policyId, activationHash, profitHash);
+
+    mocks.activateOwnedDraft.mockRejectedValueOnce(new Error("PAPER_PROFIT_TERMS_CONFIRMATION_REQUIRED"));
+    const stale = await POST(request({ action: "ACTIVATE", expectedStatus: "DRAFT", confirmActivation: true,
+      activationConfirmationHash: activationHash }), context);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ error: "STALE_CONFIRMATION" });
+  });
+
   it("maps ownership and stale-status failures without exposing private data", async () => {
     mocks.transitionOwned.mockRejectedValueOnce(new Error("PAPER_POLICY_NOT_FOUND"));
     const hidden = await POST(request({ action: "PAUSE", expectedStatus: "ACTIVE" }), context);

@@ -55,7 +55,7 @@ const record = (value: unknown): Record<string, unknown> => {
 const signedInteger = (value: unknown): value is string => typeof value === "string" && /^-?\d+$/.test(value);
 const isProcessInstanceUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const invalidCard = (policyId: string): StandingPaperPolicyStatusCard => ({
-  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", activationConfirmationHash: null, cycleConfiguration: null, mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [], workerInstanceCount: 0, workerInstancesTruncated: false,
+  status: "INVALID", policyId, identity: null, version: null, policyStatus: "UNKNOWN", activationConfirmationHash: null, profitTermsConfirmationHash: null, profitAllocationConfiguration: null, profitSummary: null, cycleConfiguration: null, mode: "UNKNOWN", workerStatus: "UNKNOWN", workerInstances: [], workerInstanceCount: 0, workerInstancesTruncated: false,
   allowedInstrumentIds: [], riskLimits: { capitalBudgetMinor: null, maxOrderMinor: null, maxPositionMinor: null, maxGrossExposureMinor: null, maxLossMinor: null, maxPriceAgeMs: null },
   lastRound: null, netContributionsMinor: null, committedCapitalMinor: null, remainingCapitalBudgetMinor: null,
   capitalBudgetUsedMinor: null, cumulativeTurnoverMinor: null, realizedPnlMinor: null,
@@ -594,10 +594,10 @@ export class StandingPaperPolicyRepository {
       await tx`set local role authenticated`;
       await tx`select set_config('request.jwt.claim.sub', ${actorId}, true)`;
       const rows = await tx<{
-        policy_id: string; financial_account_id: string; policy_version: string; status: string;
+        policy_id: string; financial_account_id: string; owner_id: string; policy_version: string; status: string;
         policy_json: unknown; state_json: unknown; last_run_id: string | null;
       }[]>`
-        select p.policy_id, p.financial_account_id, p.policy_version, p.status,
+        select p.policy_id, p.financial_account_id, a.owner_id, p.policy_version, p.status,
           p.policy_json, p.state_json, p.last_run_id
         from public.financial_accounts a
         join public.standing_paper_policies p on p.financial_account_id = a.id
@@ -748,9 +748,16 @@ export class StandingPaperPolicyRepository {
                 : summary.has_waiting_interval ? "WAITING_INTERVAL" as const
                   : summary.has_stale ? "STALE" as const : "ENDED" as const,
               count: summary.instance_count, truncated: summary.instance_count > 20 };
+          let profitProjection = null;
+          if (policy.profitAllocationConfiguration) {
+            try {
+              await this.assertProfitTerms(tx, policy, row.owner_id);
+              profitProjection = await this.persistProfitAllocations(tx, policy, row.owner_id, state, row.last_run_id, false);
+            } catch { profitProjection = null; }
+          }
           cards.push(projectStandingPaperStatusCard({
             policy, state, run: run && valuation ? { id: run.id, createdAt: validDate(run.created_at).toISOString(), result: result as BacktestResult, valuation } : null,
-            decisions, fills, workers, workerSummary,
+            decisions, fills, workers, workerSummary, ownerId: row.owner_id, profitProjection,
           }));
         } catch {
           cards.push(invalidCard(row.policy_id));
