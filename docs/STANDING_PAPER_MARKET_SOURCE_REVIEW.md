@@ -5,6 +5,8 @@
 **Baseline:** `4e779fbe7b5f94564b61fd144300e969a6689349`
 **Status:** comparative documentation review; no provider selected as approved, no credentials resolved, and no market-data endpoint called. Official documentation lookup only.
 
+**Superseding clarification (2026-11-27):** The original conditional recommendation of Post-Trade `LAST_TRADE` is narrowed by the [Kraken data clarification](STANDING_PAPER_KRAKEN_DATA_CLARIFICATION.md). Official documentation does not establish that `symbol` plus `count=1` selects the latest trade as-of a defined time. Pre-Trade BID/ASK is now the conditional alternative for the first private PAPER data test, subject to written Kraken permission and confirmation of snapshot, timestamp, and best-level semantics. Neither product is approved.
+
 ## Scope and recommendation
 
 The [offline standing PAPER price contract](STANDING_PAPER_POLICY.md#external-paper-price-contract-offline) requires an exact external instrument/source binding, `LAST_TRADE`, `BID` or `ASK`, a price-observation time, an evidenced availability time and receiving-side retrieval time. Quote currency must equal the PAPER account currency; this path does not convert currency. Fixture instruments are excluded. `AVAILABLE` in that contract is a receipt-validation result, not source permission.
