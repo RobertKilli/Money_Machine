@@ -3,9 +3,10 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { runDeterministicBacktest, type BacktestRunConfig, type BacktestResult, type DeterministicBacktestState, type PaperCycleDecision } from "@/application/backtest/run-deterministic-backtest";
-import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, standingPaperActivationConfirmationHash, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
+import { assertStandingPaperPolicyTransitionAction, assertValidPaperPolicy, standingPaperActivationConfirmationHash, paperProfitAllocationConfirmationHash, paperProfitAllocationPolicy, transitionPaperPolicy, type StandingPaperPolicy } from "@/domain/risk/standing-paper-policy";
 import { assertValidStandingPaperCycleConfiguration } from "@/domain/risk/standing-paper-exit-policy";
 import { FIXTURE_ASSETS, type FixturePriceObservation } from "@/domain/strategy/fixture-assets";
+import { projectPaperProfitAllocation, type PaperProfitAllocationProjection } from "@/domain/financial/paper-profit-allocation";
 import type { ContributionEvent } from "@/application/backtest/run-deterministic-backtest";
 import { consumeFifoLots, type DisposalEvidence, type FifoLotConsumption } from "@/domain/portfolio/portfolio-projection";
 import { projectStandingPaperDecisionDetail, type StandingPaperDecisionDetail, type StandingPaperLedgerSettlement } from "@/application/paper-trading/standing-paper-decision-detail";
@@ -246,6 +247,113 @@ export class StandingPaperPolicyRepository {
     this.client = postgres(connectionString, { max: 5, prepare: true, ...(connectionOptions.ssl ? { ssl: connectionOptions.ssl } : {}) });
   }
 
+  private async requireProfitSchema(tx: Sql | TransactionSql): Promise<void> {
+    const rows = await tx<{ terms: boolean; allocations: boolean }[]>`select
+      to_regclass('public.standing_paper_profit_terms') is not null as terms,
+      to_regclass('public.standing_paper_profit_allocations') is not null as allocations`;
+    if (!rows[0]?.terms || !rows[0]?.allocations) throw new Error("PAPER_PROFIT_SCHEMA_REQUIRED");
+    if (!(await this.hasCycleV2Schema(tx))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+  }
+
+  private async assertProfitTerms(tx: Sql | TransactionSql, policy: StandingPaperPolicy, ownerId: string): Promise<string> {
+    await this.requireProfitSchema(tx);
+    const rows = await tx<{ owner_id: string; financial_account_id: string; recording_mode: string; terms_hash: string; policy_confirmation_hash: string; terms_json: unknown }[]>`
+      select owner_id, financial_account_id, recording_mode, terms_hash, policy_confirmation_hash, terms_json
+      from public.standing_paper_profit_terms where policy_id=${policy.policyId}`;
+    const terms = rows[0];
+    const expectedHash = paperProfitAllocationConfirmationHash(policy, ownerId);
+    if (!terms || terms.owner_id !== ownerId || terms.financial_account_id !== policy.financialAccountId || terms.recording_mode !== "RECORD_ONLY" ||
+      terms.terms_hash !== expectedHash || terms.policy_confirmation_hash !== standingPaperActivationConfirmationHash({ ...policy, status: "DRAFT" }) ||
+      sha256(decode(typeof terms.terms_json === "string" ? JSON.parse(terms.terms_json) : terms.terms_json)) !== sha256(paperProfitAllocationPolicy(policy, ownerId))) {
+      throw new Error("PAPER_PROFIT_APPROVED_TERMS_MISMATCH");
+    }
+    return expectedHash;
+  }
+
+  private async persistProfitAllocations(
+    tx: TransactionSql, policy: StandingPaperPolicy, ownerId: string, state: DeterministicBacktestState, lastRunId: string | null, allowAppend = true,
+  ): Promise<PaperProfitAllocationProjection> {
+    const termsHash = await this.assertProfitTerms(tx, policy, ownerId);
+    await this.assertLedgerCheckpointMatches(tx, policy.financialAccountId, state, lastRunId);
+    const disposals = [...(state.disposals ?? [])].sort((a,b) => a.executedAt.getTime() - b.executedAt.getTime() || a.fillId.localeCompare(b.fillId));
+    const fills = await tx<{
+      policy_id: string; financial_account_id: string; fill_id: string; order_id: string; ledger_transaction_id: string; run_id: string;
+      side: string; execution_json: unknown; acquisition_json: unknown; disposal_json: unknown; occurred_at: Date; transaction_type: string;
+    }[]>`select f.*, l.occurred_at, l.transaction_type from public.standing_paper_fills f
+      join public.ledger_transactions l on l.id=f.ledger_transaction_id and l.financial_account_id=f.financial_account_id
+      join public.standing_paper_runs r on r.id=f.run_id and r.policy_id=f.policy_id and r.financial_account_id=f.financial_account_id
+      where f.financial_account_id=${policy.financialAccountId} and f.policy_id=${policy.policyId} and f.side='SELL'`;
+    const journals = await tx<{ id: string }[]>`select id from public.ledger_transactions
+      where financial_account_id=${policy.financialAccountId} and transaction_type='SIMULATED_SELL_SETTLEMENT' order by id`;
+    if (fills.length !== disposals.length || sha256(journals.map(row => row.id)) !== sha256(disposals.map(row => row.ledgerTransactionId).sort())) {
+      throw new Error("PAPER_PROFIT_SALE_HISTORY_MISMATCH");
+    }
+    const sourceRows = new Map(fills.map(row => [row.fill_id, row]));
+    const settlements = disposals.map((disposal, index) => {
+      const source = sourceRows.get(disposal.fillId);
+      if (!source || source.ledger_transaction_id !== disposal.ledgerTransactionId || source.transaction_type !== "SIMULATED_SELL_SETTLEMENT" ||
+        source.occurred_at.toISOString() !== disposal.executedAt.toISOString()) throw new Error("PAPER_PROFIT_SETTLEMENT_BINDING_INVALID");
+      validateFillRow(source, policy.policyId, policy.financialAccountId);
+      return { type: "SIMULATED_SELL_SETTLEMENT" as const, settlementId: disposal.ledgerTransactionId, fillId: disposal.fillId,
+        financialAccountId: policy.financialAccountId, ownerId, currency: disposal.currency, sequence: BigInt(index + 1),
+        settledAt: disposal.executedAt.toISOString(), grossProceedsMinor: disposal.grossMinor, sellFeeMinor: disposal.feeMinor,
+        fifoCostBasisMinor: disposal.lotConsumptions.reduce((total, item) => total + item.costBasisMinor, 0n) };
+    });
+    const projection = projectPaperProfitAllocation({ policy: paperProfitAllocationPolicy(policy, ownerId), settlements });
+    const existing = await tx<{
+      settlement_id: string; fill_id: string; run_id: string; sequence: string; terms_hash: string; input_hash: string; allocation_hash: string;
+      allocation_json: unknown; realized_pnl_minor: string; profit_high_water_minor: string; protected_reserve_minor: string;
+    }[]>`select settlement_id, fill_id, run_id, sequence::text, terms_hash, input_hash, allocation_hash, allocation_json,
+      realized_pnl_minor::text, profit_high_water_minor::text, protected_reserve_minor::text
+      from public.standing_paper_profit_allocations where financial_account_id=${policy.financialAccountId} and policy_id=${policy.policyId}
+      order by sequence`;
+    if (existing.length > projection.allocations.length) throw new Error("PAPER_PROFIT_ALLOCATION_HISTORY_MISMATCH");
+    // Validate the entire stored prefix before appending anything. Existing rows
+    // are never updated or repaired silently, including after restart.
+    for (const [index, row] of existing.entries()) {
+      const expected = projection.allocations[index]!;
+      const source = sourceRows.get(expected.settlement.fillId)!;
+      if (BigInt(row.sequence) !== expected.settlement.sequence || row.settlement_id !== expected.settlement.settlementId ||
+        row.fill_id !== expected.settlement.fillId || row.run_id !== source.run_id || row.terms_hash !== termsHash || row.input_hash !== expected.inputHash ||
+        row.allocation_hash !== sha256(expected) || sha256(decode(typeof row.allocation_json === "string" ? JSON.parse(row.allocation_json) : row.allocation_json)) !== sha256(expected) ||
+        BigInt(row.realized_pnl_minor) !== expected.cumulativeRealizedPnlMinor || BigInt(row.profit_high_water_minor) !== expected.realizedProfitHighWaterMinor ||
+        BigInt(row.protected_reserve_minor) !== expected.cumulativeProtectedReserveMinor) throw new Error("PAPER_PROFIT_ALLOCATION_HISTORY_MISMATCH");
+    }
+    if (!allowAppend && existing.length !== projection.allocations.length) throw new Error("PAPER_PROFIT_ALLOCATION_HISTORY_MISMATCH");
+    for (const allocation of projection.allocations.slice(existing.length)) {
+      const source = sourceRows.get(allocation.settlement.fillId)!;
+      await tx`insert into public.standing_paper_profit_allocations
+        (policy_id, financial_account_id, terms_hash, settlement_id, fill_id, run_id, sequence, input_hash, allocation_hash,
+         allocation_json, realized_pnl_minor, profit_high_water_minor, protected_reserve_minor)
+        values (${policy.policyId}, ${policy.financialAccountId}, ${termsHash}, ${allocation.settlement.settlementId}, ${allocation.settlement.fillId},
+          ${source.run_id}, ${allocation.settlement.sequence.toString()}::numeric, ${allocation.inputHash}, ${sha256(allocation)}, ${tx.json(json(allocation))},
+          ${allocation.cumulativeRealizedPnlMinor.toString()}::numeric, ${allocation.realizedProfitHighWaterMinor.toString()}::numeric,
+          ${allocation.cumulativeProtectedReserveMinor.toString()}::numeric)`;
+    }
+    return projection;
+  }
+
+  /** Owner-bound recording/replay only. It never transfers cash or changes risk limits. */
+  async recordProfitAllocationOwned(actorId: string, policyId: string): Promise<PaperProfitAllocationProjection> {
+    return this.client.begin(async tx => {
+      const rows = await tx<(StoredPolicy & { state_json: unknown; last_run_id: string | null })[]>`
+        select policy_json, status, financial_account_id, state_json, last_run_id
+        from public.standing_paper_policies where policy_id=${policyId} for update`;
+      const row = rows[0];
+      if (!row) throw new Error("PAPER_POLICY_NOT_FOUND");
+      const policy = parsePolicy(row.policy_json);
+      if (policy.policyId !== policyId || policy.status !== row.status || policy.financialAccountId !== row.financial_account_id) throw new Error("PAPER_POLICY_STATE_CORRUPT");
+      const owners = await tx<{ owner_id: string; mode: string; status: string; base_currency_code: string }[]>`
+        select owner_id, mode, status, base_currency_code from public.financial_accounts where id=${policy.financialAccountId} for update`;
+      const owner = owners[0];
+      if (!actorId || !owner || owner.owner_id !== actorId) throw new Error("PAPER_POLICY_NOT_FOUND");
+      if (owner.mode !== "PAPER" || owner.status !== "ACTIVE" || owner.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
+      if (!policy.profitAllocationConfiguration || policy.status === "DRAFT") throw new Error("PAPER_PROFIT_CONFIGURATION_NOT_APPROVED");
+      const state = parseState(row.state_json, policy.financialAccountId);
+      return this.persistProfitAllocations(tx, policy, owner.owner_id, state, row.last_run_id);
+    });
+  }
+
   private async hasCycleV2Schema(tx: Sql | TransactionSql): Promise<boolean> {
     const rows = await tx<{ decisions: boolean; audit: boolean; fillSide: boolean; fillDisposal: boolean; sellType: boolean }[]>`
       select to_regclass('public.standing_paper_cycle_decisions') is not null as decisions,
@@ -292,8 +400,10 @@ export class StandingPaperPolicyRepository {
       const fixtureIds = new Set(FIXTURE_ASSETS.map(asset => asset.assetId));
       if (!policy.allowedInstrumentIds.length || policy.allowedInstrumentIds.some(id => !fixtureIds.has(id))) throw new Error("PAPER_WORKER_INSTRUMENT_SCOPE_INVALID");
       if (requestedCapitalMinor > policy.capitalBudgetMinor) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
+      if (policy.profitAllocationConfiguration) await this.assertProfitTerms(tx, policy, row.owner_id);
       const state = parseState(row.state_json, expectedAccountId);
       await this.assertLedgerCheckpointMatches(tx, expectedAccountId, state, row.last_run_id);
+      if (policy.profitAllocationConfiguration) await this.persistProfitAllocations(tx, policy, row.owner_id, state, row.last_run_id, false);
       return { policy: structuredClone(policy), ownerId: row.owner_id };
     });
   }
@@ -337,8 +447,10 @@ export class StandingPaperPolicyRepository {
         if (!policy.allowedInstrumentIds.length || policy.allowedInstrumentIds.some(id => !FIXTURE_ASSETS.some(asset => asset.assetId === id))) throw new Error("PAPER_WORKER_INSTRUMENT_SCOPE_INVALID");
         if (expectedTarget.initialCapitalMinor <= 0n) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_INVALID");
         if (expectedTarget.initialCapitalMinor > policy.capitalBudgetMinor) throw new Error("PAPER_WORKER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
+        if (policy.profitAllocationConfiguration) await this.assertProfitTerms(tx, policy, account.owner_id);
         const state = parseState(stored.state_json, expectedTarget.accountId);
         await this.assertLedgerCheckpointMatches(tx, expectedTarget.accountId, state, stored.last_run_id);
+        if (policy.profitAllocationConfiguration) await this.persistProfitAllocations(tx, policy, account.owner_id, state, stored.last_run_id, false);
         const inserted = await tx<{ policy_id: string }[]>`
           insert into public.standing_paper_worker_heartbeats
           (policy_id, financial_account_id, worker_id, process_instance_id, status, started_at, heartbeat_at, ended_at, exit_reason)
@@ -368,6 +480,11 @@ export class StandingPaperPolicyRepository {
     const policy = parsePolicy(policies[0].policy_json);
     if (policy.policyId !== policyId || policy.status !== policies[0].status || policy.financialAccountId !== policies[0].financial_account_id) throw new Error("PAPER_WORKER_POLICY_INVALID");
     if (policy.cycleConfiguration && !(await this.hasCycleV2Schema(this.client))) throw new Error("PAPER_CYCLE_V2_SCHEMA_REQUIRED");
+    if (policy.profitAllocationConfiguration) {
+      const owners = await this.client<{ owner_id: string }[]>`select owner_id from public.financial_accounts where id=${policy.financialAccountId}`;
+      if (!owners[0]) throw new Error("PAPER_POLICY_NOT_FOUND");
+      await this.assertProfitTerms(this.client, policy, owners[0].owner_id);
+    }
     const rows = await insertHeartbeat(this.client);
     if (!rows[0]) throw new Error("PAPER_WORKER_HEARTBEAT_POLICY_NOT_RUNNABLE");
   }
@@ -761,7 +878,8 @@ export class StandingPaperPolicyRepository {
     }
   }
 
-  async create(policy: StandingPaperPolicy): Promise<void> {
+  async create(inputPolicy: StandingPaperPolicy): Promise<void> {
+    const policy = structuredClone(inputPolicy);
     assertValidPaperPolicy(policy);
     if (policy.status !== "DRAFT") throw new Error("PAPER_POLICY_MUST_START_DRAFT");
     await this.client.begin(async tx => {
@@ -769,6 +887,7 @@ export class StandingPaperPolicyRepository {
       if (!accounts[0]) throw new Error("STANDING_PAPER_REQUIRES_ACTIVE_PAPER_NOK_ACCOUNT");
       const existingLedger = await tx<{ id: string }[]>`select id from public.ledger_transactions where financial_account_id = ${policy.financialAccountId} limit 1`;
       if (existingLedger[0]) throw new Error("PAPER_ACCOUNT_NOT_EMPTY_AT_POLICY_CREATION");
+      if (policy.profitAllocationConfiguration) await this.requireProfitSchema(tx);
       await tx`insert into public.standing_paper_policies (policy_id, financial_account_id, policy_version, status, policy_json) values (${policy.policyId}, ${policy.financialAccountId}, ${policy.version}, ${policy.status}, ${tx.json(json(policy))})`;
       await tx`insert into public.standing_paper_policy_transitions (policy_id, financial_account_id, policy_version, action, from_status, to_status, input_hash) values (${policy.policyId}, ${policy.financialAccountId}, ${policy.version}, 'INITIALIZE', null, 'DRAFT', ${sha256(policy)})`;
     });
@@ -790,7 +909,8 @@ export class StandingPaperPolicyRepository {
 
   /** Creates a DRAFT under the shared account lock after checking ownership,
    * account eligibility, an empty ledger, and absence of an existing policy. */
-  async createOwnedDraft(actorId: string, policy: StandingPaperPolicy): Promise<void> {
+  async createOwnedDraft(actorId: string, inputPolicy: StandingPaperPolicy): Promise<void> {
+    const policy = structuredClone(inputPolicy);
     if (!actorId.trim()) throw new Error("PAPER_ACCOUNT_NOT_FOUND");
     assertValidPaperPolicy(policy);
     if (policy.status !== "DRAFT") throw new Error("PAPER_POLICY_MUST_START_DRAFT");
@@ -806,6 +926,7 @@ export class StandingPaperPolicyRepository {
       if (existingLedger[0]) throw new Error("PAPER_ACCOUNT_NOT_EMPTY_AT_POLICY_CREATION");
       const existingPolicy = await tx<{ policy_id: string }[]>`select policy_id from public.standing_paper_policies where financial_account_id = ${policy.financialAccountId} limit 1`;
       if (existingPolicy[0]) throw new Error("PAPER_ACCOUNT_ALREADY_HAS_POLICY");
+      if (policy.profitAllocationConfiguration) await this.requireProfitSchema(tx);
       await tx`insert into public.standing_paper_policies (policy_id, financial_account_id, policy_version, status, policy_json) values (${policy.policyId}, ${policy.financialAccountId}, ${policy.version}, 'DRAFT', ${tx.json(json(policy))})`;
       await tx`insert into public.standing_paper_policy_transitions (policy_id, financial_account_id, policy_version, action, from_status, to_status, input_hash) values (${policy.policyId}, ${policy.financialAccountId}, ${policy.version}, 'INITIALIZE', null, 'DRAFT', ${sha256(policy)})`;
     });
@@ -833,10 +954,10 @@ export class StandingPaperPolicyRepository {
   }
 
   /** Explicit first activation is bound to the exact DRAFT material reviewed by the owner. */
-  async activateOwnedDraft(actorId: string, policyId: string, expectedConfirmationHash: string): Promise<StandingPaperPolicy> {
+  async activateOwnedDraft(actorId: string, policyId: string, expectedConfirmationHash: string, expectedProfitTermsHash?: string): Promise<StandingPaperPolicy> {
     if (!actorId.trim() || !policyId.trim()) throw new Error("PAPER_POLICY_NOT_FOUND");
     if (!/^[0-9a-f]{64}$/.test(expectedConfirmationHash)) throw new Error("PAPER_POLICY_CONFIRMATION_INVALID");
-    return this.transitionTransaction(actorId, policyId, "ACTIVATE", "DRAFT", expectedConfirmationHash);
+    return this.transitionTransaction(actorId, policyId, "ACTIVATE", "DRAFT", expectedConfirmationHash, expectedProfitTermsHash);
   }
 
   private async transitionTransaction(
@@ -845,6 +966,7 @@ export class StandingPaperPolicyRepository {
     action: "ACTIVATE" | "PAUSE" | "STOP",
     expectedStatus?: StandingPaperPolicy["status"],
     expectedConfirmationHash?: string,
+    expectedProfitTermsHash?: string,
   ): Promise<StandingPaperPolicy> {
     return this.client.begin(async tx => {
       const rows = await tx<StoredPolicy[]>`select policy_json, status, financial_account_id from public.standing_paper_policies where policy_id = ${policyId} for update`;
@@ -857,6 +979,20 @@ export class StandingPaperPolicyRepository {
       if (!account || account.status !== "ACTIVE" || account.mode !== "PAPER" || account.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
       if (expectedStatus !== undefined && current.status !== expectedStatus) throw new Error("PAPER_POLICY_STALE_STATUS");
       if (actorId !== null && action === "ACTIVATE" && expectedStatus === "DRAFT" && (!expectedConfirmationHash || standingPaperActivationConfirmationHash(current) !== expectedConfirmationHash)) throw new Error("PAPER_POLICY_STALE_CONFIRMATION");
+      if (current.profitAllocationConfiguration) {
+        await this.requireProfitSchema(tx);
+        if (action === "ACTIVATE" && current.status === "DRAFT") {
+          if (actorId === null || expectedProfitTermsHash !== paperProfitAllocationConfirmationHash(current, account.owner_id)) {
+            throw new Error("PAPER_PROFIT_TERMS_CONFIRMATION_REQUIRED");
+          }
+          await tx`insert into public.standing_paper_profit_terms
+            (policy_id, financial_account_id, owner_id, recording_mode, terms_hash, policy_confirmation_hash, terms_json)
+            values (${policyId}, ${current.financialAccountId}, ${account.owner_id}, 'RECORD_ONLY', ${expectedProfitTermsHash},
+              ${standingPaperActivationConfirmationHash(current)}, ${tx.json(json(paperProfitAllocationPolicy(current, account.owner_id)))})`;
+        } else if (current.status !== "DRAFT") {
+          await this.assertProfitTerms(tx, current, account.owner_id);
+        }
+      }
       const next = transitionPaperPolicy(current, action);
       await tx`update public.standing_paper_policies set status = ${next.status}, policy_json = ${tx.json(json(next))}, updated_at = now() where policy_id = ${policyId}`;
       await tx`insert into public.standing_paper_policy_transitions (policy_id, financial_account_id, policy_version, action, from_status, to_status, input_hash) values (${policyId}, ${current.financialAccountId}, ${current.version}, ${action}, ${current.status}, ${next.status}, ${sha256({ current, action, next })})`;
@@ -878,6 +1014,16 @@ export class StandingPaperPolicyRepository {
       assertPolicyCycleConfig(policy, baseSnapshot.config as BacktestRunConfig);
       if (baseSnapshot.config.financialAccountId && baseSnapshot.config.financialAccountId !== policy.financialAccountId) throw new Error("PAPER_ACCOUNT_MISMATCH");
       if (seed && seed.amountMinor && BigInt(seed.amountMinor) > policy.capitalBudgetMinor) throw new Error("PAPER_INITIAL_CAPITAL_EXCEEDS_BUDGET");
+      let profitOwnerId: string | undefined;
+      if (policy.profitAllocationConfiguration) {
+        const owners = await tx<{ owner_id: string; status: string; mode: string; base_currency_code: string }[]>`
+          select owner_id, status, mode, base_currency_code from public.financial_accounts where id=${policy.financialAccountId} for update`;
+        const owner = owners[0];
+        if (!owner || owner.status !== "ACTIVE" || owner.mode !== "PAPER" || owner.base_currency_code !== "NOK") throw new Error("STANDING_PAPER_ACCOUNT_NOT_RUNNABLE");
+        if (options.expectedOwnerId && owner.owner_id !== options.expectedOwnerId) throw new Error("PAPER_WORKER_ACCOUNT_OWNER_MISMATCH");
+        await this.assertProfitTerms(tx, policy, owner.owner_id);
+        profitOwnerId = owner.owner_id;
+      }
       let seedAlreadyPosted = false;
       if (seed) {
         // The policy row lock serializes this binding check with seed creation
@@ -901,6 +1047,12 @@ export class StandingPaperPolicyRepository {
           : baseSnapshot;
         const requestHash = sha256({ policy, ...replaySnapshot });
         if (existing[0].input_hash !== requestHash) throw new Error("IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_INPUT");
+        if (profitOwnerId) {
+          const checkpoints = await tx<{ state_json: unknown; last_run_id: string | null }[]>`
+            select state_json, last_run_id from public.standing_paper_policies where policy_id=${policyId}`;
+          await this.persistProfitAllocations(tx, policy, profitOwnerId,
+            parseState(checkpoints[0]!.state_json, policy.financialAccountId), checkpoints[0]!.last_run_id, false);
+        }
         return saved;
       }
       if (policy.status !== "ACTIVE") throw new Error("POLICY_NOT_ACTIVE");
@@ -988,6 +1140,7 @@ export class StandingPaperPolicyRepository {
         await tx`insert into public.standing_paper_fills (policy_id, financial_account_id, fill_id, order_id, ledger_transaction_id, side, execution_json, acquisition_json, disposal_json, run_id) values (${policyId}, ${policy.financialAccountId}, ${fill.fillId}, ${fill.proposalId}, ${disposal.ledgerTransactionId}, 'SELL', ${tx.json(json(fill))}, null, ${tx.json(json(disposal))}, ${runId})`;
       }
       await tx`update public.standing_paper_policies set state_json = ${tx.json(json(result.persistentState))}, last_run_id = ${runId}, updated_at = now() where policy_id = ${policyId}`;
+      if (policy.profitAllocationConfiguration) await this.persistProfitAllocations(tx, policy, lockedAccount.owner_id, result.persistentState, runId);
       return result;
     });
   }

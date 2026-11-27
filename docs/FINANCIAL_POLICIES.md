@@ -205,8 +205,11 @@ No monetary implementation is complete without invariant tests covering:
 
 This separate, pure model does not change M1, standing-paper execution, FIFO,
 existing risk limits, ledger balances or any active policy. It proposes no
-orders and grants no authority. Integration with persistence, policy activation,
-reserve-backed spending and UI is a later change. The projection is explicitly
+orders and grants no authority. A separate opt-in
+[RECORD_ONLY repository boundary](PAPER_PROFIT_ALLOCATION_PERSISTENCE.md) now
+binds approved terms and records allocations atomically with simulated sales.
+It does not enforce reserve-backed spending or expose dashboard activation.
+The pure projection is explicitly
 `MODEL_ONLY` and uses caller-supplied PAPER settlement evidence.
 
 One fixed allocation policy binds owner, FinancialAccount, currency and policy
@@ -256,10 +259,11 @@ equal times use the explicit sequence. Exact settlement replay is ignored;
 changed material for the same settlement or reuse of one fill under another
 settlement is rejected. Scope and policy/settlement material are fingerprinted.
 
-The future application boundary must prove ownership, authentic ledger/FIFO
+The application boundary must prove ownership, authentic ledger/FIFO
 bindings, full history and original policy terms, then persist allocations
-atomically and idempotently. A hash or a contiguous caller-supplied sequence
-does not prove those facts. An existing account must never start a new history
+atomically and idempotently. The record-only repository implements this for new
+opt-in cycle-v2 policies on dedicated, initially empty PAPER/NOK accounts.
+A hash or a contiguous caller-supplied sequence does not prove those facts. An existing account must never start a new history
 epoch or policy merely to erase losses. Configuration changes, corrections,
 withdrawals and reserve releases require an explicit later contract that carries
 the previous state forward; none is supported by this model.
