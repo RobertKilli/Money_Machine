@@ -5,8 +5,8 @@ Calculation contract: `paper-profit-allocation/v1`.
 
 This optional backend profile records profit entitlements for new cycle-v2
 policies on dedicated, initially empty PAPER/NOK accounts. It is explicitly
-`RECORD_ONLY`. The existing worker can still spend cash represented by a
-calculated reserve: reserve spending enforcement has **not** been implemented.
+`RECORD_ONLY`. Policies can separately opt in to reserve-backed spending under
+[`paper-reserve-protection/v1`](FINANCIAL_POLICIES.md#11-paper-reserve-protection).
 Recorded reserve amounts are neither segregated cash nor withdrawal balances.
 No existing account or active policy receives allocation terms automatically.
 
@@ -114,8 +114,7 @@ named migration and confirm the required targeted cases. Test-only privileged
 tampering bypasses append-only triggers to verify detection; application code
 does not disable those controls.
 
-Reserve-backed spending, dashboard consent/display and any hosted application
-are separate next steps. Synthetic test profits are not investment results.
+Dashboard consent and display are separate work.
 
 ## Local patch verification, 2026-11-27
 

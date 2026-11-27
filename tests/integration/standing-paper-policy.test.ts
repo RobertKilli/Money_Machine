@@ -101,7 +101,7 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     return rows[0]!;
   }
 
-  async function profitDraft() {
+  async function profitDraft(overrides: Partial<StandingPaperPolicy> = {}) {
     const { ownerId, financialAccountId } = await ownedAccount();
     const policy: StandingPaperPolicy = {
       ...ownedDraft(financialAccountId, "profit-recording"), capitalBudgetMinor: 20_000n, maxOrderMinor: 10_000n,
@@ -110,6 +110,7 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
       cycleConfiguration: { contractVersion: PAPER_CYCLE_CONTRACT_VERSION, fifoCostBasisVersion: PAPER_CYCLE_FIFO_COST_BASIS_VERSION,
         exitPolicy: { version: STANDING_PAPER_EXIT_POLICY_VERSION, stopLossBps: 2_000n, takeProfitBps: 1_000n, maxHoldingMs: 5 * 24 * 60 * 60 * 1000 } },
       profitAllocationConfiguration: { version: "paper-profit-allocation/v1", recordingMode: "RECORD_ONLY", enabled: true, reinvestmentBps: 5_000n },
+      ...overrides,
     };
     const repository = new StandingPaperPolicyRepository(testUrl!); repositories.push(repository);
     await repository.createOwnedDraft(ownerId, policy);
@@ -183,6 +184,55 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(await profitRows(f.policy.financialAccountId)).toEqual(rows);
     expect(await counts(f.policy.financialAccountId)).toEqual(before);
     await expect(restarted.recordProfitAllocationOwned(randomUUID(), f.policy.policyId)).rejects.toThrow("PAPER_POLICY_NOT_FOUND");
+  });
+
+  it.skipIf(preCycleMode || preProfitMode)("protects profit from a sale before a later buy in the same round", async () => {
+    const f = await profitDraft({
+      maxOrderMinor: 50_000n, maxPositionMinor: 50_000n, maxGrossExposureMinor: 50_000n,
+      profitAllocationConfiguration: { version: "paper-profit-allocation/v1", recordingMode: "RECORD_ONLY", enabled: true, reinvestmentBps: 0n },
+      reserveProtectionConfiguration: { version: "paper-reserve-protection/v1", mode: "PAPER_ONLY", enabled: true },
+    });
+    const recordOnly = { ...f.policy, reserveProtectionConfiguration: undefined };
+    await expect(f.repository.activateOwnedDraft(
+      f.ownerId, f.policy.policyId, standingPaperActivationConfirmationHash(f.policy), paperProfitAllocationConfirmationHash(recordOnly, f.ownerId),
+    )).rejects.toThrow("PAPER_PROFIT_TERMS_CONFIRMATION_REQUIRED");
+    await approveProfit(f);
+    const round: Omit<BacktestRunConfig, "standingPaperPolicy"> = {
+      ...config("reserve-seed", stamp(10), "6646"),
+      endAt: stamp(11), financialAccountId: f.policy.financialAccountId, strategyEvaluationTimestamps: [stamp(11)],
+      paperCycleContractVersion: PAPER_CYCLE_CONTRACT_VERSION, fifoCostBasisVersion: PAPER_CYCLE_FIFO_COST_BASIS_VERSION,
+      standingPaperExitPolicy: f.policy.cycleConfiguration!.exitPolicy,
+    };
+    const prices = [...pricesAt(stamp(10)), ...pricesAt(stamp(11), 30_000n)];
+    const result = await f.repository.run(f.policy.policyId, round, prices, "reserve-round");
+    const denied = result.paperPolicyDecisions.find(decision => decision.evidence.reasonCode === "RESERVE_PROTECTION_BLOCKED");
+    expect(denied?.outcome).toBe("REJECTED");
+    const evidence = denied!.evidence.reserveProtection!;
+    const allocations = await profitRows(f.policy.financialAccountId);
+    expect(allocations).toHaveLength(1);
+    expect(evidence.protectedReserveMinor).toBe(allocations[0]!.protected_reserve_minor);
+    expect(BigInt(evidence.protectedReserveMinor!)).toBeGreaterThan(0n);
+    expect(BigInt(evidence.buyingPowerMinor)).toBe(BigInt(evidence.ledgerCashMinor) - BigInt(evidence.protectedReserveMinor!));
+    expect(BigInt(evidence.orderDebitMinor)).toBeGreaterThan(BigInt(evidence.buyingPowerMinor));
+    expect(BigInt(evidence.orderDebitMinor)).toBeLessThanOrEqual(BigInt(evidence.ledgerCashMinor));
+    expect(result.journals.map(journal => journal.type)).toEqual(["VIRTUAL_DEPOSIT", "SIMULATED_BUY_SETTLEMENT", "SIMULATED_SELL_SETTLEMENT"]);
+    expect(result.endingState.nav).toBe(evidence.ledgerCashMinor);
+    const before = await counts(f.policy.financialAccountId);
+    const restarted = new StandingPaperPolicyRepository(testUrl!); repositories.push(restarted);
+    const replay = () => restarted.run(f.policy.policyId, round, prices, "reserve-round");
+    expect(await Promise.all([replay(), replay()])).toEqual([result, result]);
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
+    expect(await profitRows(f.policy.financialAccountId)).toEqual(allocations);
+    await sql.begin(async tx => {
+      await tx`set local session_replication_role = replica`;
+      await tx`delete from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId}`;
+    });
+    await expect(replay()).rejects.toThrow("PAPER_PROFIT_ALLOCATION_HISTORY_MISMATCH");
+    await expect(restarted.recordProfitAllocationOwned(f.ownerId, f.policy.policyId)).rejects.toThrow("PAPER_PROFIT_ALLOCATION_HISTORY_MISMATCH");
+    const nextRound = { ...round, contributionEvents: [], startAt: stamp(12), endAt: stamp(12), strategyEvaluationTimestamps: [stamp(12)] };
+    await expect(restarted.run(f.policy.policyId, nextRound, pricesAt(stamp(12)), "reserve-next"))
+      .rejects.toThrow("PAPER_PROFIT_ALLOCATION_HISTORY_MISMATCH");
+    expect(await counts(f.policy.financialAccountId)).toEqual(before);
   });
 
   it.skipIf(preCycleMode || preProfitMode)("rolls back profit terms and policy activation together after an injected transition failure", async () => {
