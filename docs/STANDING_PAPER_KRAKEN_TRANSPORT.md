@@ -60,3 +60,44 @@ and approved. See [the source review](STANDING_PAPER_MARKET_SOURCE_REVIEW.md).
 All transport tests use injected synthetic responses and assert that the
 default, unapproved entrypoint makes no network request. No provider endpoint
 was called during this implementation.
+
+## Offline acceptance command
+
+Run the consolidated transport → parser → evidence-package demonstration with:
+
+```sh
+npm run paper:kraken:offline-acceptance
+```
+
+The command supplies four synthetic transport scenarios through the
+transport's injected requester: a valid HTTP-like response, a response with a
+wrong identity, a stalled request, and a caller-cancelled request. It checks
+successful parsing, serialization and fingerprint-verified replay, then
+confirms that changed evidence and each failed scenario are rejected. It also
+injects a `node:https.request` sentinel that throws if called and asserts the
+call count stays at zero. The command uses the existing injection seam to
+exercise the fail-closed transport flow; the actual Node HTTPS implementation's
+emitter, timeout and cleanup path remains covered by the focused synthetic
+transport tests.
+
+The command injects an in-process test authorizer only to traverse the
+otherwise gated flow. Its report labels this `SYNTHETIC_TEST_ONLY`; it does not
+change the default authorizer or grant operational source/runtime approval.
+The resulting evidence remains explicitly `NOT_APPROVED`.
+
+The JSON report separates parse validity and content integrity from source
+origin, source approval, and decision readiness. A passing run intentionally
+reports `CALLER_SUPPLIED_UNVERIFIED`, `NOT_APPROVED`, and
+`BLOCKED_UNCLASSIFIED_PRICE_TYPE`; it never assigns `LAST_TRADE` or labels the
+synthetic response as externally verified market data.
+
+Before any external PAPER data run, obtain written permission for automated
+PAPER acquisition, storage/retention, and display; authoritative evidence for
+the exact active pair, quote currency, and venue/MIC mapping; and documented
+price semantics showing what the endpoint returns, whether the observation is
+latest-as-of a defined time, and what the publication timestamp guarantees.
+Then separately approve the exact source and runtime use, freshness limits,
+and an instrument mapping. The public response alone does not satisfy these
+gates. Coinbase remains blocked. No USD-to-NOK conversion is implied; any
+non-NOK instrument requires a separately scoped PAPER account in its quote
+currency.
