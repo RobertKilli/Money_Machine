@@ -5,6 +5,8 @@
 
 This note supersedes the earlier recommendation in [the market source review](STANDING_PAPER_MARKET_SOURCE_REVIEW.md) that treated Post-Trade `count=1` as a possible first `LAST_TRADE` route. It records the documentation boundary and proposes a conditional alternative. It does not enable external acquisition.
 
+An [offline Pre-Trade parser](STANDING_PAPER_KRAKEN_PRE_TRADE_PARSER.md) now preserves caller-supplied book levels and exact values for synthetic testing. It does not select a best quote, establish snapshot/time semantics, or enable external acquisition or worker use.
+
 ## 1. Post-Trade selection and one Kraken alternative
 
 ### Post-Trade does not document `count=1` as latest-as-of
