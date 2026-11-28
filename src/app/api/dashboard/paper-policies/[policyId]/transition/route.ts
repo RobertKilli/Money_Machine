@@ -38,10 +38,10 @@ export async function POST(request: Request, context: { params: Promise<{ policy
 
   const { policyId } = await context.params;
   const action = body.action;
-  if (!policyId.trim() || policyId.length > 160 || Object.keys(body).some(key => !["action", "expectedStatus", "confirmStop", "confirmActivation", "activationConfirmationHash"].includes(key)) ||
+  if (!policyId.trim() || policyId.length > 160 || Object.keys(body).some(key => !["action", "expectedStatus", "confirmStop", "confirmActivation", "activationConfirmationHash", "profitTermsConfirmationHash"].includes(key)) ||
     !isDashboardTransitionAction(action) || !statuses.includes(body.expectedStatus as typeof statuses[number]) ||
     (action === "STOP" ? body.confirmStop !== true : body.confirmStop !== undefined && body.confirmStop !== false) ||
-    (action === "ACTIVATE" ? body.confirmActivation !== true || typeof body.activationConfirmationHash !== "string" || !/^[0-9a-f]{64}$/.test(body.activationConfirmationHash) : body.confirmActivation !== undefined || body.activationConfirmationHash !== undefined)) {
+    (action === "ACTIVATE" ? body.confirmActivation !== true || typeof body.activationConfirmationHash !== "string" || !/^[0-9a-f]{64}$/.test(body.activationConfirmationHash) || (body.profitTermsConfirmationHash !== undefined && (typeof body.profitTermsConfirmationHash !== "string" || !/^[0-9a-f]{64}$/.test(body.profitTermsConfirmationHash))) : body.confirmActivation !== undefined || body.activationConfirmationHash !== undefined || body.profitTermsConfirmationHash !== undefined)) {
     return Response.json({ error: "INVALID_REQUEST" }, { status: 400, headers });
   }
   if (action === "ACTIVATE" && body.expectedStatus !== "DRAFT" || action === "PAUSE" && body.expectedStatus !== "ACTIVE" || action === "RESUME" && body.expectedStatus !== "PAUSED" ||
@@ -53,14 +53,16 @@ export async function POST(request: Request, context: { params: Promise<{ policy
   if (!repository) return Response.json({ error: "PAPER_STATUS_UNAVAILABLE" }, { status: 503, headers });
   try {
     const policy = action === "ACTIVATE"
-      ? await repository.activateOwnedDraft(user.id, policyId, body.activationConfirmationHash as string)
+      ? body.profitTermsConfirmationHash === undefined
+        ? await repository.activateOwnedDraft(user.id, policyId, body.activationConfirmationHash as string)
+        : await repository.activateOwnedDraft(user.id, policyId, body.activationConfirmationHash as string, body.profitTermsConfirmationHash as string)
       : await repository.transitionOwned(user.id, policyId, action, body.expectedStatus as typeof statuses[number]);
     return Response.json({ policyId: policy.policyId, status: policy.status }, { headers });
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     if (code === "PAPER_POLICY_NOT_FOUND") return Response.json({ error: "NOT_FOUND" }, { status: 404, headers });
     if (code === "PAPER_POLICY_STALE_STATUS") return Response.json({ error: "STALE_STATUS" }, { status: 409, headers });
-    if (code === "PAPER_POLICY_STALE_CONFIRMATION") return Response.json({ error: "STALE_CONFIRMATION" }, { status: 409, headers });
+    if (code === "PAPER_POLICY_STALE_CONFIRMATION" || code === "PAPER_PROFIT_TERMS_CONFIRMATION_REQUIRED") return Response.json({ error: "STALE_CONFIRMATION" }, { status: 409, headers });
     if (code === "PAPER_POLICY_TRANSITION_INVALID" || code === "STANDING_PAPER_ACCOUNT_NOT_RUNNABLE") return Response.json({ error: "INVALID_TRANSITION" }, { status: 409, headers });
     return Response.json({ error: "PAPER_POLICY_TRANSITION_FAILED" }, { status: 503, headers });
   }

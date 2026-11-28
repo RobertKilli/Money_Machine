@@ -284,6 +284,42 @@ describe.skipIf(!enabled)("standing PAPER_ONLY policy PostgreSQL integration", (
     expect(await profitRows(f.policy.financialAccountId)).toHaveLength(1);
   });
 
+  it.skipIf(preCycleMode || preProfitMode)("status reports corrupt and incomplete profit history unavailable without repairing allocations", async () => {
+    const f = await profitDraft(); await approveProfit(f);
+    await expect(profitWorker(f, 3)).resolves.toMatchObject({ status: "COMPLETED", roundsCompleted: 3 });
+    const originalRows = await sql`select * from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId} order by sequence`;
+    expect(originalRows).toHaveLength(2);
+    const originalFinalAllocation = originalRows.find(row => String(row.sequence) === "2")!;
+
+    await sql.begin(async tx => {
+      await tx`set local session_replication_role=replica`;
+      await tx`update public.standing_paper_profit_allocations set allocation_json='{}'::jsonb where policy_id=${f.policy.policyId} and sequence=2`;
+    });
+    const tamperedSnapshot = await sql`select * from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId} order by sequence`;
+    const tamperedStatus = await f.repository.loadOwnedStatus(f.ownerId);
+    const tamperedSummary = tamperedStatus.policies.find(policy => policy.policyId === f.policy.policyId)?.profitSummary;
+    expect(tamperedSummary).toMatchObject({ status: "UNAVAILABLE", netRealizedPnlMinor: null, reinvestmentMinor: null, reserveMinor: null,
+      recoveredLossMinor: null, lossRecoveryMinor: null, ledgerCashMinor: null, cashCoverageMinor: null, reserveShortfallMinor: null });
+    expect(await sql`select * from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId} order by sequence`).toEqual(tamperedSnapshot);
+
+    await sql.begin(async tx => {
+      await tx`set local session_replication_role=replica`;
+      await tx`update public.standing_paper_profit_allocations set allocation_json=${tx.json(originalFinalAllocation.allocation_json as never)} where policy_id=${f.policy.policyId} and sequence=2`;
+    });
+    await sql.begin(async tx => {
+      await tx`set local session_replication_role=replica`;
+      await tx`delete from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId} and sequence=2`;
+    });
+    const missingTailSnapshot = await sql`select * from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId} order by sequence`;
+    expect(missingTailSnapshot).toHaveLength(1);
+    const missingTailStatus = await f.repository.loadOwnedStatus(f.ownerId);
+    expect(missingTailStatus.policies.find(policy => policy.policyId === f.policy.policyId)?.profitSummary).toMatchObject({
+      status: "UNAVAILABLE", netRealizedPnlMinor: null, reinvestmentMinor: null, reserveMinor: null,
+      recoveredLossMinor: null, lossRecoveryMinor: null, ledgerCashMinor: null, cashCoverageMinor: null, reserveShortfallMinor: null,
+    });
+    expect(await sql`select * from public.standing_paper_profit_allocations where policy_id=${f.policy.policyId} order by sequence`).toEqual(missingTailSnapshot);
+  });
+
   it.skipIf(preCycleMode || preProfitMode)("grants only owner scoped reads of immutable record only profit material", async () => {
     const f = await profitDraft(); await approveProfit(f);
     await expect(profitWorker(f, 3)).resolves.toMatchObject({ status: "COMPLETED" });

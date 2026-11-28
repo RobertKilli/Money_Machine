@@ -16,6 +16,7 @@ export interface StandingPaperPolicyDraftRequest {
   readonly maxGrossExposureNok: string;
   readonly maxLossNok: string;
   readonly maxPriceAgeMinutes: number;
+  readonly profitAllocation?: { readonly reinvestmentPercent: string; readonly reserveProtection: boolean };
 }
 
 const baseFields = ["financialAccountId", "allowedInstrumentIds", "capitalBudgetNok", "maxOrderNok", "maxPositionNok", "maxGrossExposureNok", "maxLossNok", "maxPriceAgeMinutes"] as const;
@@ -32,7 +33,8 @@ function parseNokMinor(value: unknown, allowZero = false): bigint {
 export function createStandingPaperDraft(raw: unknown): StandingPaperPolicy {
   const input = record(raw) ? raw : null;
   const cycleEnabled = input !== null && Object.hasOwn(input, "cycleV2");
-  const allowedFields = cycleEnabled ? [...baseFields, "cycleV2"] : baseFields;
+  const profitEnabled = input !== null && Object.hasOwn(input, "profitAllocation");
+  const allowedFields = [...baseFields, ...(cycleEnabled ? ["cycleV2"] : []), ...(profitEnabled ? ["profitAllocation"] : [])];
   if (!input || Object.keys(input).length !== allowedFields.length || Object.keys(input).some(key => !(allowedFields as readonly string[]).includes(key)) ||
     typeof input.financialAccountId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.financialAccountId) ||
     !Array.isArray(input.allowedInstrumentIds) || input.allowedInstrumentIds.length === 0 || input.allowedInstrumentIds.length > FIXTURE_ASSETS.length ||
@@ -67,6 +69,19 @@ export function createStandingPaperDraft(raw: unknown): StandingPaperPolicy {
     });
   }
 
+  let profitAllocationConfiguration: StandingPaperPolicy["profitAllocationConfiguration"];
+  let reserveProtectionConfiguration: StandingPaperPolicy["reserveProtectionConfiguration"];
+  if (profitEnabled) {
+    const terms = input!.profitAllocation;
+    if (!cycleConfiguration || !record(terms) || Object.keys(terms).length !== 2 || typeof terms.reinvestmentPercent !== "string" ||
+      !/^(?:0|[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/.test(terms.reinvestmentPercent) || typeof terms.reserveProtection !== "boolean") throw new Error("PAPER_POLICY_LIMIT_INVALID");
+    const [whole, fraction = ""] = terms.reinvestmentPercent.split(".");
+    const reinvestmentBps = BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, "0") || "0");
+    if (reinvestmentBps > 10_000n) throw new Error("PAPER_POLICY_LIMIT_INVALID");
+    profitAllocationConfiguration = { version: "paper-profit-allocation/v1", recordingMode: "RECORD_ONLY", enabled: true, reinvestmentBps };
+    if (terms.reserveProtection) reserveProtectionConfiguration = { version: "paper-reserve-protection/v1", mode: "PAPER_ONLY", enabled: true };
+  }
+
   const capitalBudgetMinor = parseNokMinor(input!.capitalBudgetNok);
   if (capitalBudgetMinor < PAPER_POLICY_MIN_CAPITAL_MINOR) throw new Error("PAPER_POLICY_LIMIT_INVALID");
   const maxOrderMinor = parseNokMinor(input!.maxOrderNok);
@@ -93,6 +108,8 @@ export function createStandingPaperDraft(raw: unknown): StandingPaperPolicy {
     maxLossMinor,
     maxPriceAgeMs: (input!.maxPriceAgeMinutes as number) * 60_000,
     ...(cycleConfiguration ? { cycleConfiguration } : {}),
+    ...(profitAllocationConfiguration ? { profitAllocationConfiguration } : {}),
+    ...(reserveProtectionConfiguration ? { reserveProtectionConfiguration } : {}),
   });
   assertValidPaperPolicy(policy);
   return policy;
